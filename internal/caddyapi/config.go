@@ -53,8 +53,16 @@ func Build(s *state.State) []byte {
 		HTTP httpApp `json:"http"`
 		TLS  tlsApp  `json:"tls"`
 	}
+	type adminConfig struct {
+		Listen string `json:"listen"`
+	}
 	type config struct {
-		Apps apps `json:"apps"`
+		// Admin keeps the admin endpoint bound to 0.0.0.0:2019 across
+		// /load swaps. Without it, Caddy reverts admin to its built-in
+		// default (localhost:2019, container-loopback only) and the next
+		// register/deregister can't reach the API from the host.
+		Admin adminConfig `json:"admin"`
+		Apps  apps        `json:"apps"`
 	}
 
 	domains := make([]string, 0, len(s.Backends))
@@ -78,6 +86,7 @@ func Build(s *state.State) []byte {
 	}
 
 	cfg := config{
+		Admin: adminConfig{Listen: "0.0.0.0:2019"},
 		Apps: apps{
 			HTTP: httpApp{
 				Servers: map[string]server{

@@ -26,6 +26,25 @@ func TestBuildConfigOneBackend(t *testing.T) {
 	assertJSONMatchesGolden(t, got, "one_backend.json")
 }
 
+// TestBuildPreservesAdminBinding pins down that every rendered config keeps
+// admin bound to 0.0.0.0:2019. Without this, POST /load reverts admin to
+// caddy's default localhost:2019 and the next register/deregister can't
+// reach the container's admin API from the host. Discovered by smoke test.
+func TestBuildPreservesAdminBinding(t *testing.T) {
+	got := Build(&state.State{SchemaVersion: 1, Backends: map[string]state.Backend{}})
+	var doc struct {
+		Admin struct {
+			Listen string `json:"listen"`
+		} `json:"admin"`
+	}
+	if err := json.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if doc.Admin.Listen != "0.0.0.0:2019" {
+		t.Errorf("admin.listen: got %q want 0.0.0.0:2019", doc.Admin.Listen)
+	}
+}
+
 func TestBuildConfigTwoBackendsSortedByDomain(t *testing.T) {
 	s := &state.State{
 		SchemaVersion: 1,
