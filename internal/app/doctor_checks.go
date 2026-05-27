@@ -34,6 +34,21 @@ func defaultShell(ctx context.Context, name string, args ...string) ([]byte, err
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
+// defaultTTYShell runs a command with stdin/stdout/stderr inherited from
+// the parent process. Used for sudo-requiring fixes so the user can type
+// their password into the macOS sudo prompt. Returns nil output (output
+// went straight to the terminal); err is the command's exit status.
+func defaultTTYShell(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+	}
+	return nil, nil
+}
+
 func checkDockerDaemon(_ context.Context, a *App) CheckResult {
 	if err := a.docker.DaemonReachable(); err != nil {
 		return CheckResult{
@@ -131,7 +146,7 @@ func dnsmasqConfPaths(ctx context.Context, sh shellExecutor) []string {
 	return []string{"/opt/homebrew/etc/dnsmasq.d", "/usr/local/etc/dnsmasq.d"}
 }
 
-func checkDNS(ctx context.Context, _ *App, sh shellExecutor) CheckResult {
+func checkDNS(ctx context.Context, _ *App, sh shellExecutor, tty shellExecutor) CheckResult {
 	host := randomTestSubdomain()
 	out, _ := sh(ctx, "dscacheutil", "-q", "host", "-a", "name", host)
 	if strings.Contains(string(out), "127.0.0.1") {
@@ -167,7 +182,7 @@ func checkDNS(ctx context.Context, _ *App, sh shellExecutor) CheckResult {
 		Label:        "install dnsmasq + write /etc/resolver/test (requires sudo)",
 		RequiresSudo: true,
 		Apply: func(ctx context.Context) error {
-			return applyDNSFix(ctx, sh)
+			return applyDNSFix(ctx, sh, tty)
 		},
 	}
 	return CheckResult{
@@ -181,24 +196,34 @@ func checkDNS(ctx context.Context, _ *App, sh shellExecutor) CheckResult {
 
 // applyDNSFix runs the brew + sudo commands documented in the README's
 // "local DNS for .test" section. Returns on the first error.
-func applyDNSFix(ctx context.Context, sh shellExecutor) error {
-	steps := [][]string{
-		{"brew", "install", "dnsmasq"},
-		{"sh", "-c", `mkdir -p "$(brew --prefix)/etc/dnsmasq.d" && echo 'address=/.test/127.0.0.1' > "$(brew --prefix)/etc/dnsmasq.d/caddy_shack.conf"`},
-		{"sudo", "brew", "services", "restart", "dnsmasq"},
-		{"sudo", "mkdir", "-p", "/etc/resolver"},
-		{"sudo", "sh", "-c", "echo 'nameserver 127.0.0.1' > /etc/resolver/test"},
+// Non-sudo steps use sh; sudo steps use tty so the password prompt reaches
+// the user's terminal.
+func applyDNSFix(ctx context.Context, sh, tty shellExecutor) error {
+	type step struct {
+		cmd  []string
+		sudo bool
+	}
+	steps := []step{
+		{cmd: []string{"brew", "install", "dnsmasq"}},
+		{cmd: []string{"sh", "-c", `mkdir -p "$(brew --prefix)/etc/dnsmasq.d" && echo 'address=/.test/127.0.0.1' > "$(brew --prefix)/etc/dnsmasq.d/caddy_shack.conf"`}},
+		{cmd: []string{"sudo", "brew", "services", "restart", "dnsmasq"}, sudo: true},
+		{cmd: []string{"sudo", "mkdir", "-p", "/etc/resolver"}, sudo: true},
+		{cmd: []string{"sudo", "sh", "-c", "echo 'nameserver 127.0.0.1' > /etc/resolver/test"}, sudo: true},
 	}
 	for _, s := range steps {
-		out, err := sh(ctx, s[0], s[1:]...)
+		exec := sh
+		if s.sudo {
+			exec = tty
+		}
+		out, err := exec(ctx, s.cmd[0], s.cmd[1:]...)
 		if err != nil {
-			return fmt.Errorf("%s %s: %w: %s", s[0], strings.Join(s[1:], " "), err, out)
+			return fmt.Errorf("%s %s: %w: %s", s.cmd[0], strings.Join(s.cmd[1:], " "), err, out)
 		}
 	}
 	return nil
 }
 
-func checkTrustStore(ctx context.Context, a *App, sh shellExecutor) CheckResult {
+func checkTrustStore(ctx context.Context, a *App, sh shellExecutor, tty shellExecutor) CheckResult {
 	state, _ := a.docker.ContainerState(CaddyContainerName)
 	if state != docker.StateRunning {
 		return CheckResult{
@@ -236,13 +261,13 @@ func checkTrustStore(ctx context.Context, a *App, sh shellExecutor) CheckResult 
 			Label:        "trust Caddy root CA via 'security add-trusted-cert' (requires sudo)",
 			RequiresSudo: true,
 			Apply: func(ctx context.Context) error {
-				return applyTrustStoreFix(ctx, sh, cert)
+				return applyTrustStoreFix(ctx, tty, cert)
 			},
 		},
 	}
 }
 
-func applyTrustStoreFix(ctx context.Context, sh shellExecutor, cert []byte) error {
+func applyTrustStoreFix(ctx context.Context, tty shellExecutor, cert []byte) error {
 	// Write cert to a temp file the user's sudo can read.
 	tmp, err := os.CreateTemp("", "caddy_shack_root_*.crt")
 	if err != nil {
@@ -258,7 +283,7 @@ func applyTrustStoreFix(ctx context.Context, sh shellExecutor, cert []byte) erro
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close tmp: %w", err)
 	}
-	out, err := sh(ctx, "sudo", "security", "add-trusted-cert", "-d", "-r", "trustRoot",
+	out, err := tty(ctx, "sudo", "security", "add-trusted-cert", "-d", "-r", "trustRoot",
 		"-k", "/Library/Keychains/System.keychain", tmp.Name())
 	if err != nil {
 		return fmt.Errorf("security add-trusted-cert: %w: %s", err, out)

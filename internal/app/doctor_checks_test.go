@@ -226,7 +226,7 @@ func TestCheckDNSPassWhenDscacheReturnsLoopback(t *testing.T) {
 		return []byte("ok"), nil
 	}
 
-	r := checkDNS(context.Background(), a, sh)
+	r := checkDNS(context.Background(), a, sh, noopShell)
 	if r.Status != SeverityPass {
 		t.Errorf("status: %v summary=%s", r.Status, r.Summary)
 	}
@@ -248,7 +248,7 @@ func TestCheckDNSFailWhenDscacheReturnsNothing(t *testing.T) {
 		return nil, errors.New("unexpected")
 	}
 
-	r := checkDNS(context.Background(), a, sh)
+	r := checkDNS(context.Background(), a, sh, noopShell)
 	if r.Status != SeverityFail {
 		t.Errorf("status: %v", r.Status)
 	}
@@ -284,7 +284,7 @@ func TestCheckTrustStorePassWhenSHAFound(t *testing.T) {
 		return nil, errors.New("unexpected")
 	}
 
-	r := checkTrustStore(context.Background(), a, sh)
+	r := checkTrustStore(context.Background(), a, sh, noopShell)
 	if r.Status != SeverityPass {
 		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
 	}
@@ -306,7 +306,7 @@ func TestCheckTrustStoreFailWhenSHAMissing(t *testing.T) {
 		return nil, errors.New("unexpected")
 	}
 
-	r := checkTrustStore(context.Background(), a, sh)
+	r := checkTrustStore(context.Background(), a, sh, noopShell)
 	if r.Status != SeverityFail {
 		t.Errorf("status: %v", r.Status)
 	}
@@ -325,7 +325,7 @@ var noopShell shellExecutor = func(context.Context, string, ...string) ([]byte, 
 func TestCheckTrustStoreSkipWhenContainerNotRunning(t *testing.T) {
 	fake := docker.NewFake() // absent
 	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
-	r := checkTrustStore(context.Background(), a, noopShell)
+	r := checkTrustStore(context.Background(), a, noopShell, noopShell)
 	if r.Status != SeveritySkip {
 		t.Errorf("status: %v", r.Status)
 	}
@@ -337,7 +337,7 @@ func TestCheckTrustStoreWarnWhenCertNotProvisioned(t *testing.T) {
 	// No ExecResponses entry => Fake.Exec returns "no scripted response" error.
 	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
 
-	r := checkTrustStore(context.Background(), a, noopShell)
+	r := checkTrustStore(context.Background(), a, noopShell, noopShell)
 	if r.Status != SeverityWarn {
 		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
 	}

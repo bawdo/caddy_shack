@@ -141,12 +141,13 @@ func (a *App) Doctor(ctx context.Context, opts DoctorOptions) (DoctorReport, err
 // a closure capturing the App so the check signature stays uniform.
 func (a *App) buildCheckList(opts DoctorOptions) []func(context.Context) CheckResult {
 	sh := defaultShell
+	tty := defaultTTYShell
 	checks := []func(context.Context) CheckResult{
 		func(ctx context.Context) CheckResult { return checkDockerDaemon(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkPortAvailability(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkContainerHealth(ctx, a) },
-		func(ctx context.Context) CheckResult { return checkDNS(ctx, a, sh) },
-		func(ctx context.Context) CheckResult { return checkTrustStore(ctx, a, sh) },
+		func(ctx context.Context) CheckResult { return checkDNS(ctx, a, sh, tty) },
+		func(ctx context.Context) CheckResult { return checkTrustStore(ctx, a, sh, tty) },
 		func(ctx context.Context) CheckResult { return checkStateIntegrity(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkConfigDrift(ctx, a) },
 	}
