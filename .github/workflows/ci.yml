@@ -111,6 +111,26 @@ jobs:
       - name: Run govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          check-latest: true
+          cache: true
+
+      - name: Verify docker
+        run: docker info
+
+      - name: Run integration tests
+        run: go test -tags integration -v ./test/integration/...
+
   build:
     name: Build & Smoke
     runs-on: macos-latest
