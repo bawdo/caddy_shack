@@ -27,7 +27,27 @@ func classifyError(err error) int {
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "caddy_shack",
-		Short:         "(add a short description)",
+		Short:         "Manage a local Caddy instance for HTTPS .test URLs",
+		Long: `caddy_shack manages a locally-running Caddy container so backend services
+can register themselves and get a stable HTTPS URL under the .test TLD.
+
+Designed to be called from project startup and teardown scripts:
+  caddy_shack register myapp --upstream 127.0.0.1:3000
+  caddy_shack deregister myapp
+
+Exit codes (stable, script-friendly):
+  0  success
+  1  generic command failure (e.g. Caddy rejected the config; status unhealthy)
+  2  invalid arguments
+  3  domain conflict (another backend already owns this domain)
+  4  docker daemon unreachable
+  5  caddy container not running
+  6  caddy not installed (no container exists)
+  7  state file corrupt - manual remediation required
+  8  state lock held by another caddy_shack process
+
+See docs/superpowers/specs/2026-05-27-mvp-vertical-slice-design.md for the
+full design.`,
 		SilenceUsage:  true,
 		SilenceErrors: false,
 	}
