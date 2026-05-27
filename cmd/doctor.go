@@ -69,9 +69,44 @@ func renderDoctorJSON(w io.Writer, rep app.DoctorReport) {
 	_, _ = fmt.Fprintln(w, string(out))
 }
 
-// renderDoctorHuman is implemented in Task 15.
 func renderDoctorHuman(w io.Writer, rep app.DoctorReport) {
-	_, _ = fmt.Fprintln(w, "doctor not yet rendered")
+	for _, c := range rep.Checks {
+		_, _ = fmt.Fprintf(w, "[%s] %-20s %s\n", severityTag(c.Status), c.Name, c.Summary)
+		for _, d := range c.Detail {
+			_, _ = fmt.Fprintf(w, "       %s\n", d)
+		}
+		if c.Fix != nil {
+			sudo := ""
+			if c.Fix.RequiresSudo {
+				sudo = " (requires sudo)"
+			}
+			_, _ = fmt.Fprintf(w, "       fix: %s%s\n", c.Fix.Label, sudo)
+		}
+	}
+	_, _ = fmt.Fprintln(w)
+
+	issues := rep.Summary.Fail + rep.Summary.Warn
+	if issues == 0 {
+		_, _ = fmt.Fprintln(w, "all checks passed.")
+		return
+	}
+	_, _ = fmt.Fprintf(w, "%d issue(s) found (%d FAIL, %d WARN). Run with --fix to remediate.\n",
+		issues, rep.Summary.Fail, rep.Summary.Warn)
+}
+
+func severityTag(s app.Severity) string {
+	switch s {
+	case app.SeverityPass:
+		return "PASS"
+	case app.SeverityWarn:
+		return "WARN"
+	case app.SeverityFail:
+		return "FAIL"
+	case app.SeveritySkip:
+		return "SKIP"
+	default:
+		return "????"
+	}
 }
 
 // runFixLoop is implemented in Task 17.
