@@ -52,7 +52,9 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 		}
 		return err
 	}
-	defer lock.Release()
+	defer func() {
+		_ = lock.Release()
+	}()
 
 	s, err := state.Load(a.paths.StatePath)
 	if err != nil {
