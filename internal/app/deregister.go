@@ -11,23 +11,25 @@ import (
 	"github.com/bawdo/caddy_shack/internal/state"
 )
 
-// Deregister removes a backend. Idempotent: unknown name returns nil and
-// makes no Caddy call.
-func (a *App) Deregister(ctx context.Context, name string) error {
+// Deregister removes a backend. Idempotent: unknown name returns
+// (false, nil) and makes no Caddy call. The bool is true when a backend
+// was actually removed, false when the name was unknown - callers use it
+// to render the right user-facing message.
+func (a *App) Deregister(ctx context.Context, name string) (bool, error) {
 	st, err := a.docker.ContainerState(CaddyContainerName)
 	if err != nil {
-		return fmt.Errorf("inspect container: %w", err)
+		return false, fmt.Errorf("inspect container: %w", err)
 	}
 	if st != docker.StateRunning {
-		return fmt.Errorf("%w (state=%s)", ErrCaddyNotRunning, st)
+		return false, fmt.Errorf("%w (state=%s)", ErrCaddyNotRunning, st)
 	}
 
 	lock, err := state.AcquireLock(a.paths.LockPath, 5*time.Second)
 	if err != nil {
 		if errors.Is(err, state.ErrLockTimeout) {
-			return fmt.Errorf("%w: %v", ErrLockContention, err)
+			return false, fmt.Errorf("%w: %v", ErrLockContention, err)
 		}
-		return err
+		return false, err
 	}
 	defer func() {
 		_ = lock.Release()
@@ -36,13 +38,13 @@ func (a *App) Deregister(ctx context.Context, name string) error {
 	s, err := state.Load(a.paths.StatePath)
 	if err != nil {
 		if state.IsCorrupt(err) {
-			return fmt.Errorf("%w: %v", ErrStateCorrupt, err)
+			return false, fmt.Errorf("%w: %v", ErrStateCorrupt, err)
 		}
-		return err
+		return false, err
 	}
 
 	if _, ok := s.Backends[name]; !ok {
-		return nil
+		return false, nil
 	}
 
 	// Work on a copy so a Caddy failure leaves on-disk state intact.
@@ -57,14 +59,14 @@ func (a *App) Deregister(ctx context.Context, name string) error {
 	cfg := caddyapi.Build(&updated)
 	if err := a.caddy.Load(cfg); err != nil {
 		if errors.Is(err, caddyapi.ErrUnreachable) {
-			return fmt.Errorf("%w: %v", ErrCaddyNotRunning, err)
+			return false, fmt.Errorf("%w: %v", ErrCaddyNotRunning, err)
 		}
-		return err
+		return false, err
 	}
 
 	if err := state.Save(a.paths.StatePath, &updated); err != nil {
-		return fmt.Errorf("save state: %w", err)
+		return false, fmt.Errorf("save state: %w", err)
 	}
 	_ = ctx
-	return nil
+	return true, nil
 }

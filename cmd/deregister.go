@@ -18,10 +18,15 @@ func newDeregisterCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := a.Deregister(cmd.Context(), args[0]); err != nil {
+			removed, err := a.Deregister(cmd.Context(), args[0])
+			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "deregistered:", args[0])
+			if removed {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "deregistered:", args[0])
+			} else {
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "no such backend:", args[0])
+			}
 			return nil
 		},
 	}

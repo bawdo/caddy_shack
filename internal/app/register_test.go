@@ -213,8 +213,12 @@ func TestDeregisterRemovesBackendAndPushesConfig(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	if err := f.app.Deregister(context.Background(), "foo"); err != nil {
+	removed, err := f.app.Deregister(context.Background(), "foo")
+	if err != nil {
 		t.Fatalf("Deregister: %v", err)
+	}
+	if !removed {
+		t.Error("Deregister should report removed=true for an existing backend")
 	}
 
 	s, _ := state.Load(f.statePath)
@@ -230,8 +234,12 @@ func TestDeregisterRemovesBackendAndPushesConfig(t *testing.T) {
 func TestDeregisterUnknownNameIsNoOp(t *testing.T) {
 	f := newFixture(t, http.StatusOK)
 	hits := f.caddyHits
-	if err := f.app.Deregister(context.Background(), "unknown"); err != nil {
+	removed, err := f.app.Deregister(context.Background(), "unknown")
+	if err != nil {
 		t.Errorf("expected nil err, got %v", err)
+	}
+	if removed {
+		t.Error("Deregister should report removed=false for an unknown backend")
 	}
 	if f.caddyHits != hits {
 		t.Error("Caddy was called for unknown name")
@@ -256,9 +264,12 @@ func TestDeregisterCaddyRejectionLeavesStateIntact(t *testing.T) {
 		f.app.docker,
 	)
 
-	err := f.app.Deregister(context.Background(), "foo")
+	removed, err := f.app.Deregister(context.Background(), "foo")
 	if err == nil {
 		t.Fatal("expected error")
+	}
+	if removed {
+		t.Error("Deregister should report removed=false when Caddy rejects")
 	}
 	if !strings.Contains(err.Error(), "rejected") && !strings.Contains(err.Error(), "stub") {
 		t.Logf("error: %v", err)
