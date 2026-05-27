@@ -21,6 +21,21 @@ linters:
         text: "G204"
         linters:
           - gosec
+      # gosec G204 in doctor_checks.go: doctor probes/fixes shell out to
+      # documented system tools (dscacheutil, security, brew, sudo, nc,
+      # wget). Args come from package constants and state.json which is
+      # written only by this binary; not untrusted input. Scoped to G204.
+      - path: internal/app/doctor_checks\.go
+        text: "G204"
+        linters:
+          - gosec
+      # gosec G204 in cmd/doctor.go: sudo preflight is `sudo -n true` with
+      # hard-coded args; the seam exists for test stubbing, not for
+      # caller-controlled command construction. Scoped to G204.
+      - path: cmd/doctor\.go
+        text: "G204"
+        linters:
+          - gosec
       # gosec G304 in state package: paths come from DefaultPaths()
       # (rooted at os.UserConfigDir) or t.TempDir() in tests. False positive.
       # Scoped to G304 so any other gosec rule still applies.

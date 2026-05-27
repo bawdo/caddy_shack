@@ -3,7 +3,10 @@
 // real docker; the concrete impl in cli.go shells out for production use.
 package docker
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 // ContainerState is the lifecycle phase of CaddyShack's Caddy container.
 type ContainerState int
@@ -55,6 +58,10 @@ type Client interface {
 	// state. No-op if the container does not exist. Used for rollback when
 	// CreateAndStart succeeds partially.
 	Remove(name string) error
+	// Exec runs a command inside the named running container. Returns the
+	// combined stdout/stderr bytes. Returns an error if the container is
+	// not running or the command exits non-zero.
+	Exec(ctx context.Context, name string, argv []string) ([]byte, error)
 }
 
 // ContainerSpec describes the CaddyShack container CreateAndStart should run.

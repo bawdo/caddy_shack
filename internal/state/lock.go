@@ -56,3 +56,29 @@ func (l *Lock) Release() error {
 	_ = syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
 	return l.file.Close()
 }
+
+// LockHeld reports whether someone else is currently holding the lock at
+// path. Returns false if the lock file is missing (no holder is possible).
+// flock(2) auto-releases when the holding process exits, so a true result
+// always means a live concurrent register/deregister.
+func LockHeld(path string) (bool, error) {
+	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("open lock file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return true, nil
+		}
+		return false, fmt.Errorf("flock: %w", err)
+	}
+	// We just acquired it for an instant; release before returning so we
+	// don't accidentally serialise ourselves out of subsequent operations.
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return false, nil
+}

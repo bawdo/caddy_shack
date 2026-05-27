@@ -2,6 +2,7 @@ package docker
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -113,4 +114,13 @@ func (CLI) Remove(name string) error {
 		return fmt.Errorf("docker rm -f %s: %w: %s", name, err, out)
 	}
 	return nil
+}
+
+func (CLI) Exec(ctx context.Context, name string, argv []string) ([]byte, error) {
+	args := append([]string{"exec", name}, argv...)
+	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("docker exec %s %v: %w: %s", name, argv, err, out)
+	}
+	return out, nil
 }
