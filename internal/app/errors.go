@@ -12,6 +12,7 @@ var (
 	ErrNotInstalled      = errors.New("caddy not installed")
 	ErrStateCorrupt      = errors.New("state file corrupt")
 	ErrLockContention    = errors.New("state lock held by another process")
+	ErrUnhealthy         = errors.New("caddy_shack is unhealthy")
 )
 
 // ExitCode maps an error to the documented exit codes.
