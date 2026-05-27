@@ -100,3 +100,45 @@ func TestLockSerialisesConcurrentAcquirers(t *testing.T) {
 		t.Errorf("lock allowed concurrency: maxInside=%d", maxInside)
 	}
 }
+
+func TestLockHeldFalseWhenLockFree(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "state.json.lock")
+
+	held, err := LockHeld(lockPath)
+	if err != nil {
+		t.Fatalf("LockHeld: %v", err)
+	}
+	if held {
+		t.Errorf("expected held=false for a free lock")
+	}
+}
+
+func TestLockHeldTrueWhenLockHeld(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "state.json.lock")
+
+	l, err := AcquireLock(lockPath, time.Second)
+	if err != nil {
+		t.Fatalf("AcquireLock: %v", err)
+	}
+	defer func() { _ = l.Release() }()
+
+	held, err := LockHeld(lockPath)
+	if err != nil {
+		t.Fatalf("LockHeld: %v", err)
+	}
+	if !held {
+		t.Errorf("expected held=true while AcquireLock holds the lock")
+	}
+}
+
+func TestLockHeldFalseWhenLockFileMissing(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "never-created.lock")
+
+	held, err := LockHeld(lockPath)
+	if err != nil {
+		t.Fatalf("LockHeld: %v", err)
+	}
+	if held {
+		t.Errorf("missing lock file should report held=false (no one is holding what does not exist)")
+	}
+}
