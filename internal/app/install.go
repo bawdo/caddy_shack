@@ -1,7 +1,6 @@
 package app
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/bawdo/caddy_shack/internal/docker"
@@ -53,12 +52,5 @@ func (a *App) Install() error {
 		// Start with an empty admin-enabled config; first register populates it.
 		Command: []string{"caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"},
 	}
-	if err := a.docker.CreateAndStart(spec); err != nil {
-		var rejErr interface{}
-		if errors.As(err, &rejErr) {
-			// Surface as generic so cmd layer prints it and exits 1.
-		}
-		return err
-	}
-	return nil
+	return a.docker.CreateAndStart(spec)
 }
