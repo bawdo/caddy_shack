@@ -9,13 +9,14 @@ for these projects.
 
 This is a helpful wrapper around the Caddy API that helps do things like:
 
-- De/Register a new backend web service
-- ...
-- ...
+- Register a backend web service (`caddy_shack register myapp --upstream 127.0.0.1:3000`)
+- Deregister it on shutdown (`caddy_shack deregister myapp`)
+- List the currently-registered backends (`caddy_shack list`)
+- Report container and admin-API health (`caddy_shack status`)
 
-CaddyShack also simplifies installing caddy (via docker) keeping it running,
-checking on it's status/health etc, and to update the docker image without
-losing configuration.
+CaddyShack also simplifies installing Caddy (via Docker), keeping it running,
+and checking on its status. Updating the image without losing configuration
+is planned for a later phase.
 
 CaddyShack only manages the locally running caddy server via the API.
 
@@ -58,8 +59,98 @@ configuration automatically.
 
 ## Usage
 
+Day-to-day flow. Once-off setup first, then register/deregister per project.
+
+### One-time setup
+
 ```
-caddy_shack version
+caddy_shack install
+```
+
+Pulls `caddy:2`, creates two named volumes (`caddy_shack_data`,
+`caddy_shack_config`), and starts a single container called `caddy_shack`
+listening on `127.0.0.1:80`, `:443`, and `:2019` (admin API, loopback-only).
+Idempotent: re-running on an existing install is a no-op.
+
+To get HTTPS without browser warnings, trust Caddy's internal root CA once:
+
+```
+docker exec caddy_shack cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/caddy_shack_root.crt
+```
+
+### Container lifecycle
+
+```
+caddy_shack start      # idempotent; errors if not installed
+caddy_shack stop       # no-op when already stopped
+caddy_shack restart
+caddy_shack status     # --json for scripts; exit 0 healthy, exit 1 unhealthy
+```
+
+### Registering a backend
+
+From a project's startup script:
+
+```
+caddy_shack register myapp --upstream 127.0.0.1:3000
+# https://myapp.test is now live
+```
+
+On Docker Desktop (macOS/Windows), use `host.docker.internal:<port>` as the
+upstream so Caddy inside the container can reach the host:
+
+```
+caddy_shack register myapp --upstream host.docker.internal:3000
+```
+
+Optional `--domain` overrides the default `<name>.test`:
+
+```
+caddy_shack register api --upstream 127.0.0.1:4000 --domain api.internal.test
+```
+
+Register is idempotent: same name + same fields is a no-op (no Caddy hit);
+same name + different fields updates the existing route.
+
+### Listing and deregistering
+
+```
+caddy_shack list           # tabular; --json for scripts
+caddy_shack deregister myapp
+```
+
+`deregister` is idempotent: unknown names exit 0 with a `no such backend`
+note on stderr.
+
+### Exit codes
+
+Stable contract, documented under `caddy_shack --help`:
+
+```
+0  success
+1  generic command failure
+2  invalid arguments
+3  domain conflict (another backend owns this domain)
+4  docker daemon unreachable
+5  caddy container not running
+6  caddy not installed
+7  state file corrupt
+8  state lock held by another caddy_shack process
+```
+
+### Quick smoke test
+
+```
+python3 -m http.server 3000 &
+caddy_shack register hello --upstream host.docker.internal:3000
+curl -k https://hello.test/                    # via dnsmasq DNS setup above
+# or, without DNS setup:
+curl -k --resolve hello.test:443:127.0.0.1 https://hello.test/
+
+caddy_shack deregister hello
+kill %1
+caddy_shack stop
 ```
 
 ## Development
