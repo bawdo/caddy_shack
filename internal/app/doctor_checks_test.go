@@ -10,12 +10,15 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/docker"
+	"github.com/bawdo/caddy_shack/internal/state"
 )
 
 func TestCheckDockerDaemonPass(t *testing.T) {
@@ -348,5 +351,52 @@ func TestCheckTrustStoreWarnWhenCertNotProvisioned(t *testing.T) {
 	r := checkTrustStore(context.Background(), a, noopShell)
 	if r.Status != SeverityWarn {
 		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
+	}
+}
+
+func TestCheckStateIntegrityPassWhenAbsent(t *testing.T) {
+	dir := t.TempDir()
+	a := NewWithPaths(Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  filepath.Join(dir, "state.json.lock"),
+	}, nil, docker.NewFake())
+
+	r := checkStateIntegrity(context.Background(), a)
+	if r.Status != SeverityPass {
+		t.Errorf("status: %v summary=%s", r.Status, r.Summary)
+	}
+}
+
+func TestCheckStateIntegrityFailWhenCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(statePath, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := NewWithPaths(Paths{StatePath: statePath, LockPath: statePath + ".lock"}, nil, docker.NewFake())
+
+	r := checkStateIntegrity(context.Background(), a)
+	if r.Status != SeverityFail {
+		t.Errorf("status: %v", r.Status)
+	}
+}
+
+func TestCheckStateIntegrityWarnWhenLockHeld(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "state.json.lock")
+	l, err := state.AcquireLock(lockPath, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Release() }()
+
+	a := NewWithPaths(Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  lockPath,
+	}, nil, docker.NewFake())
+
+	r := checkStateIntegrity(context.Background(), a)
+	if r.Status != SeverityWarn {
+		t.Errorf("status: %v summary=%s", r.Status, r.Summary)
 	}
 }

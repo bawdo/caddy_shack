@@ -147,6 +147,7 @@ func (a *App) buildCheckList(opts DoctorOptions) []func(context.Context) CheckRe
 		func(ctx context.Context) CheckResult { return checkContainerHealth(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkDNS(ctx, a, sh) },
 		func(ctx context.Context) CheckResult { return checkTrustStore(ctx, a, sh) },
+		func(ctx context.Context) CheckResult { return checkStateIntegrity(ctx, a) },
 	}
 	if !opts.SkipBackends {
 		checks = append(checks, func(ctx context.Context) CheckResult { return checkBackends(ctx, a) })

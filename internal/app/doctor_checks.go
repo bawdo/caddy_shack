@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/bawdo/caddy_shack/internal/docker"
+	"github.com/bawdo/caddy_shack/internal/state"
 )
 
 // shellExecutor runs an external command and returns combined output. Only
@@ -257,6 +258,46 @@ func applyTrustStoreFix(ctx context.Context, sh shellExecutor, cert []byte) erro
 		return fmt.Errorf("security add-trusted-cert: %w: %s", err, out)
 	}
 	return nil
+}
+
+func checkStateIntegrity(_ context.Context, a *App) CheckResult {
+	if _, err := state.Load(a.paths.StatePath); err != nil {
+		if state.IsCorrupt(err) {
+			return CheckResult{
+				Name:    "state-integrity",
+				Status:  SeverityFail,
+				Summary: "state.json is corrupt",
+				Detail:  []string{err.Error(), "remove " + a.paths.StatePath + " to start fresh (you will lose registered backends)"},
+			}
+		}
+		return CheckResult{
+			Name:    "state-integrity",
+			Status:  SeverityFail,
+			Summary: "cannot read state.json",
+			Detail:  []string{err.Error()},
+		}
+	}
+	held, err := state.LockHeld(a.paths.LockPath)
+	if err != nil {
+		return CheckResult{
+			Name:    "state-integrity",
+			Status:  SeverityWarn,
+			Summary: "cannot probe state lock",
+			Detail:  []string{err.Error()},
+		}
+	}
+	if held {
+		return CheckResult{
+			Name:    "state-integrity",
+			Status:  SeverityWarn,
+			Summary: "register/deregister in progress (state lock held)",
+		}
+	}
+	return CheckResult{
+		Name:    "state-integrity",
+		Status:  SeverityPass,
+		Summary: "state.json parses; lock free",
+	}
 }
 
 // checkBackends is implemented in Task 13.
