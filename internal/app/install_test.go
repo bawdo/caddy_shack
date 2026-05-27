@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/bawdo/caddy_shack/internal/docker"
@@ -81,5 +82,51 @@ func TestInstallReturnsErrDockerUnreachableWhenDaemonDown(t *testing.T) {
 	err := a.Install()
 	if !errors.Is(err, ErrDockerUnreachable) {
 		t.Errorf("expected ErrDockerUnreachable, got %v", err)
+	}
+}
+
+func TestInstallRollsBackHalfCreatedContainerOnFailure(t *testing.T) {
+	fake := docker.NewFake()
+	fake.CreateAndStartErr = errors.New("docker run: exit status 125: networking failure")
+	a := NewWithPaths(Paths{}, nil, fake)
+
+	if err := a.Install(); err == nil {
+		t.Fatal("expected error from Install")
+	}
+
+	// Remove must have been called for the managed container so a retry
+	// has a clean slate.
+	found := false
+	for _, name := range fake.Removed {
+		if name == CaddyContainerName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected Remove(%q) to be called for rollback, got Removed=%v",
+			CaddyContainerName, fake.Removed)
+	}
+	if _, present := fake.Containers[CaddyContainerName]; present {
+		t.Errorf("container still in Fake after rollback: %v", fake.Containers)
+	}
+}
+
+func TestInstallReturnsHelpfulErrorOnPortConflict(t *testing.T) {
+	fake := docker.NewFake()
+	fake.CreateAndStartErr = errors.New(
+		"docker run: exit status 125: Bind for 127.0.0.1:80 failed: port is already allocated")
+	a := NewWithPaths(Paths{}, nil, fake)
+
+	err := a.Install()
+	if err == nil {
+		t.Fatal("expected error from Install")
+	}
+	msg := err.Error()
+	wantSubstrings := []string{"already in use", "docker ps", "80", "443", "2019"}
+	for _, w := range wantSubstrings {
+		if !strings.Contains(msg, w) {
+			t.Errorf("error message missing %q\nfull: %s", w, msg)
+		}
 	}
 }

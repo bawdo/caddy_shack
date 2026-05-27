@@ -51,6 +51,10 @@ type Client interface {
 	Start(name string) error
 	// Stop stops a running container. No-op if already stopped.
 	Stop(name string) error
+	// Remove force-removes the named container regardless of its current
+	// state. No-op if the container does not exist. Used for rollback when
+	// CreateAndStart succeeds partially.
+	Remove(name string) error
 }
 
 // ContainerSpec describes the CaddyShack container CreateAndStart should run.

@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/bawdo/caddy_shack/internal/docker"
 )
@@ -52,5 +53,25 @@ func (a *App) Install() error {
 		// Start with an empty admin-enabled config; first register populates it.
 		Command: []string{"caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"},
 	}
-	return a.docker.CreateAndStart(spec)
+	if err := a.docker.CreateAndStart(spec); err != nil {
+		// Roll back the half-created container so a retry has a clean slate.
+		// Ignoring the Remove error: the user already has a more useful error
+		// from CreateAndStart, and there's nothing actionable for them in a
+		// secondary rm failure.
+		_ = a.docker.Remove(CaddyContainerName)
+		if isPortAllocatedErr(err) {
+			return fmt.Errorf("install: one of ports 80, 443, or 2019 on 127.0.0.1 is already in use. "+
+				"Check other containers with 'docker ps' or processes with 'sudo lsof -nP -iTCP:80,443,2019 -sTCP:LISTEN'. "+
+				"Underlying error: %w", err)
+		}
+		return err
+	}
+	return nil
+}
+
+// isPortAllocatedErr returns true when the docker error indicates a host
+// port is already bound. Matches the exact wording in docker daemon's
+// "Bind for <addr>:<port> failed: port is already allocated" message.
+func isPortAllocatedErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "port is already allocated")
 }

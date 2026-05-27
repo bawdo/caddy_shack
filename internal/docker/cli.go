@@ -100,3 +100,17 @@ func (CLI) Stop(name string) error {
 	}
 	return nil
 }
+
+func (CLI) Remove(name string) error {
+	cmd := exec.Command("docker", "rm", "-f", name)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// Absent container is a no-op success.
+		if strings.Contains(strings.ToLower(string(out)), "no such object") ||
+			strings.Contains(strings.ToLower(string(out)), "no such container") {
+			return nil
+		}
+		return fmt.Errorf("docker rm -f %s: %w: %s", name, err, out)
+	}
+	return nil
+}

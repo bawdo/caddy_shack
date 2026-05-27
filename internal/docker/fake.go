@@ -3,17 +3,23 @@ package docker
 import "sync"
 
 // Fake is an in-memory Client for app-layer tests. Records calls and
-// transitions container state per CreateAndStart/Start/Stop.
+// transitions container state per CreateAndStart/Start/Stop/Remove.
+//
+// Error-injection fields (DaemonErr, PullErr, CreateAndStartErr) are
+// intended to be set during test setup, not mutated concurrently with the
+// SUT.
 type Fake struct {
 	mu sync.Mutex
 
-	DaemonErr error
-	PullErr   error
+	DaemonErr         error
+	PullErr           error
+	CreateAndStartErr error
 
 	Volumes    map[string]bool
 	PulledImg  map[string]bool
 	Containers map[string]ContainerState
 	Spec       ContainerSpec
+	Removed    []string
 }
 
 // NewFake returns a Fake with empty maps and a reachable daemon.
@@ -61,6 +67,13 @@ func (f *Fake) CreateAndStart(spec ContainerSpec) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Spec = spec
+	if f.CreateAndStartErr != nil {
+		// Mirror docker reality: when `docker run -d` fails part-way
+		// (e.g. networking) the container record is still left behind in
+		// "Created" state. Tests of the rollback path rely on this.
+		f.Containers[spec.Name] = StateStopped
+		return f.CreateAndStartErr
+	}
 	f.Containers[spec.Name] = StateRunning
 	return nil
 }
@@ -78,5 +91,13 @@ func (f *Fake) Stop(name string) error {
 	if _, ok := f.Containers[name]; ok {
 		f.Containers[name] = StateStopped
 	}
+	return nil
+}
+
+func (f *Fake) Remove(name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Removed = append(f.Removed, name)
+	delete(f.Containers, name)
 	return nil
 }

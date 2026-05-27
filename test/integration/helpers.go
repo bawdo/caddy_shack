@@ -82,3 +82,4 @@ func (fakeRunningDocker) ContainerState(string) (docker.ContainerState, error) {
 func (fakeRunningDocker) CreateAndStart(docker.ContainerSpec) error { return nil }
 func (fakeRunningDocker) Start(string) error                        { return nil }
 func (fakeRunningDocker) Stop(string) error                         { return nil }
+func (fakeRunningDocker) Remove(string) error                       { return nil }
