@@ -1,7 +1,10 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -262,5 +265,88 @@ func TestCheckDNSFailWhenDscacheReturnsNothing(t *testing.T) {
 	}
 	if !r.Fix.RequiresSudo {
 		t.Errorf("DNS fix requires sudo")
+	}
+}
+
+// fakeRootCert returns a stable 200-byte payload and its hex SHA-256.
+func fakeRootCert() ([]byte, string) {
+	payload := bytes.Repeat([]byte{0xAB}, 200)
+	sum := sha256.Sum256(payload)
+	return payload, strings.ToUpper(hex.EncodeToString(sum[:]))
+}
+
+func TestCheckTrustStorePassWhenSHAFound(t *testing.T) {
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	cert, sha := fakeRootCert()
+	fake.ExecResponses["caddy_shack:cat /data/caddy/pki/authorities/local/root.crt"] = docker.ExecResponse{
+		Stdout: cert,
+	}
+	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+
+	sh := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "security" {
+			// Emit the keychain dump containing the SHA we'd expect to find.
+			return []byte("SHA-256 hash: " + sha + "\n"), nil
+		}
+		return nil, errors.New("unexpected")
+	}
+
+	r := checkTrustStore(context.Background(), a, sh)
+	if r.Status != SeverityPass {
+		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
+	}
+}
+
+func TestCheckTrustStoreFailWhenSHAMissing(t *testing.T) {
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	cert, _ := fakeRootCert()
+	fake.ExecResponses["caddy_shack:cat /data/caddy/pki/authorities/local/root.crt"] = docker.ExecResponse{
+		Stdout: cert,
+	}
+	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+
+	sh := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "security" {
+			return []byte("SHA-256 hash: DEADBEEF\n"), nil
+		}
+		return nil, errors.New("unexpected")
+	}
+
+	r := checkTrustStore(context.Background(), a, sh)
+	if r.Status != SeverityFail {
+		t.Errorf("status: %v", r.Status)
+	}
+	if r.Fix == nil || !r.Fix.RequiresSudo {
+		t.Errorf("fix: %+v", r.Fix)
+	}
+}
+
+// noopShell is a do-nothing shellExecutor for tests that exercise paths
+// where the shell executor is not consulted (e.g. the SKIP path before any
+// shell-out happens).
+var noopShell shellExecutor = func(context.Context, string, ...string) ([]byte, error) {
+	return nil, nil
+}
+
+func TestCheckTrustStoreSkipWhenContainerNotRunning(t *testing.T) {
+	fake := docker.NewFake() // absent
+	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+	r := checkTrustStore(context.Background(), a, noopShell)
+	if r.Status != SeveritySkip {
+		t.Errorf("status: %v", r.Status)
+	}
+}
+
+func TestCheckTrustStoreWarnWhenCertNotProvisioned(t *testing.T) {
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	// No ExecResponses entry => Fake.Exec returns "no scripted response" error.
+	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+
+	r := checkTrustStore(context.Background(), a, noopShell)
+	if r.Status != SeverityWarn {
+		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
 	}
 }

@@ -3,8 +3,11 @@ package app
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -184,6 +187,74 @@ func applyDNSFix(ctx context.Context, sh shellExecutor) error {
 		if err != nil {
 			return fmt.Errorf("%s %s: %w: %s", s[0], strings.Join(s[1:], " "), err, out)
 		}
+	}
+	return nil
+}
+
+func checkTrustStore(ctx context.Context, a *App, sh shellExecutor) CheckResult {
+	state, _ := a.docker.ContainerState(CaddyContainerName)
+	if state != docker.StateRunning {
+		return CheckResult{
+			Name:    "trust-store",
+			Status:  SeveritySkip,
+			Summary: "container not running",
+		}
+	}
+	cert, err := a.docker.Exec(ctx, CaddyContainerName, []string{"cat", "/data/caddy/pki/authorities/local/root.crt"})
+	if err != nil {
+		return CheckResult{
+			Name:    "trust-store",
+			Status:  SeverityWarn,
+			Summary: "no root CA yet (register a backend to trigger provisioning)",
+			Detail:  []string{err.Error()},
+		}
+	}
+	sum := sha256.Sum256(cert)
+	wantSHA := strings.ToUpper(hex.EncodeToString(sum[:]))
+
+	dump, err := sh(ctx, "security", "find-certificate", "-a", "-Z", "/Library/Keychains/System.keychain")
+	if err == nil && strings.Contains(string(dump), wantSHA) {
+		return CheckResult{
+			Name:    "trust-store",
+			Status:  SeverityPass,
+			Summary: "Caddy root CA trusted in System keychain",
+		}
+	}
+	return CheckResult{
+		Name:    "trust-store",
+		Status:  SeverityFail,
+		Summary: "Caddy root CA not trusted in System keychain",
+		Detail:  []string{"expected SHA-256: " + wantSHA},
+		Fix: &FixAction{
+			Label:        "trust Caddy root CA via 'security add-trusted-cert' (requires sudo)",
+			RequiresSudo: true,
+			Apply: func(ctx context.Context) error {
+				return applyTrustStoreFix(ctx, sh, cert)
+			},
+		},
+	}
+}
+
+func applyTrustStoreFix(ctx context.Context, sh shellExecutor, cert []byte) error {
+	// Write cert to a temp file the user's sudo can read.
+	tmp, err := os.CreateTemp("", "caddy_shack_root_*.crt")
+	if err != nil {
+		return fmt.Errorf("temp file: %w", err)
+	}
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+	}()
+	if _, err := tmp.Write(cert); err != nil {
+		return fmt.Errorf("write cert: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close tmp: %w", err)
+	}
+	out, err := sh(ctx, "sudo", "security", "add-trusted-cert", "-d", "-r", "trustRoot",
+		"-k", "/Library/Keychains/System.keychain", tmp.Name())
+	if err != nil {
+		return fmt.Errorf("security add-trusted-cert: %w: %s", err, out)
 	}
 	return nil
 }
