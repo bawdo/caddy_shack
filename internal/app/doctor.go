@@ -142,6 +142,7 @@ func (a *App) Doctor(ctx context.Context, opts DoctorOptions) (DoctorReport, err
 func (a *App) buildCheckList(opts DoctorOptions) []func(context.Context) CheckResult {
 	checks := []func(context.Context) CheckResult{
 		func(ctx context.Context) CheckResult { return checkDockerDaemon(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkPortAvailability(ctx, a) },
 	}
 	if !opts.SkipBackends {
 		checks = append(checks, func(ctx context.Context) CheckResult { return checkBackends(ctx, a) })
