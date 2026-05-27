@@ -14,6 +14,7 @@ import (
 
 	"github.com/bawdo/caddy_shack/internal/app"
 	"github.com/bawdo/caddy_shack/internal/caddyapi"
+	dockerpkg "github.com/bawdo/caddy_shack/internal/docker"
 )
 
 func TestDoctorHappyPathAfterInstall(t *testing.T) {
@@ -80,6 +81,71 @@ func TestDoctorHappyPathAfterInstall(t *testing.T) {
 
 	// Cleanup ports
 	_ = net.IPv4(0, 0, 0, 0) // keep import
+}
+
+// execOnlyDocker is a docker.Client that only implements Exec against a
+// real container; the other methods always report "running" for the App's
+// container name. Lets the backends check use real `docker exec` while
+// keeping the App's docker probes off our test container's lifecycle.
+type execOnlyDocker struct{ container string }
+
+func (execOnlyDocker) DaemonReachable() error    { return nil }
+func (execOnlyDocker) EnsureVolume(string) error { return nil }
+func (execOnlyDocker) PullImage(string) error    { return nil }
+func (execOnlyDocker) ContainerState(string) (dockerpkg.ContainerState, error) {
+	return dockerpkg.StateRunning, nil
+}
+func (execOnlyDocker) CreateAndStart(dockerpkg.ContainerSpec) error { return nil }
+func (execOnlyDocker) Start(string) error                           { return nil }
+func (execOnlyDocker) Stop(string) error                            { return nil }
+func (execOnlyDocker) Remove(string) error                          { return nil }
+func (e execOnlyDocker) Exec(ctx context.Context, _ string, argv []string) ([]byte, error) {
+	args := append([]string{"exec", e.container}, argv...)
+	return exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+}
+
+func TestDoctorBackendsFailWhenUpstreamDead(t *testing.T) {
+	SkipUnlessDocker(t)
+	CleanupContainer(t)
+
+	adminPort := freePort(t)
+	caddyfile := filepath.Join(t.TempDir(), "Caddyfile")
+	if err := os.WriteFile(caddyfile, []byte("{\n\tadmin 0.0.0.0:2019\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("docker", "run", "-d", "--name", testContainerName,
+		"--add-host=host.docker.internal:host-gateway",
+		"-p", fmt.Sprintf("127.0.0.1:%d:2019", adminPort),
+		"-v", fmt.Sprintf("%s:/etc/caddy/Caddyfile:ro", caddyfile),
+		"caddy:2",
+	).CombinedOutput(); err != nil {
+		t.Fatalf("docker run: %v: %s", err, out)
+	}
+	adminURL := fmt.Sprintf("http://127.0.0.1:%d", adminPort)
+	WaitForCaddyAdmin(t, adminURL, 15*time.Second)
+
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	a := app.NewWithPaths(app.Paths{StatePath: statePath, LockPath: statePath + ".lock"},
+		caddyapi.NewClient(adminURL, 5*time.Second),
+		execOnlyDocker{container: testContainerName})
+	if err := a.Register(context.Background(), app.RegisterInput{
+		Name:     "deadbackend",
+		Upstream: "host.docker.internal:1", // port 1 is unused
+		Domain:   "deadbackend.test",
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	rep, err := a.Doctor(context.Background(), app.DoctorOptions{})
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	for _, c := range rep.Checks {
+		if c.Name == "backends" && c.Status != app.SeverityFail {
+			t.Errorf("backends must FAIL with dead upstream: status=%v summary=%s detail=%v",
+				c.Status, c.Summary, c.Detail)
+		}
+	}
 }
 
 func TestDoctorStoppedContainerReportsFail(t *testing.T) {
