@@ -511,3 +511,116 @@ func TestCheckConfigDriftSkipWhenContainerNotRunning(t *testing.T) {
 		t.Errorf("status: %v summary=%s", r.Status, r.Summary)
 	}
 }
+
+func TestCheckBackendsPassWhenAllReachable(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	st := &state.State{SchemaVersion: 1, Backends: map[string]state.Backend{
+		"a": {Domain: "a.test", Upstream: "host.docker.internal:3000"},
+	}}
+	if err := state.Save(statePath, st); err != nil {
+		t.Fatal(err)
+	}
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	fake.ExecResponses["caddy_shack:nc -z -w 3 host.docker.internal 3000"] = docker.ExecResponse{}
+	a := NewWithPaths(Paths{StatePath: statePath, LockPath: statePath + ".lock"}, nil, fake)
+
+	r := checkBackends(context.Background(), a)
+	if r.Status != SeverityPass {
+		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
+	}
+}
+
+func TestCheckBackendsFailWhenAnyUnreachable(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	st := &state.State{SchemaVersion: 1, Backends: map[string]state.Backend{
+		"a": {Domain: "a.test", Upstream: "host.docker.internal:3000"},
+		"b": {Domain: "b.test", Upstream: "host.docker.internal:4000"},
+	}}
+	if err := state.Save(statePath, st); err != nil {
+		t.Fatal(err)
+	}
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	fake.ExecResponses["caddy_shack:nc -z -w 3 host.docker.internal 3000"] = docker.ExecResponse{}
+	fake.ExecResponses["caddy_shack:nc -z -w 3 host.docker.internal 4000"] = docker.ExecResponse{
+		Err: errors.New("connection refused"),
+	}
+	// Fallback to wget when nc fails - also fails.
+	fake.ExecResponses["caddy_shack:wget -q --spider --tries 1 --timeout 3 http://host.docker.internal:4000/"] = docker.ExecResponse{
+		Err: errors.New("connection refused"),
+	}
+	a := NewWithPaths(Paths{StatePath: statePath, LockPath: statePath + ".lock"}, nil, fake)
+
+	r := checkBackends(context.Background(), a)
+	if r.Status != SeverityFail {
+		t.Errorf("status: %v", r.Status)
+	}
+	found := false
+	for _, d := range r.Detail {
+		if strings.Contains(d, "b") || strings.Contains(d, ":4000") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("detail must identify failing backend: %v", r.Detail)
+	}
+}
+
+func TestCheckBackendsPassNoneRegistered(t *testing.T) {
+	dir := t.TempDir()
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	a := NewWithPaths(Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  filepath.Join(dir, "state.json.lock"),
+	}, nil, fake)
+
+	r := checkBackends(context.Background(), a)
+	if r.Status != SeverityPass {
+		t.Errorf("status: %v summary=%s", r.Status, r.Summary)
+	}
+	if !strings.Contains(r.Summary, "no backends") {
+		t.Errorf("summary: %q", r.Summary)
+	}
+}
+
+func TestCheckBackendsSkipWhenContainerNotRunning(t *testing.T) {
+	dir := t.TempDir()
+	a := NewWithPaths(Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  filepath.Join(dir, "state.json.lock"),
+	}, nil, docker.NewFake())
+
+	r := checkBackends(context.Background(), a)
+	if r.Status != SeveritySkip {
+		t.Errorf("status: %v", r.Status)
+	}
+}
+
+func TestCheckBackendsUsesWgetFallbackWhenNcMissing(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	st := &state.State{SchemaVersion: 1, Backends: map[string]state.Backend{
+		"a": {Domain: "a.test", Upstream: "host.docker.internal:3000"},
+	}}
+	if err := state.Save(statePath, st); err != nil {
+		t.Fatal(err)
+	}
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	// nc missing.
+	fake.ExecResponses["caddy_shack:nc -z -w 3 host.docker.internal 3000"] = docker.ExecResponse{
+		Err: errors.New("nc: not found"),
+	}
+	// wget succeeds.
+	fake.ExecResponses["caddy_shack:wget -q --spider --tries 1 --timeout 3 http://host.docker.internal:3000/"] = docker.ExecResponse{}
+	a := NewWithPaths(Paths{StatePath: statePath, LockPath: statePath + ".lock"}, nil, fake)
+
+	r := checkBackends(context.Background(), a)
+	if r.Status != SeverityPass {
+		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
+	}
+}

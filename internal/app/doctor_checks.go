@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -305,9 +306,74 @@ func checkStateIntegrity(_ context.Context, a *App) CheckResult {
 	}
 }
 
-// checkBackends is implemented in Task 13.
-func checkBackends(_ context.Context, _ *App) CheckResult {
-	return CheckResult{Name: "backends", Status: SeveritySkip, Summary: "not implemented"}
+func checkBackends(ctx context.Context, a *App) CheckResult {
+	cstate, _ := a.docker.ContainerState(CaddyContainerName)
+	if cstate != docker.StateRunning {
+		return CheckResult{
+			Name:    "backends",
+			Status:  SeveritySkip,
+			Summary: "container not running",
+		}
+	}
+	st, err := state.Load(a.paths.StatePath)
+	if err != nil {
+		return CheckResult{
+			Name:    "backends",
+			Status:  SeveritySkip,
+			Summary: "state unreadable; covered by state-integrity",
+		}
+	}
+	if len(st.Backends) == 0 {
+		return CheckResult{
+			Name:    "backends",
+			Status:  SeverityPass,
+			Summary: "no backends registered",
+		}
+	}
+	var failed []string
+	names := make([]string, 0, len(st.Backends))
+	for n := range st.Backends {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		b := st.Backends[n]
+		host, port, err := net.SplitHostPort(b.Upstream)
+		if err != nil {
+			failed = append(failed, fmt.Sprintf("%s (%s): malformed upstream: %v", n, b.Upstream, err))
+			continue
+		}
+		if probeBackend(ctx, a, host, port) {
+			continue
+		}
+		failed = append(failed, fmt.Sprintf("%s -> %s: unreachable", n, b.Upstream))
+	}
+	if len(failed) > 0 {
+		return CheckResult{
+			Name:    "backends",
+			Status:  SeverityFail,
+			Summary: fmt.Sprintf("%d of %d backends unreachable", len(failed), len(st.Backends)),
+			Detail:  failed,
+		}
+	}
+	return CheckResult{
+		Name:    "backends",
+		Status:  SeverityPass,
+		Summary: fmt.Sprintf("all %d backends reachable", len(st.Backends)),
+	}
+}
+
+// probeBackend returns true if the upstream is reachable from inside the
+// container. Tries `nc -z` first; on any error, falls back to wget --spider.
+func probeBackend(ctx context.Context, a *App, host, port string) bool {
+	if _, err := a.docker.Exec(ctx, CaddyContainerName,
+		[]string{"nc", "-z", "-w", "3", host, port}); err == nil {
+		return true
+	}
+	url := "http://" + net.JoinHostPort(host, port) + "/"
+	_, err := a.docker.Exec(ctx, CaddyContainerName,
+		[]string{"wget", "-q", "--spider", "--tries", "1", "--timeout", "3", url})
+	return err == nil
 }
 
 // doctorPorts is the list of loopback ports CaddyShack publishes from the
