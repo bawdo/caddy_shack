@@ -713,8 +713,14 @@ func TestApplyDNSFixStopsOnFirstError(t *testing.T) {
 
 	// First sh call succeeds, second fails.
 	sh := recordingShell(&shCalls,
-		struct{ Out []byte; Err error }{nil, nil},
-		struct{ Out []byte; Err error }{nil, injected},
+		struct {
+			Out []byte
+			Err error
+		}{nil, nil},
+		struct {
+			Out []byte
+			Err error
+		}{nil, injected},
 	)
 	tty := recordingShell(&ttyCalls)
 
@@ -795,7 +801,10 @@ func TestApplyTrustStoreFixReturnsErrorOnSecurityFailure(t *testing.T) {
 
 	var calls []shellCall
 	tty := recordingShell(&calls,
-		struct{ Out []byte; Err error }{nil, injected},
+		struct {
+			Out []byte
+			Err error
+		}{nil, injected},
 	)
 
 	err := applyTrustStoreFix(ctx, tty, cert)
