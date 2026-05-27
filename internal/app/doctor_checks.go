@@ -5,14 +5,19 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/docker"
 	"github.com/bawdo/caddy_shack/internal/state"
 )
@@ -348,4 +353,100 @@ func checkPortAvailabilityOn(_ context.Context, a *App, ports []int) CheckResult
 		Summary: "required loopback ports are in use by a foreign process",
 		Detail:  append(taken, "stop the process holding the port, or run 'caddy_shack stop' if you have another caddy_shack install"),
 	}
+}
+
+// extractRoutes pulls apps.http.servers.srv0.routes out of a Caddy config
+// blob. Returns nil if any expected key is missing (treated as drift).
+func extractRoutes(cfg []byte) any {
+	var m map[string]any
+	if err := json.Unmarshal(cfg, &m); err != nil {
+		return nil
+	}
+	step := func(parent any, key string) any {
+		mp, ok := parent.(map[string]any)
+		if !ok {
+			return nil
+		}
+		return mp[key]
+	}
+	apps := step(m, "apps")
+	http := step(apps, "http")
+	servers := step(http, "servers")
+	srv0 := step(servers, "srv0")
+	if mp, ok := srv0.(map[string]any); ok {
+		return mp["routes"]
+	}
+	return nil
+}
+
+func checkConfigDrift(ctx context.Context, a *App) CheckResult {
+	cstate, _ := a.docker.ContainerState(CaddyContainerName)
+	if cstate != docker.StateRunning {
+		return CheckResult{
+			Name:    "config-drift",
+			Status:  SeveritySkip,
+			Summary: "container not running",
+		}
+	}
+	live, err := a.caddy.GetConfig(ctx)
+	if err != nil {
+		return CheckResult{
+			Name:    "config-drift",
+			Status:  SeverityFail,
+			Summary: "cannot fetch live config",
+			Detail:  []string{err.Error()},
+		}
+	}
+	st, err := state.Load(a.paths.StatePath)
+	if err != nil {
+		return CheckResult{
+			Name:    "config-drift",
+			Status:  SeveritySkip,
+			Summary: "state unreadable; covered by state-integrity",
+		}
+	}
+	desired := caddyapi.Build(st)
+	liveRoutes := extractRoutes(live)
+	desiredRoutes := extractRoutes(desired)
+
+	if reflect.DeepEqual(liveRoutes, desiredRoutes) {
+		return CheckResult{
+			Name:    "config-drift",
+			Status:  SeverityPass,
+			Summary: "live Caddy routes match state.json",
+		}
+	}
+	return CheckResult{
+		Name:    "config-drift",
+		Status:  SeverityWarn,
+		Summary: "live Caddy routes differ from state.json",
+		Detail:  []string{"re-POST /load from state will overwrite live config"},
+		Fix: &FixAction{
+			Label: "re-POST /load from state.json (takes the state lock)",
+			Apply: func(ctx context.Context) error {
+				return applyDriftFix(ctx, a)
+			},
+		},
+	}
+}
+
+func applyDriftFix(ctx context.Context, a *App) error {
+	lock, err := state.AcquireLock(a.paths.LockPath, 5*time.Second)
+	if err != nil {
+		if errors.Is(err, state.ErrLockTimeout) {
+			return fmt.Errorf("%w: %v", ErrLockContention, err)
+		}
+		return err
+	}
+	defer func() { _ = lock.Release() }()
+
+	st, err := state.Load(a.paths.StatePath)
+	if err != nil {
+		return err
+	}
+	cfg := caddyapi.Build(st)
+	if err := a.caddy.Load(ctx, cfg); err != nil {
+		return err
+	}
+	return nil
 }

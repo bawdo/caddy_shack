@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -397,6 +399,115 @@ func TestCheckStateIntegrityWarnWhenLockHeld(t *testing.T) {
 
 	r := checkStateIntegrity(context.Background(), a)
 	if r.Status != SeverityWarn {
+		t.Errorf("status: %v summary=%s", r.Status, r.Summary)
+	}
+}
+
+func TestCheckConfigDriftPassWhenRoutesMatch(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	st := &state.State{SchemaVersion: 1, Backends: map[string]state.Backend{
+		"a": {Domain: "a.test", Upstream: "127.0.0.1:1000"},
+	}}
+	if err := state.Save(statePath, st); err != nil {
+		t.Fatal(err)
+	}
+	desired := caddyapi.Build(st)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write(desired) // live config exactly matches generated
+	}))
+	defer srv.Close()
+
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	a := NewWithPaths(Paths{StatePath: statePath, LockPath: statePath + ".lock"},
+		caddyapi.NewClient(srv.URL, time.Second), fake)
+
+	r := checkConfigDrift(context.Background(), a)
+	if r.Status != SeverityPass {
+		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
+	}
+}
+
+func TestCheckConfigDriftWarnWhenRoutesDiffer(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	st := &state.State{SchemaVersion: 1, Backends: map[string]state.Backend{
+		"a": {Domain: "a.test", Upstream: "127.0.0.1:1000"},
+	}}
+	if err := state.Save(statePath, st); err != nil {
+		t.Fatal(err)
+	}
+
+	// Live config: same shape, different upstream port - drift.
+	live := map[string]any{
+		"apps": map[string]any{
+			"http": map[string]any{
+				"servers": map[string]any{
+					"srv0": map[string]any{
+						"routes": []any{
+							map[string]any{
+								"match": []any{map[string]any{"host": []any{"a.test"}}},
+								"handle": []any{map[string]any{
+									"handler":   "reverse_proxy",
+									"upstreams": []any{map[string]any{"dial": "127.0.0.1:9999"}},
+								}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	liveBytes, _ := json.Marshal(live)
+
+	var loaded []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(200)
+			_, _ = w.Write(liveBytes)
+			return
+		}
+		// POST /load - record the body for fix-test below.
+		loaded, _ = io.ReadAll(r.Body)
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+	_ = loaded // for golangci - real assertion below
+
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	a := NewWithPaths(Paths{StatePath: statePath, LockPath: statePath + ".lock"},
+		caddyapi.NewClient(srv.URL, time.Second), fake)
+
+	r := checkConfigDrift(context.Background(), a)
+	if r.Status != SeverityWarn {
+		t.Errorf("status: %v summary=%s", r.Status, r.Summary)
+	}
+	if r.Fix == nil {
+		t.Fatal("expected re-load fix")
+	}
+	if err := r.Fix.Apply(context.Background()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	// Loaded body must have a route pointing at 127.0.0.1:1000 (from state),
+	// not 127.0.0.1:9999 (the drifted live value).
+	if !strings.Contains(string(loaded), "127.0.0.1:1000") {
+		t.Errorf("re-loaded config does not contain state's upstream: %s", loaded)
+	}
+}
+
+func TestCheckConfigDriftSkipWhenContainerNotRunning(t *testing.T) {
+	dir := t.TempDir()
+	a := NewWithPaths(Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  filepath.Join(dir, "state.json.lock"),
+	}, nil, docker.NewFake())
+
+	r := checkConfigDrift(context.Background(), a)
+	if r.Status != SeveritySkip {
 		t.Errorf("status: %v summary=%s", r.Status, r.Summary)
 	}
 }
