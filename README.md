@@ -54,8 +54,8 @@ dscacheutil -q host -a name anything.test
 # expect: 127.0.0.1
 ```
 
-A future `caddy_shack doctor` command will detect and fix missing DNS
-configuration automatically.
+`caddy_shack doctor --fix` will install dnsmasq and write the resolver
+entries for you.
 
 ## Usage
 
@@ -152,6 +152,28 @@ caddy_shack deregister hello
 kill %1
 caddy_shack stop
 ```
+
+### Doctor
+
+Run a self-diagnosis:
+
+```
+caddy_shack doctor
+```
+
+The output shows one line per check ([PASS], [WARN], [FAIL], [SKIP]). To
+fix problems automatically:
+
+```
+caddy_shack doctor --fix          # interactive y/N per fix
+caddy_shack doctor --fix --yes    # apply every fix non-interactively
+caddy_shack doctor --json         # machine-readable output
+caddy_shack doctor --no-backends  # skip per-backend reachability probes
+```
+
+Doctor exits 1 if any check FAILs (or, in `--fix` mode, if any fix fails).
+DNS and trust-store fixes use `sudo`; you'll be prompted for your password
+unless `sudo` is already cached.
 
 ## Development
 
