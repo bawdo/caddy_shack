@@ -2,6 +2,7 @@ package caddyapi
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -39,9 +40,10 @@ func NewClient(baseURL string, timeout time.Duration) *Client {
 	}
 }
 
-// Load POSTs config to /load. Treats 2xx as success.
-func (c *Client) Load(config []byte) error {
-	req, err := http.NewRequest(http.MethodPost, c.base+"/load", bytes.NewReader(config))
+// Load POSTs config to /load. Treats 2xx as success. The request honours
+// ctx cancellation so Ctrl+C during a long config push exits promptly.
+func (c *Client) Load(ctx context.Context, config []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/load", bytes.NewReader(config))
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
@@ -59,9 +61,14 @@ func (c *Client) Load(config []byte) error {
 }
 
 // Reachable returns true when GET /config/ returns 2xx within the client's
-// timeout. Used by `status`.
-func (c *Client) Reachable() bool {
-	resp, err := c.http.Get(c.base + "/config/")
+// timeout. Used by `status`. Honours ctx so Ctrl+C during a hanging probe
+// exits promptly.
+func (c *Client) Reachable(ctx context.Context) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/config/", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return false
 	}

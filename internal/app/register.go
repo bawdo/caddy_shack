@@ -85,7 +85,7 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 	}
 
 	cfg := caddyapi.Build(s)
-	if err := a.caddy.Load(cfg); err != nil {
+	if err := a.caddy.Load(ctx, cfg); err != nil {
 		if errors.Is(err, caddyapi.ErrUnreachable) {
 			return fmt.Errorf("%w: %v", ErrCaddyNotRunning, err)
 		}
@@ -95,7 +95,6 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 	if err := state.Save(a.paths.StatePath, s); err != nil {
 		return fmt.Errorf("save state: %w", err)
 	}
-	_ = ctx // reserved for future cancellation
 	return nil
 }
 

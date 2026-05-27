@@ -1,8 +1,10 @@
 package caddyapi
 
 import (
+	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,7 +24,7 @@ func TestClientLoadPostsConfig(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, time.Second)
-	if err := c.Load([]byte(`{"apps":{}}`)); err != nil {
+	if err := c.Load(context.Background(), []byte(`{"apps":{}}`)); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	if gotPath != "/load" {
@@ -44,7 +46,7 @@ func TestClientLoadReturnsErrRejectedOn4xx(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, time.Second)
-	err := c.Load([]byte(`{}`))
+	err := c.Load(context.Background(), []byte(`{}`))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -63,9 +65,51 @@ func TestClientLoadReturnsErrRejectedOn4xx(t *testing.T) {
 func TestClientLoadReturnsErrUnreachableOnConnFail(t *testing.T) {
 	// Pick a port that is almost certainly unused.
 	c := NewClient("http://127.0.0.1:1", 200*time.Millisecond)
-	err := c.Load([]byte(`{}`))
+	err := c.Load(context.Background(), []byte(`{}`))
 	if !errors.Is(err, ErrUnreachable) {
 		t.Errorf("expected ErrUnreachable, got %v", err)
+	}
+}
+
+func TestClientLoadHonoursContextCancellation(t *testing.T) {
+	// Raw TCP listener that accepts then sits on the connection without
+	// responding. We avoid httptest here because httptest.Server.Close
+	// waits for in-flight handlers to return, deadlocking against a
+	// handler that's blocked. Closing the listener directly cleans up.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			// Hold the connection; the client's cancel will tear it down.
+			t.Cleanup(func() { _ = conn.Close() })
+		}
+	}()
+
+	c := NewClient("http://"+l.Addr().String(), time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	err = c.Load(ctx, []byte(`{}`))
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected cancellation error, got nil")
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("Load did not respect cancel: took %s", elapsed)
+	}
+	if !errors.Is(err, ErrUnreachable) {
+		t.Errorf("expected ErrUnreachable wrap, got %v", err)
 	}
 }
 
@@ -80,14 +124,14 @@ func TestClientReachableTrueOn200(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, time.Second)
-	if !c.Reachable() {
+	if !c.Reachable(context.Background()) {
 		t.Error("expected Reachable=true")
 	}
 }
 
 func TestClientReachableFalseOnNoServer(t *testing.T) {
 	c := NewClient("http://127.0.0.1:1", 200*time.Millisecond)
-	if c.Reachable() {
+	if c.Reachable(context.Background()) {
 		t.Error("expected Reachable=false")
 	}
 }

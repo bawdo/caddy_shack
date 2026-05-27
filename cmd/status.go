@@ -20,7 +20,7 @@ func newStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rep, runErr := a.Status()
+			rep, runErr := a.Status(cmd.Context())
 			w := cmd.OutOrStdout()
 			if asJSON {
 				out, _ := json.MarshalIndent(rep, "", "  ")

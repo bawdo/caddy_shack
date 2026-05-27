@@ -16,8 +16,13 @@ type Listing struct {
 	RegisteredAt string `json:"registered_at"`
 }
 
-// List returns the registered backends, sorted by name.
+// List returns the registered backends, sorted by name. ctx is honoured at
+// entry; the rest of the function is in-memory + a single state file read,
+// so finer-grained cancellation has no real value.
 func (a *App) List(ctx context.Context) ([]Listing, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s, err := state.Load(a.paths.StatePath)
 	if err != nil {
 		if state.IsCorrupt(err) {
@@ -37,6 +42,5 @@ func (a *App) List(ctx context.Context) ([]Listing, error) {
 			Name: n, Domain: b.Domain, Upstream: b.Upstream, RegisteredAt: b.RegisteredAt,
 		})
 	}
-	_ = ctx
 	return out, nil
 }

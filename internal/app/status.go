@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 
 	"github.com/bawdo/caddy_shack/internal/docker"
@@ -23,8 +24,10 @@ type StatusReport struct {
 //   - nil when healthy
 //
 // The report is populated as much as possible even when an error is returned,
-// so the cmd layer can print partial diagnostic info before exiting.
-func (a *App) Status() (StatusReport, error) {
+// so the cmd layer can print partial diagnostic info before exiting. The ctx
+// is passed to the Caddy admin reachability probe so a Ctrl+C during a
+// hanging check exits promptly.
+func (a *App) Status(ctx context.Context) (StatusReport, error) {
 	rep := StatusReport{}
 	var priorityErr error
 
@@ -39,7 +42,7 @@ func (a *App) Status() (StatusReport, error) {
 		rep.ContainerState = cs.String()
 	}
 
-	rep.AdminReachable = a.caddy.Reachable()
+	rep.AdminReachable = a.caddy.Reachable(ctx)
 
 	if s, err := state.Load(a.paths.StatePath); err != nil {
 		if state.IsCorrupt(err) && priorityErr == nil {

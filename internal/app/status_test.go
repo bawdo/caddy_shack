@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -27,7 +28,7 @@ func TestStatusHealthyWhenRunningAndReachable(t *testing.T) {
 		LockPath:  filepath.Join(dir, "state.json.lock"),
 	}, caddyapi.NewClient(srv.URL, time.Second), fakeDock)
 
-	rep, err := a.Status()
+	rep, err := a.Status(context.Background())
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
@@ -52,7 +53,7 @@ func TestStatusUnhealthyWhenContainerStopped(t *testing.T) {
 		LockPath:  filepath.Join(dir, "state.json.lock"),
 	}, caddyapi.NewClient("http://127.0.0.1:1", 200*time.Millisecond), fakeDock)
 
-	rep, err := a.Status()
+	rep, err := a.Status(context.Background())
 	if !errors.Is(err, ErrUnhealthy) {
 		t.Errorf("expected ErrUnhealthy, got %v", err)
 	}
@@ -74,7 +75,7 @@ func TestStatusReportsBackendCount(t *testing.T) {
 
 	a := NewWithPaths(Paths{StatePath: statePath, LockPath: statePath + ".lock"},
 		caddyapi.NewClient(srv.URL, time.Second), fakeDock)
-	rep, err := a.Status()
+	rep, err := a.Status(context.Background())
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
@@ -100,7 +101,7 @@ func TestStatusReturnsErrStateCorruptWhenStateFileBroken(t *testing.T) {
 	a := NewWithPaths(Paths{StatePath: statePath, LockPath: statePath + ".lock"},
 		caddyapi.NewClient(srv.URL, time.Second), fakeDock)
 
-	_, err := a.Status()
+	_, err := a.Status(context.Background())
 	if !errors.Is(err, ErrStateCorrupt) {
 		t.Errorf("expected ErrStateCorrupt, got %v", err)
 	}
@@ -116,7 +117,7 @@ func TestStatusReturnsErrDockerUnreachableWhenDaemonDown(t *testing.T) {
 		LockPath:  filepath.Join(dir, "state.json.lock"),
 	}, caddyapi.NewClient("http://127.0.0.1:1", 200*time.Millisecond), fakeDock)
 
-	rep, err := a.Status()
+	rep, err := a.Status(context.Background())
 	if !errors.Is(err, ErrDockerUnreachable) {
 		t.Errorf("expected ErrDockerUnreachable, got %v", err)
 	}

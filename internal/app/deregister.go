@@ -57,7 +57,7 @@ func (a *App) Deregister(ctx context.Context, name string) (bool, error) {
 	}
 
 	cfg := caddyapi.Build(&updated)
-	if err := a.caddy.Load(cfg); err != nil {
+	if err := a.caddy.Load(ctx, cfg); err != nil {
 		if errors.Is(err, caddyapi.ErrUnreachable) {
 			return false, fmt.Errorf("%w: %v", ErrCaddyNotRunning, err)
 		}
@@ -67,6 +67,5 @@ func (a *App) Deregister(ctx context.Context, name string) (bool, error) {
 	if err := state.Save(a.paths.StatePath, &updated); err != nil {
 		return false, fmt.Errorf("save state: %w", err)
 	}
-	_ = ctx
 	return true, nil
 }
