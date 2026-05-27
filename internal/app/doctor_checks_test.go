@@ -622,6 +622,204 @@ func TestCheckBackendsSkipWhenContainerNotRunning(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// recordingShell + fix-step tests
+// ---------------------------------------------------------------------------
+
+type shellCall struct {
+	Name string
+	Args []string
+}
+
+// recordingShell records every shell call in *calls and returns the next
+// scripted response from responses. If responses runs out, returns nil/nil.
+// Scripted responses are returned in the order calls arrive.
+func recordingShell(calls *[]shellCall, responses ...struct {
+	Out []byte
+	Err error
+}) shellExecutor {
+	i := 0
+	return func(_ context.Context, name string, args ...string) ([]byte, error) {
+		*calls = append(*calls, shellCall{Name: name, Args: append([]string{}, args...)})
+		if i >= len(responses) {
+			return nil, nil
+		}
+		r := responses[i]
+		i++
+		return r.Out, r.Err
+	}
+}
+
+func TestApplyDNSFixRunsExpectedSteps(t *testing.T) {
+	ctx := context.Background()
+	var shCalls, ttyCalls []shellCall
+	sh := recordingShell(&shCalls)
+	tty := recordingShell(&ttyCalls)
+
+	if err := applyDNSFix(ctx, sh, tty); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := len(shCalls) + len(ttyCalls); got != 5 {
+		t.Fatalf("total calls: want 5, got %d (sh=%d tty=%d)", got, len(shCalls), len(ttyCalls))
+	}
+	if len(shCalls) != 2 {
+		t.Fatalf("sh calls: want 2, got %d", len(shCalls))
+	}
+	if len(ttyCalls) != 3 {
+		t.Fatalf("tty calls: want 3, got %d", len(ttyCalls))
+	}
+
+	// sh[0]: brew install dnsmasq
+	if shCalls[0].Name != "brew" || len(shCalls[0].Args) < 2 ||
+		shCalls[0].Args[0] != "install" || shCalls[0].Args[1] != "dnsmasq" {
+		t.Errorf("sh[0]: want [brew install dnsmasq], got %v %v", shCalls[0].Name, shCalls[0].Args)
+	}
+
+	// sh[1]: sh -c ... caddy_shack.conf
+	if shCalls[1].Name != "sh" || len(shCalls[1].Args) < 2 || shCalls[1].Args[0] != "-c" {
+		t.Errorf("sh[1]: want [sh -c ...], got %v %v", shCalls[1].Name, shCalls[1].Args)
+	}
+	if !strings.Contains(shCalls[1].Args[1], "caddy_shack.conf") {
+		t.Errorf("sh[1] arg does not mention caddy_shack.conf: %q", shCalls[1].Args[1])
+	}
+
+	// tty[0]: sudo brew services restart dnsmasq
+	wantTTY0 := []string{"brew", "services", "restart", "dnsmasq"}
+	if ttyCalls[0].Name != "sudo" || !equalArgs(ttyCalls[0].Args, wantTTY0) {
+		t.Errorf("tty[0]: want sudo %v, got %v %v", wantTTY0, ttyCalls[0].Name, ttyCalls[0].Args)
+	}
+
+	// tty[1]: sudo mkdir -p /etc/resolver
+	wantTTY1 := []string{"mkdir", "-p", "/etc/resolver"}
+	if ttyCalls[1].Name != "sudo" || !equalArgs(ttyCalls[1].Args, wantTTY1) {
+		t.Errorf("tty[1]: want sudo %v, got %v %v", wantTTY1, ttyCalls[1].Name, ttyCalls[1].Args)
+	}
+
+	// tty[2]: sudo sh -c ... /etc/resolver/test
+	if ttyCalls[2].Name != "sudo" || len(ttyCalls[2].Args) < 3 ||
+		ttyCalls[2].Args[0] != "sh" || ttyCalls[2].Args[1] != "-c" {
+		t.Errorf("tty[2]: want sudo sh -c ..., got %v %v", ttyCalls[2].Name, ttyCalls[2].Args)
+	}
+	if !strings.Contains(ttyCalls[2].Args[2], "/etc/resolver/test") {
+		t.Errorf("tty[2] arg does not mention /etc/resolver/test: %q", ttyCalls[2].Args[2])
+	}
+}
+
+func TestApplyDNSFixStopsOnFirstError(t *testing.T) {
+	ctx := context.Background()
+	injected := errors.New("brew write failed")
+	var shCalls, ttyCalls []shellCall
+
+	// First sh call succeeds, second fails.
+	sh := recordingShell(&shCalls,
+		struct{ Out []byte; Err error }{nil, nil},
+		struct{ Out []byte; Err error }{nil, injected},
+	)
+	tty := recordingShell(&ttyCalls)
+
+	err := applyDNSFix(ctx, sh, tty)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, injected) {
+		t.Errorf("error does not wrap injected error: %v", err)
+	}
+
+	total := len(shCalls) + len(ttyCalls)
+	if total != 2 {
+		t.Errorf("total calls: want 2, got %d (sh=%d tty=%d)", total, len(shCalls), len(ttyCalls))
+	}
+	if len(ttyCalls) != 0 {
+		t.Errorf("tty should not have been called, got %d calls", len(ttyCalls))
+	}
+}
+
+func TestApplyTrustStoreFixRunsSecurityAddTrustedCert(t *testing.T) {
+	ctx := context.Background()
+	cert := []byte("fake-cert-data")
+
+	var ttyCalls []shellCall
+	var statErrDuringCall error
+
+	tty := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		captured := append([]string{}, args...)
+		// Before recording, stat the tmp file path (last arg) to confirm it exists.
+		if len(captured) > 0 {
+			statErrDuringCall = func() error {
+				_, err := os.Stat(captured[len(captured)-1])
+				return err
+			}()
+		}
+		ttyCalls = append(ttyCalls, shellCall{Name: name, Args: captured})
+		return nil, nil
+	}
+
+	if err := applyTrustStoreFix(ctx, tty, cert); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(ttyCalls) != 1 {
+		t.Fatalf("tty calls: want 1, got %d", len(ttyCalls))
+	}
+
+	c := ttyCalls[0]
+	wantPrefix := []string{"security", "add-trusted-cert", "-d", "-r", "trustRoot",
+		"-k", "/Library/Keychains/System.keychain"}
+	if c.Name != "sudo" {
+		t.Errorf("name: want sudo, got %q", c.Name)
+	}
+	if len(c.Args) < len(wantPrefix)+1 {
+		t.Fatalf("args too short: %v", c.Args)
+	}
+	if !equalArgs(c.Args[:len(wantPrefix)], wantPrefix) {
+		t.Errorf("args prefix: want %v, got %v", wantPrefix, c.Args[:len(wantPrefix)])
+	}
+
+	// The last arg is the tmp file path; it must have existed during the call.
+	if statErrDuringCall != nil {
+		t.Errorf("tmp file did not exist during tty call: %v", statErrDuringCall)
+	}
+
+	// After return the tmp file must be gone (deferred cleanup ran).
+	tmpPath := c.Args[len(c.Args)-1]
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Errorf("tmp file %q should have been removed after return", tmpPath)
+	}
+}
+
+func TestApplyTrustStoreFixReturnsErrorOnSecurityFailure(t *testing.T) {
+	ctx := context.Background()
+	cert := []byte("fake-cert-data")
+	injected := errors.New("security exit status 1")
+
+	var calls []shellCall
+	tty := recordingShell(&calls,
+		struct{ Out []byte; Err error }{nil, injected},
+	)
+
+	err := applyTrustStoreFix(ctx, tty, cert)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, injected) {
+		t.Errorf("error does not wrap injected error: %v", err)
+	}
+}
+
+// equalArgs reports whether two string slices are equal.
+func equalArgs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestCheckBackendsUsesWgetFallbackWhenNcMissing(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
