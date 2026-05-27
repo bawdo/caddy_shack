@@ -13,6 +13,12 @@ linters:
       - path: _test\.go
         linters:
           - gosec
+      # fakeRunningDocker is intentionally unused in helpers.go; it will be
+      # consumed by test code in Task 16. The pattern is a valid one for
+      # pre-defining stubs that will be used later.
+      - path: test/integration/helpers\.go
+        linters:
+          - unused
       # QF1001 (apply De Morgan's law) and QF1011 (omit inferable type) are
       # stylistic "quickfix" suggestions, not correctness checks. QF1011
       # specifically fires on deliberate interface-conformance assertions
