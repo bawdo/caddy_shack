@@ -71,16 +71,23 @@ func TestCheckPortAvailabilityFailWhenPortHeld(t *testing.T) {
 	if r.Status != SeverityFail {
 		t.Errorf("status: %v summary=%s", r.Status, r.Summary)
 	}
-	want := fmt.Sprintf("%d", heldPort)
-	found := false
+	// Detail should mention the port number and the "is in use" message.
+	portStr := fmt.Sprintf("%d", heldPort)
+	foundPort := false
+	foundMsg := false
 	for _, d := range r.Detail {
-		if contains(d, want) {
-			found = true
-			break
+		if contains(d, portStr) {
+			foundPort = true
+		}
+		if contains(d, "is in use") {
+			foundMsg = true
 		}
 	}
-	if !found {
+	if !foundPort {
 		t.Errorf("expected detail to mention port %d; got %v", heldPort, r.Detail)
+	}
+	if !foundMsg {
+		t.Errorf("expected detail to contain 'is in use'; got %v", r.Detail)
 	}
 }
 

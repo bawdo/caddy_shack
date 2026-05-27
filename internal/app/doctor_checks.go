@@ -386,15 +386,18 @@ func checkPortAvailability(ctx context.Context, a *App) CheckResult {
 
 // checkPortAvailabilityOn is the test seam. Tests call it with a free
 // ephemeral port so they don't need root for 80/443.
+// Uses DialTimeout rather than net.Listen to avoid EACCES on ports 80/443
+// when running as a non-root user.
 func checkPortAvailabilityOn(_ context.Context, a *App, ports []int) CheckResult {
 	var taken []string
 	for _, p := range ports {
-		l, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(p))
-		if err != nil {
-			taken = append(taken, fmt.Sprintf("port %d held: %v", p, err))
-			continue
+		conn, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(p), 300*time.Millisecond)
+		if err == nil {
+			// Dial succeeded: something is listening on this port.
+			_ = conn.Close()
+			taken = append(taken, fmt.Sprintf("port %d is in use (something is listening)", p))
 		}
-		_ = l.Close()
+		// Dial failed (connection refused or timeout) means port is free.
 	}
 	if len(taken) == 0 {
 		return CheckResult{
