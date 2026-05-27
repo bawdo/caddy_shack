@@ -33,6 +33,9 @@ func newRootCmd() *cobra.Command {
 	}
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newInstallCmd())
+	root.AddCommand(newStartCmd())
+	root.AddCommand(newStopCmd())
+	root.AddCommand(newRestartCmd())
 	applyHelpBareword(root)
 	return root
 }
