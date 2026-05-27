@@ -81,3 +81,45 @@ func TestDoctorHappyPathAfterInstall(t *testing.T) {
 	// Cleanup ports
 	_ = net.IPv4(0, 0, 0, 0) // keep import
 }
+
+func TestDoctorStoppedContainerReportsFail(t *testing.T) {
+	SkipUnlessDocker(t)
+	CleanupContainer(t)
+
+	// Create container then stop it.
+	caddyfile := filepath.Join(t.TempDir(), "Caddyfile")
+	if err := os.WriteFile(caddyfile, []byte("{\n\tadmin 0.0.0.0:2019\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	adminPort := freePort(t)
+	if out, err := exec.Command("docker", "run", "-d", "--name", testContainerName,
+		"--add-host=host.docker.internal:host-gateway",
+		"-p", fmt.Sprintf("127.0.0.1:%d:2019", adminPort),
+		"-v", fmt.Sprintf("%s:/etc/caddy/Caddyfile:ro", caddyfile),
+		"caddy:2",
+	).CombinedOutput(); err != nil {
+		t.Fatalf("docker run: %v: %s", err, out)
+	}
+	if out, err := exec.Command("docker", "stop", testContainerName).CombinedOutput(); err != nil {
+		t.Fatalf("docker stop: %v: %s", err, out)
+	}
+
+	// Use the real CLI docker client so doctor sees the actual stopped state.
+	// Override CaddyContainerName via NewWithPaths? No - the real CaddyContainerName
+	// is hard-coded. Skip this test path if the test container differs.
+	if testContainerName != app.CaddyContainerName {
+		t.Skipf("test container name %q != app.CaddyContainerName %q; this test only runs in a CI env where they match",
+			testContainerName, app.CaddyContainerName)
+	}
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	a := app.NewWithPaths(app.Paths{StatePath: statePath, LockPath: statePath + ".lock"}, nil, nil)
+	rep, err := a.Doctor(context.Background(), app.DoctorOptions{SkipBackends: true})
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	for _, c := range rep.Checks {
+		if c.Name == "container-health" && c.Status != app.SeverityFail {
+			t.Errorf("container-health should FAIL when stopped: status=%v summary=%s", c.Status, c.Summary)
+		}
+	}
+}
