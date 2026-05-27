@@ -25,6 +25,64 @@ func checkDockerDaemon(_ context.Context, a *App) CheckResult {
 	}
 }
 
+func checkContainerHealth(ctx context.Context, a *App) CheckResult {
+	if err := a.docker.DaemonReachable(); err != nil {
+		return CheckResult{
+			Name:    "container-health",
+			Status:  SeveritySkip,
+			Summary: "docker daemon unreachable",
+		}
+	}
+	state, err := a.docker.ContainerState(CaddyContainerName)
+	if err != nil {
+		return CheckResult{
+			Name:    "container-health",
+			Status:  SeverityFail,
+			Summary: "cannot inspect container",
+			Detail:  []string{err.Error()},
+		}
+	}
+	switch state {
+	case docker.StateAbsent:
+		return CheckResult{
+			Name:    "container-health",
+			Status:  SeverityFail,
+			Summary: "caddy_shack container not installed",
+			Fix: &FixAction{
+				Label: "install Caddy container ('caddy_shack install')",
+				Apply: func(_ context.Context) error { return a.Install() },
+			},
+		}
+	case docker.StateStopped:
+		return CheckResult{
+			Name:    "container-health",
+			Status:  SeverityFail,
+			Summary: "caddy_shack container stopped",
+			Fix: &FixAction{
+				Label: "start Caddy container ('caddy_shack start')",
+				Apply: func(_ context.Context) error { return a.Start() },
+			},
+		}
+	}
+	if !a.caddy.Reachable(ctx) {
+		return CheckResult{
+			Name:    "container-health",
+			Status:  SeverityFail,
+			Summary: "container running but admin API unreachable",
+			Detail:  []string{"check 'docker logs caddy_shack' for Caddy startup errors"},
+			Fix: &FixAction{
+				Label: "restart container ('caddy_shack restart')",
+				Apply: func(_ context.Context) error { return a.Restart() },
+			},
+		}
+	}
+	return CheckResult{
+		Name:    "container-health",
+		Status:  SeverityPass,
+		Summary: "running; admin API responding",
+	}
+}
+
 // checkBackends is implemented in Task 13.
 func checkBackends(_ context.Context, _ *App) CheckResult {
 	return CheckResult{Name: "backends", Status: SeveritySkip, Summary: "not implemented"}

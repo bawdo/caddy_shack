@@ -143,6 +143,7 @@ func (a *App) buildCheckList(opts DoctorOptions) []func(context.Context) CheckRe
 	checks := []func(context.Context) CheckResult{
 		func(ctx context.Context) CheckResult { return checkDockerDaemon(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkPortAvailability(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkContainerHealth(ctx, a) },
 	}
 	if !opts.SkipBackends {
 		checks = append(checks, func(ctx context.Context) CheckResult { return checkBackends(ctx, a) })

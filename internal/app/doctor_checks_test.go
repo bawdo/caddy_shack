@@ -4,8 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/docker"
 )
 
@@ -105,4 +109,88 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+func newDoctorApp(t *testing.T, fake *docker.Fake, caddyURL string) *App {
+	t.Helper()
+	dir := t.TempDir()
+	return NewWithPaths(Paths{
+		StatePath: dir + "/state.json",
+		LockPath:  dir + "/state.json.lock",
+	}, caddyapi.NewClient(caddyURL, time.Second), fake)
+}
+
+func TestCheckContainerHealthPassWhenRunningAndReachable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	a := newDoctorApp(t, fake, srv.URL)
+
+	r := checkContainerHealth(context.Background(), a)
+	if r.Status != SeverityPass {
+		t.Errorf("status: %v summary=%s", r.Status, r.Summary)
+	}
+	if r.Fix != nil {
+		t.Errorf("no fix expected when healthy")
+	}
+}
+
+func TestCheckContainerHealthFailWhenAbsentOffersInstallFix(t *testing.T) {
+	fake := docker.NewFake()
+	// container absent
+	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+
+	r := checkContainerHealth(context.Background(), a)
+	if r.Status != SeverityFail {
+		t.Errorf("status: %v", r.Status)
+	}
+	if r.Fix == nil {
+		t.Fatal("expected install fix")
+	}
+	if r.Fix.RequiresSudo {
+		t.Errorf("install fix must not require sudo")
+	}
+	// Invoking the fix should call Install via the fake docker.
+	if err := r.Fix.Apply(context.Background()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if state := fake.Containers[CaddyContainerName]; state != docker.StateRunning {
+		t.Errorf("container state after install fix: %v", state)
+	}
+}
+
+func TestCheckContainerHealthFailWhenStoppedOffersStartFix(t *testing.T) {
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateStopped
+	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+
+	r := checkContainerHealth(context.Background(), a)
+	if r.Status != SeverityFail {
+		t.Errorf("status: %v", r.Status)
+	}
+	if r.Fix == nil {
+		t.Fatal("expected start fix")
+	}
+	if err := r.Fix.Apply(context.Background()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if state := fake.Containers[CaddyContainerName]; state != docker.StateRunning {
+		t.Errorf("state after start fix: %v", state)
+	}
+}
+
+func TestCheckContainerHealthSkipWhenDaemonDown(t *testing.T) {
+	fake := docker.NewFake()
+	fake.DaemonErr = docker.ErrDaemonUnreachable
+	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+
+	r := checkContainerHealth(context.Background(), a)
+	if r.Status != SeveritySkip {
+		t.Errorf("status: %v summary=%s", r.Status, r.Summary)
+	}
 }
