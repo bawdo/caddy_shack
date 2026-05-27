@@ -499,6 +499,41 @@ func TestCheckConfigDriftSkipWhenContainerNotRunning(t *testing.T) {
 	}
 }
 
+// TestCheckConfigDriftPassWhenNoBackends verifies that an empty backend
+// state does not produce a false-positive WARN due to nil vs []any{} mismatch.
+// caddyapi.Build with no backends marshals "routes": null; Caddy normalises
+// live config to "routes": []. extractRoutes must treat both as equal.
+func TestCheckConfigDriftPassWhenNoBackends(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	// State with zero backends.
+	st := &state.State{SchemaVersion: 1, Backends: map[string]state.Backend{}}
+	if err := state.Save(statePath, st); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate Caddy returning routes: [] (normalised from null).
+	liveJSON := []byte(`{"apps":{"http":{"servers":{"srv0":{"routes":[]}}}}}`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(liveJSON)
+	}))
+	defer srv.Close()
+
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	a := NewWithPaths(Paths{StatePath: statePath, LockPath: statePath + ".lock"},
+		caddyapi.NewClient(srv.URL, time.Second), fake)
+
+	r := checkConfigDrift(context.Background(), a)
+	if r.Status != SeverityPass {
+		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
+	}
+	if r.Fix != nil {
+		t.Errorf("expected no fix on a fresh empty-backends install; got fix: %s", r.Fix.Label)
+	}
+}
+
 func TestCheckBackendsPassWhenAllReachable(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")

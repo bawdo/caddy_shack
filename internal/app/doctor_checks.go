@@ -425,11 +425,13 @@ func checkPortAvailabilityOn(_ context.Context, a *App, ports []int) CheckResult
 }
 
 // extractRoutes pulls apps.http.servers.srv0.routes out of a Caddy config
-// blob. Returns nil if any expected key is missing (treated as drift).
+// blob. Returns []any{} (never nil) so that an empty routes array from a
+// live config (Caddy normalises null→[]) compares equal to a nil slice
+// produced by caddyapi.Build when there are no backends.
 func extractRoutes(cfg []byte) any {
 	var m map[string]any
 	if err := json.Unmarshal(cfg, &m); err != nil {
-		return nil
+		return []any{}
 	}
 	step := func(parent any, key string) any {
 		mp, ok := parent.(map[string]any)
@@ -443,9 +445,16 @@ func extractRoutes(cfg []byte) any {
 	servers := step(http, "servers")
 	srv0 := step(servers, "srv0")
 	if mp, ok := srv0.(map[string]any); ok {
-		return mp["routes"]
+		routes := mp["routes"]
+		if routes == nil {
+			return []any{}
+		}
+		if arr, ok := routes.([]any); ok && len(arr) == 0 {
+			return []any{}
+		}
+		return routes
 	}
-	return nil
+	return []any{}
 }
 
 func checkConfigDrift(ctx context.Context, a *App) CheckResult {
