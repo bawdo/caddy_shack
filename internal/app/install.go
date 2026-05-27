@@ -58,7 +58,7 @@ func (a *App) Install() error {
 		// admin listener.
 		Command: []string{
 			"sh", "-c",
-			"echo '{ admin 0.0.0.0:2019 }' > /etc/caddy/Caddyfile && " +
+			"printf '{\\n\\tadmin 0.0.0.0:2019\\n}\\n' > /etc/caddy/Caddyfile && " +
 				"exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile",
 		},
 	}
