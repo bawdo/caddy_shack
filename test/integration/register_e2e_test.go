@@ -89,17 +89,38 @@ func TestRegisterE2EReverseProxiesOverHTTPS(t *testing.T) {
 		},
 		Timeout: 5 * time.Second,
 	}
-	resp, err := client.Get("https://smoke.test/")
-	if err != nil {
-		t.Fatalf("GET smoke.test: %v", err)
-	}
+	// Caddy provisions the internal cert for smoke.test asynchronously after
+	// the POST /load returns 2xx. The first request can race the cert
+	// generation and come back as "tls: internal error", so retry briefly.
+	resp, body := getWithRetry(t, client, "https://smoke.test/", 3*time.Second)
 	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
 		t.Errorf("status: %d body=%s", resp.StatusCode, body)
 	}
 	if string(body) != "hello from upstream" {
 		t.Errorf("body: %s", body)
+	}
+}
+
+// getWithRetry polls url until a successful response or the deadline.
+// Retries on any HTTP transport error (covers the brief window after
+// Caddy accepts a new route but hasn't finished issuing the internal cert
+// for the new host). Fails the test if the deadline expires.
+func getWithRetry(t *testing.T, client *http.Client, url string, timeout time.Duration) (*http.Response, []byte) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		resp, err := client.Get(url)
+		if err == nil {
+			body, _ := io.ReadAll(resp.Body)
+			return resp, body
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			t.Fatalf("GET %s: no success within %s, last error: %v", url, timeout, lastErr)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
