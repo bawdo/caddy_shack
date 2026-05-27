@@ -5,7 +5,6 @@ package integration
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -35,7 +34,7 @@ func TestRegisterIsSerialisedByFileLock(t *testing.T) {
 		)
 	}
 
-	port := freeAddr(t)
+	port := freePort(t)
 	const n = 5
 	var wg sync.WaitGroup
 	errs := make(chan error, n)
@@ -44,8 +43,8 @@ func TestRegisterIsSerialisedByFileLock(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			err := mkApp().Register(context.Background(), app.RegisterInput{
-				Name:     fmt.Sprintf("svc%d", i),
-				Upstream: port,
+				Name: fmt.Sprintf("svc%d", i),
+				Port: port,
 			})
 			errs <- err
 		}(i)
@@ -67,14 +66,3 @@ func TestRegisterIsSerialisedByFileLock(t *testing.T) {
 	}
 }
 
-func freeAddr(t *testing.T) string {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		_ = l.Close()
-	}()
-	return l.Addr().String()
-}

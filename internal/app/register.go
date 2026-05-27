@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"regexp"
-	"strconv"
 	"time"
 
 	"github.com/bawdo/caddy_shack/internal/caddyapi"
@@ -14,11 +12,19 @@ import (
 	"github.com/bawdo/caddy_shack/internal/state"
 )
 
-// RegisterInput holds the fields the register command accepts.
+// UpstreamHost is the in-container DNS name that resolves to the host
+// running Docker. All backends route through this; the user only supplies
+// the port their service listens on. host.docker.internal is provided by
+// Docker Desktop on macOS automatically.
+const UpstreamHost = "host.docker.internal"
+
+// RegisterInput holds the fields the register command accepts. Port is the
+// host-side TCP port the user's service listens on; the upstream Caddy
+// reverse-proxies to is constructed as host.docker.internal:<port>.
 type RegisterInput struct {
-	Name     string
-	Domain   string // optional; defaults to <Name>.test
-	Upstream string
+	Name   string
+	Domain string // optional; defaults to <Name>.test
+	Port   int
 }
 
 var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}$`)
@@ -29,12 +35,13 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 	if !nameRE.MatchString(in.Name) {
 		return fmt.Errorf("%w: name must match ^[a-z0-9][a-z0-9-]{0,30}$ (got %q)", ErrInvalidArgs, in.Name)
 	}
-	if err := validateUpstream(in.Upstream); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidArgs, err)
+	if in.Port < 1 || in.Port > 65535 {
+		return fmt.Errorf("%w: port out of range (got %d, must be 1-65535)", ErrInvalidArgs, in.Port)
 	}
 	if in.Domain == "" {
 		in.Domain = in.Name + ".test"
 	}
+	upstream := fmt.Sprintf("%s:%d", UpstreamHost, in.Port)
 
 	// Caddy must be running before we attempt any state change.
 	st, err := a.docker.ContainerState(CaddyContainerName)
@@ -72,7 +79,7 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 	}
 
 	existing, present := s.Backends[in.Name]
-	if present && existing.Domain == in.Domain && existing.Upstream == in.Upstream {
+	if present && existing.Domain == in.Domain && existing.Upstream == upstream {
 		// Identical re-registration. No-op.
 		return nil
 	}
@@ -80,7 +87,7 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 	now := time.Now().Format(time.RFC3339)
 	s.Backends[in.Name] = state.Backend{
 		Domain:       in.Domain,
-		Upstream:     in.Upstream,
+		Upstream:     upstream,
 		RegisteredAt: now,
 	}
 
@@ -94,23 +101,6 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 
 	if err := state.Save(a.paths.StatePath, s); err != nil {
 		return fmt.Errorf("save state: %w", err)
-	}
-	return nil
-}
-
-// validateUpstream checks the host:port shape. Hostname is anything
-// net.SplitHostPort accepts; port must be 1-65535.
-func validateUpstream(u string) error {
-	host, portStr, err := net.SplitHostPort(u)
-	if err != nil {
-		return fmt.Errorf("upstream must be host:port (got %q): %w", u, err)
-	}
-	if host == "" {
-		return fmt.Errorf("upstream host is empty")
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil || port < 1 || port > 65535 {
-		return fmt.Errorf("upstream port out of range (got %q)", portStr)
 	}
 	return nil
 }

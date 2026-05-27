@@ -32,7 +32,7 @@ func newRootCmd() *cobra.Command {
 can register themselves and get a stable HTTPS URL under the .test TLD.
 
 Designed to be called from project startup and teardown scripts:
-  caddy_shack register myapp --upstream 127.0.0.1:3000
+  caddy_shack register myapp --port 3000
   caddy_shack deregister myapp
 
 Exit codes (stable, script-friendly):

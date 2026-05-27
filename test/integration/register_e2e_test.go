@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -51,14 +52,16 @@ func TestRegisterE2EReverseProxiesOverHTTPS(t *testing.T) {
 	adminURL := fmt.Sprintf("http://127.0.0.1:%d", adminPort)
 	WaitForCaddyAdmin(t, adminURL, 15*time.Second)
 
-	// Spin up a tiny upstream listening on a random loopback port.
+	// Spin up a tiny upstream listening on a random loopback port. App.Register
+	// constructs host.docker.internal:<port> internally, which routes back
+	// to this listener from inside the Caddy container.
 	upstream, upstreamAddr := startUpstream(t)
 	defer func() { _ = upstream.Close() }()
-
-	// Convert the upstream address from 127.0.0.1:port to host.docker.internal:port
-	// so Caddy inside the container can reach it.
-	_, port, _ := net.SplitHostPort(upstreamAddr)
-	upstreamDockerAddr := net.JoinHostPort("host.docker.internal", port)
+	_, portStr, _ := net.SplitHostPort(upstreamAddr)
+	upstreamPort, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("parse upstream port: %v", err)
+	}
 
 	// Build an App that talks to OUR test Caddy and skip docker entirely
 	// (we already started the container above).
@@ -70,9 +73,9 @@ func TestRegisterE2EReverseProxiesOverHTTPS(t *testing.T) {
 	)
 
 	if err := a.Register(context.Background(), app.RegisterInput{
-		Name:     "smoke",
-		Upstream: upstreamDockerAddr,
-		Domain:   "smoke.test",
+		Name:   "smoke",
+		Port:   upstreamPort,
+		Domain: "smoke.test",
 	}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}

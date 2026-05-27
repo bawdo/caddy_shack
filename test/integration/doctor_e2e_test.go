@@ -150,9 +150,9 @@ func TestDoctorBackendsFailWhenUpstreamDead(t *testing.T) {
 		caddyapi.NewClient(adminURL, 5*time.Second),
 		execOnlyDocker{container: testContainerName})
 	if err := a.Register(context.Background(), app.RegisterInput{
-		Name:     "deadbackend",
-		Upstream: "host.docker.internal:1", // port 1 is unused
-		Domain:   "deadbackend.test",
+		Name:   "deadbackend",
+		Port:   1, // unused; Register constructs host.docker.internal:1 internally
+		Domain: "deadbackend.test",
 	}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}

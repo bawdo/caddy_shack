@@ -7,25 +7,35 @@ import (
 )
 
 func newRegisterCmd() *cobra.Command {
-	var upstream, domain string
+	var (
+		port   int
+		domain string
+	)
 	c := &cobra.Command{
 		Use:   "register <name>",
 		Short: "Register a backend so Caddy serves it over HTTPS at <name>.test",
-		Args:  cobra.ExactArgs(1),
+		Long: `Register a backend so Caddy reverse-proxies https://<name>.test to a
+service listening on the given host port.
+
+Caddy itself runs in a container; this command always routes through
+host.docker.internal, so all you supply is the port your service listens on
+locally. Whether your service binds 127.0.0.1, 0.0.0.0, or localhost on the
+host doesn't matter - the port is what we need.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := app.New()
 			if err != nil {
 				return err
 			}
 			return a.Register(cmd.Context(), app.RegisterInput{
-				Name:     args[0],
-				Domain:   domain,
-				Upstream: upstream,
+				Name:   args[0],
+				Domain: domain,
+				Port:   port,
 			})
 		},
 	}
-	c.Flags().StringVar(&upstream, "upstream", "", "Upstream host:port (required)")
+	c.Flags().IntVar(&port, "port", 0, "Host port the upstream service listens on (required)")
 	c.Flags().StringVar(&domain, "domain", "", "Optional domain (defaults to <name>.test)")
-	_ = c.MarkFlagRequired("upstream")
+	_ = c.MarkFlagRequired("port")
 	return c
 }

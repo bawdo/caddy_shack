@@ -65,8 +65,8 @@ func TestRegisterNewBackendPersistsAndPushesConfig(t *testing.T) {
 	f := newFixture(t, http.StatusOK)
 
 	err := f.app.Register(context.Background(), RegisterInput{
-		Name:     "myapp",
-		Upstream: "127.0.0.1:3000",
+		Name: "myapp",
+		Port: 3000,
 	})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
@@ -83,7 +83,7 @@ func TestRegisterNewBackendPersistsAndPushesConfig(t *testing.T) {
 	if b.Domain != "myapp.test" {
 		t.Errorf("Domain: %q", b.Domain)
 	}
-	if b.Upstream != "127.0.0.1:3000" {
+	if b.Upstream != "host.docker.internal:3000" {
 		t.Errorf("Upstream: %q", b.Upstream)
 	}
 	if !strings.Contains(string(f.lastBody), "myapp.test") {
@@ -94,9 +94,9 @@ func TestRegisterNewBackendPersistsAndPushesConfig(t *testing.T) {
 func TestRegisterCustomDomain(t *testing.T) {
 	f := newFixture(t, http.StatusOK)
 	err := f.app.Register(context.Background(), RegisterInput{
-		Name:     "myapp",
-		Upstream: "127.0.0.1:3000",
-		Domain:   "custom.test",
+		Name:   "myapp",
+		Port:   3000,
+		Domain: "custom.test",
 	})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
@@ -109,7 +109,7 @@ func TestRegisterCustomDomain(t *testing.T) {
 
 func TestRegisterSameFieldsIsNoOp(t *testing.T) {
 	f := newFixture(t, http.StatusOK)
-	in := RegisterInput{Name: "myapp", Upstream: "127.0.0.1:3000"}
+	in := RegisterInput{Name: "myapp", Port: 3000}
 	if err := f.app.Register(context.Background(), in); err != nil {
 		t.Fatalf("Register1: %v", err)
 	}
@@ -124,24 +124,24 @@ func TestRegisterSameFieldsIsNoOp(t *testing.T) {
 
 func TestRegisterUpdatesOnFieldChange(t *testing.T) {
 	f := newFixture(t, http.StatusOK)
-	if err := f.app.Register(context.Background(), RegisterInput{Name: "myapp", Upstream: "127.0.0.1:3000"}); err != nil {
+	if err := f.app.Register(context.Background(), RegisterInput{Name: "myapp", Port: 3000}); err != nil {
 		t.Fatalf("Register1: %v", err)
 	}
-	if err := f.app.Register(context.Background(), RegisterInput{Name: "myapp", Upstream: "127.0.0.1:9999"}); err != nil {
+	if err := f.app.Register(context.Background(), RegisterInput{Name: "myapp", Port: 9999}); err != nil {
 		t.Fatalf("Register2: %v", err)
 	}
 	s, _ := state.Load(f.statePath)
-	if s.Backends["myapp"].Upstream != "127.0.0.1:9999" {
+	if s.Backends["myapp"].Upstream != "host.docker.internal:9999" {
 		t.Errorf("Upstream not updated: %s", s.Backends["myapp"].Upstream)
 	}
 }
 
 func TestRegisterDomainConflictReturnsErrDomainConflict(t *testing.T) {
 	f := newFixture(t, http.StatusOK)
-	if err := f.app.Register(context.Background(), RegisterInput{Name: "foo", Upstream: "127.0.0.1:3000"}); err != nil {
+	if err := f.app.Register(context.Background(), RegisterInput{Name: "foo", Port: 3000}); err != nil {
 		t.Fatalf("foo: %v", err)
 	}
-	err := f.app.Register(context.Background(), RegisterInput{Name: "bar", Domain: "foo.test", Upstream: "127.0.0.1:4000"})
+	err := f.app.Register(context.Background(), RegisterInput{Name: "bar", Domain: "foo.test", Port: 4000})
 	if !errors.Is(err, ErrDomainConflict) {
 		t.Errorf("expected ErrDomainConflict, got %v", err)
 	}
@@ -154,23 +154,25 @@ func TestRegisterDomainConflictReturnsErrDomainConflict(t *testing.T) {
 
 func TestRegisterInvalidNameReturnsErrInvalidArgs(t *testing.T) {
 	f := newFixture(t, http.StatusOK)
-	err := f.app.Register(context.Background(), RegisterInput{Name: "Bad Name!", Upstream: "127.0.0.1:3000"})
+	err := f.app.Register(context.Background(), RegisterInput{Name: "Bad Name!", Port: 3000})
 	if !errors.Is(err, ErrInvalidArgs) {
 		t.Errorf("expected ErrInvalidArgs, got %v", err)
 	}
 }
 
-func TestRegisterInvalidUpstreamReturnsErrInvalidArgs(t *testing.T) {
+func TestRegisterInvalidPortReturnsErrInvalidArgs(t *testing.T) {
 	f := newFixture(t, http.StatusOK)
-	err := f.app.Register(context.Background(), RegisterInput{Name: "foo", Upstream: "not a host port"})
-	if !errors.Is(err, ErrInvalidArgs) {
-		t.Errorf("expected ErrInvalidArgs, got %v", err)
+	for _, p := range []int{0, -1, 65536, 100000} {
+		err := f.app.Register(context.Background(), RegisterInput{Name: "foo", Port: p})
+		if !errors.Is(err, ErrInvalidArgs) {
+			t.Errorf("port %d: expected ErrInvalidArgs, got %v", p, err)
+		}
 	}
 }
 
 func TestRegisterCaddyRejectionDoesNotPersistState(t *testing.T) {
 	f := newFixture(t, http.StatusBadRequest)
-	err := f.app.Register(context.Background(), RegisterInput{Name: "foo", Upstream: "127.0.0.1:3000"})
+	err := f.app.Register(context.Background(), RegisterInput{Name: "foo", Port: 3000})
 	if err == nil {
 		t.Fatal("expected error from caddy rejection")
 	}
@@ -186,7 +188,7 @@ func TestRegisterReturnsErrCaddyNotRunningWhenContainerStopped(t *testing.T) {
 	// Also reflect container state so Register detects it before HTTP.
 	f.app.docker.(*docker.Fake).Containers[CaddyContainerName] = docker.StateStopped
 
-	err := f.app.Register(context.Background(), RegisterInput{Name: "foo", Upstream: "127.0.0.1:3000"})
+	err := f.app.Register(context.Background(), RegisterInput{Name: "foo", Port: 3000})
 	if !errors.Is(err, ErrCaddyNotRunning) {
 		t.Errorf("expected ErrCaddyNotRunning, got %v", err)
 	}
@@ -195,7 +197,7 @@ func TestRegisterReturnsErrCaddyNotRunningWhenContainerStopped(t *testing.T) {
 // Smoke check: the body POSTed to Caddy is the JSON our builder produces.
 func TestRegisterPostsBuiltConfig(t *testing.T) {
 	f := newFixture(t, http.StatusOK)
-	if err := f.app.Register(context.Background(), RegisterInput{Name: "myapp", Upstream: "127.0.0.1:3000"}); err != nil {
+	if err := f.app.Register(context.Background(), RegisterInput{Name: "myapp", Port: 3000}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	var got map[string]any
@@ -209,7 +211,7 @@ func TestRegisterPostsBuiltConfig(t *testing.T) {
 
 func TestDeregisterRemovesBackendAndPushesConfig(t *testing.T) {
 	f := newFixture(t, http.StatusOK)
-	if err := f.app.Register(context.Background(), RegisterInput{Name: "foo", Upstream: "127.0.0.1:3000"}); err != nil {
+	if err := f.app.Register(context.Background(), RegisterInput{Name: "foo", Port: 3000}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -248,7 +250,7 @@ func TestDeregisterUnknownNameIsNoOp(t *testing.T) {
 
 func TestDeregisterCaddyRejectionLeavesStateIntact(t *testing.T) {
 	f := newFixture(t, http.StatusOK)
-	if err := f.app.Register(context.Background(), RegisterInput{Name: "foo", Upstream: "127.0.0.1:3000"}); err != nil {
+	if err := f.app.Register(context.Background(), RegisterInput{Name: "foo", Port: 3000}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	// Swap server to return 400 from now on.

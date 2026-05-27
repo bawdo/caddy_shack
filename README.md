@@ -9,7 +9,7 @@ for these projects.
 
 This is a helpful wrapper around the Caddy API that helps do things like:
 
-- Register a backend web service (`caddy_shack register myapp --upstream 127.0.0.1:3000`)
+- Register a backend web service (`caddy_shack register myapp --port 3000`)
 - Deregister it on shutdown (`caddy_shack deregister myapp`)
 - List the currently-registered backends (`caddy_shack list`)
 - Report container and admin-API health (`caddy_shack status`)
@@ -93,21 +93,19 @@ caddy_shack status     # --json for scripts; exit 0 healthy, exit 1 unhealthy
 From a project's startup script:
 
 ```
-caddy_shack register myapp --upstream 127.0.0.1:3000
+caddy_shack register myapp --port 3000
 # https://myapp.test is now live
 ```
 
-On Docker Desktop (macOS/Windows), use `host.docker.internal:<port>` as the
-upstream so Caddy inside the container can reach the host:
-
-```
-caddy_shack register myapp --upstream host.docker.internal:3000
-```
+You only supply the port your service listens on locally. Caddy runs in a
+container and always reaches the host via `host.docker.internal`, so it
+doesn't matter whether your service binds `127.0.0.1`, `0.0.0.0`, or
+`localhost` on the host - the port is the only thing we need.
 
 Optional `--domain` overrides the default `<name>.test`:
 
 ```
-caddy_shack register api --upstream 127.0.0.1:4000 --domain api.internal.test
+caddy_shack register api --port 4000 --domain api.internal.test
 ```
 
 Register is idempotent: same name + same fields is a no-op (no Caddy hit);
@@ -143,7 +141,7 @@ Stable contract, documented under `caddy_shack --help`:
 
 ```
 python3 -m http.server 3000 &
-caddy_shack register hello --upstream host.docker.internal:3000
+caddy_shack register hello --port 3000
 curl -k https://hello.test/                    # via dnsmasq DNS setup above
 # or, without DNS setup:
 curl -k --resolve hello.test:443:127.0.0.1 https://hello.test/
