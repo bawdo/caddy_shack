@@ -313,6 +313,50 @@ func TestCheckTrustStoreFailWhenSHAMissing(t *testing.T) {
 	if r.Fix == nil || !r.Fix.RequiresSudo {
 		t.Errorf("fix: %+v", r.Fix)
 	}
+	// Label must not carry the "(requires sudo)" suffix; the human renderer
+	// adds that based on RequiresSudo. Embedding it here causes the
+	// duplicate "(requires sudo) (requires sudo)" we saw in real output.
+	if strings.Contains(r.Fix.Label, "(requires sudo)") {
+		t.Errorf("fix label should not embed '(requires sudo)': %q", r.Fix.Label)
+	}
+	// Detail should explain why and identify the cert source so the user
+	// can verify by hand.
+	joined := strings.Join(r.Detail, "\n")
+	for _, want := range []string{
+		"expected SHA-256 not present in System keychain dump",
+		"expected SHA-256:",
+		"cert read from: " + CaddyContainerName + ":/data/caddy/pki/authorities/local/root.crt",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("detail missing %q:\n%s", want, joined)
+		}
+	}
+}
+
+func TestCheckTrustStoreFailWhenSecurityErrors(t *testing.T) {
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	cert, _ := fakeRootCert()
+	fake.ExecResponses["caddy_shack:cat /data/caddy/pki/authorities/local/root.crt"] = docker.ExecResponse{
+		Stdout: cert,
+	}
+	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+
+	sh := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "security" {
+			return nil, errors.New("security: command not found")
+		}
+		return nil, errors.New("unexpected")
+	}
+
+	r := checkTrustStore(context.Background(), a, sh, noopShell)
+	if r.Status != SeverityFail {
+		t.Errorf("status: %v", r.Status)
+	}
+	joined := strings.Join(r.Detail, "\n")
+	if !strings.Contains(joined, "security find-certificate failed: security: command not found") {
+		t.Errorf("detail should surface the security error:\n%s", joined)
+	}
 }
 
 // noopShell is a do-nothing shellExecutor for tests that exercise paths

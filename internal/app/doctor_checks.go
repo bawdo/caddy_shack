@@ -179,7 +179,7 @@ func checkDNS(ctx context.Context, _ *App, sh shellExecutor, tty shellExecutor) 
 	}
 
 	fix := &FixAction{
-		Label:        "install dnsmasq + write /etc/resolver/test (requires sudo)",
+		Label:        "install dnsmasq + write /etc/resolver/test",
 		RequiresSudo: true,
 		Apply: func(ctx context.Context) error {
 			return applyDNSFix(ctx, sh, tty)
@@ -252,13 +252,23 @@ func checkTrustStore(ctx context.Context, a *App, sh shellExecutor, tty shellExe
 			Summary: "Caddy root CA trusted in System keychain",
 		}
 	}
+	detail := []string{}
+	if err != nil {
+		detail = append(detail, "security find-certificate failed: "+err.Error())
+	} else {
+		detail = append(detail, "expected SHA-256 not present in System keychain dump")
+	}
+	detail = append(detail,
+		"expected SHA-256: "+wantSHA,
+		"cert read from: "+CaddyContainerName+":/data/caddy/pki/authorities/local/root.crt",
+	)
 	return CheckResult{
 		Name:    "trust-store",
 		Status:  SeverityFail,
 		Summary: "Caddy root CA not trusted in System keychain",
-		Detail:  []string{"expected SHA-256: " + wantSHA},
+		Detail:  detail,
 		Fix: &FixAction{
-			Label:        "trust Caddy root CA via 'security add-trusted-cert' (requires sudo)",
+			Label:        "trust Caddy root CA via 'security add-trusted-cert'",
 			RequiresSudo: true,
 			Apply: func(ctx context.Context) error {
 				return applyTrustStoreFix(ctx, tty, cert)
