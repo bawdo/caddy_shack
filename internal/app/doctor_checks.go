@@ -108,11 +108,11 @@ func randomTestSubdomain() string {
 	return string(b) + ".test"
 }
 
-// dnsmasqConfPaths returns the candidate brew dnsmasq.d directories. The
-// first one that exists wins. brew --prefix isn't shelled out here - we
-// pick from the two known macOS install locations.
-func dnsmasqConfPaths(sh shellExecutor) []string {
-	if out, err := sh(context.Background(), "brew", "--prefix"); err == nil {
+// dnsmasqConfPaths returns the candidate brew dnsmasq.d directories. Asks
+// brew --prefix first and uses that if it succeeds; otherwise falls back
+// to the two well-known macOS install locations.
+func dnsmasqConfPaths(ctx context.Context, sh shellExecutor) []string {
+	if out, err := sh(ctx, "brew", "--prefix"); err == nil {
 		prefix := strings.TrimSpace(string(out))
 		if prefix != "" {
 			return []string{filepath.Join(prefix, "etc", "dnsmasq.d")}
@@ -140,7 +140,7 @@ func checkDNS(ctx context.Context, _ *App, sh shellExecutor) CheckResult {
 		detail = append(detail, "dnsmasq: installed")
 	}
 	foundConf := false
-	for _, dir := range dnsmasqConfPaths(sh) {
+	for _, dir := range dnsmasqConfPaths(ctx, sh) {
 		if _, err := sh(ctx, "test", "-f", filepath.Join(dir, "caddy_shack.conf")); err == nil {
 			foundConf = true
 			break
