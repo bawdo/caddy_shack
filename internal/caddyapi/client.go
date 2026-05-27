@@ -60,6 +60,26 @@ func (c *Client) Load(ctx context.Context, config []byte) error {
 	return &ErrRejected{Status: resp.StatusCode, Body: string(body)}
 }
 
+// GetConfig retrieves the live admin config (GET /config/). 2xx returns the
+// raw body. Connection errors wrap ErrUnreachable. Non-2xx returns
+// *ErrRejected with the status and body.
+func (c *Client) GetConfig(ctx context.Context) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/config/", nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUnreachable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return body, nil
+	}
+	return nil, &ErrRejected{Status: resp.StatusCode, Body: string(body)}
+}
+
 // Reachable returns true when GET /config/ returns 2xx within the client's
 // timeout. Used by `status`. Honours ctx so Ctrl+C during a hanging probe
 // exits promptly.

@@ -135,3 +135,52 @@ func TestClientReachableFalseOnNoServer(t *testing.T) {
 		t.Error("expected Reachable=false")
 	}
 }
+
+func TestClientGetConfigReturnsBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/config/" {
+			t.Errorf("path: got %q want /config/", r.URL.Path)
+		}
+		if r.Method != http.MethodGet {
+			t.Errorf("method: got %q want GET", r.Method)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"apps":{"http":{}}}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, time.Second)
+	body, err := c.GetConfig(context.Background())
+	if err != nil {
+		t.Fatalf("GetConfig: %v", err)
+	}
+	if string(body) != `{"apps":{"http":{}}}` {
+		t.Errorf("body: %s", body)
+	}
+}
+
+func TestClientGetConfigErrUnreachable(t *testing.T) {
+	c := NewClient("http://127.0.0.1:1", 200*time.Millisecond)
+	_, err := c.GetConfig(context.Background())
+	if !errors.Is(err, ErrUnreachable) {
+		t.Errorf("expected ErrUnreachable, got %v", err)
+	}
+}
+
+func TestClientGetConfigErrRejectedOn5xx(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"oops"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, time.Second)
+	_, err := c.GetConfig(context.Background())
+	var rej *ErrRejected
+	if !errors.As(err, &rej) {
+		t.Fatalf("expected ErrRejected, got %v", err)
+	}
+	if rej.Status != 500 {
+		t.Errorf("status: %d", rej.Status)
+	}
+}
