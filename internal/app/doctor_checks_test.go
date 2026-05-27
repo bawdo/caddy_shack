@@ -205,26 +205,6 @@ func TestCheckContainerHealthSkipWhenDaemonDown(t *testing.T) {
 	}
 }
 
-// scriptedShell returns canned output keyed by "<name> <args joined by space>".
-func scriptedShell(t *testing.T, table map[string]struct {
-	out []byte
-	err error
-}) shellExecutor {
-	t.Helper()
-	return func(_ context.Context, name string, args ...string) ([]byte, error) {
-		key := name
-		if len(args) > 0 {
-			key = name + " " + strings.Join(args, " ")
-		}
-		v, ok := table[key]
-		if !ok {
-			t.Errorf("unexpected shell call: %q", key)
-			return nil, errors.New("unexpected")
-		}
-		return v.out, v.err
-	}
-}
-
 func TestCheckDNSPassWhenDscacheReturnsLoopback(t *testing.T) {
 	a := newDoctorApp(t, docker.NewFake(), "http://127.0.0.1:1")
 
