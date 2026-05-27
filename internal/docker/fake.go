@@ -47,6 +47,9 @@ func (f *Fake) PullImage(image string) error {
 func (f *Fake) ContainerState(name string) (ContainerState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.DaemonErr != nil {
+		return StateAbsent, f.DaemonErr
+	}
 	s, ok := f.Containers[name]
 	if !ok {
 		return StateAbsent, nil
