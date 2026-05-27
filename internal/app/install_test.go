@@ -112,6 +112,26 @@ func TestInstallRollsBackHalfCreatedContainerOnFailure(t *testing.T) {
 	}
 }
 
+func TestInstallContainerCommandBindsAdminToAllInterfaces(t *testing.T) {
+	fake := docker.NewFake()
+	a := NewWithPaths(Paths{}, nil, fake)
+
+	if err := a.Install(); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	// The container Command must rewrite /etc/caddy/Caddyfile so admin
+	// binds to 0.0.0.0:2019 - otherwise the host's 127.0.0.1:2019 forward
+	// reaches a container loopback the caddy:2 default listens on but
+	// host requests can't actually complete (smoke-test discovered).
+	joined := strings.Join(fake.Spec.Command, " ")
+	for _, want := range []string{"sh", "-c", "admin 0.0.0.0:2019", "exec caddy run"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("Command missing %q\nfull: %s", want, joined)
+		}
+	}
+}
+
 func TestInstallReturnsHelpfulErrorOnPortConflict(t *testing.T) {
 	fake := docker.NewFake()
 	fake.CreateAndStartErr = errors.New(

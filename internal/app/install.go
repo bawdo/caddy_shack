@@ -50,8 +50,17 @@ func (a *App) Install() error {
 			{VolumeName: CaddyDataVolume, ContainerPath: "/data"},
 			{VolumeName: CaddyConfigVolume, ContainerPath: "/config"},
 		},
-		// Start with an empty admin-enabled config; first register populates it.
-		Command: []string{"caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"},
+		// Write a minimal Caddyfile that binds the admin endpoint to
+		// 0.0.0.0:2019 so the host port-forward can reach it (caddy:2's
+		// default binds admin to localhost:2019, invisible from outside the
+		// container). First `register` swaps the whole config via POST /load,
+		// so the Caddyfile contents don't matter beyond bootstrapping the
+		// admin listener.
+		Command: []string{
+			"sh", "-c",
+			"echo '{ admin 0.0.0.0:2019 }' > /etc/caddy/Caddyfile && " +
+				"exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile",
+		},
 	}
 	if err := a.docker.CreateAndStart(spec); err != nil {
 		// Roll back the half-created container so a retry has a clean slate.
