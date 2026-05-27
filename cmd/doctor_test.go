@@ -256,6 +256,48 @@ func TestRunFixLoopYesModeAppliesWithoutPrompt(t *testing.T) {
 	}
 }
 
+func TestRunFixLoopInterleavesCheckLineBeforePrompt(t *testing.T) {
+	dir := t.TempDir()
+	a := app.NewWithPaths(app.Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  filepath.Join(dir, "state.json.lock"),
+	}, nil, docker.NewFake())
+
+	rep := app.DoctorReport{
+		Checks: []app.CheckResult{
+			{Name: "a", Status: app.SeverityFail, Summary: "broken",
+				Fix: &app.FixAction{Label: "fix-a", Apply: func(context.Context) error { return nil }}},
+		},
+	}
+
+	cmd := newDoctorCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetIn(strings.NewReader("y\n"))
+	cmd.SetContext(context.Background())
+
+	if err := runFixLoop(cmd, a, rep, false); err != nil {
+		t.Fatalf("runFixLoop: %v", err)
+	}
+	out := buf.String()
+	// The [FAIL] line must appear BEFORE the prompt and [FIXED] BEFORE the trailer.
+	failIdx := strings.Index(out, "[FAIL] a")
+	promptIdx := strings.Index(out, "Apply fix?")
+	fixedIdx := strings.Index(out, "[FIXED] a")
+	summaryIdx := strings.Index(out, "fixed, ")
+	if failIdx < 0 || promptIdx < 0 || fixedIdx < 0 || summaryIdx < 0 {
+		t.Fatalf("missing one of [FAIL]/prompt/[FIXED]/summary in:\n%s", out)
+	}
+	if !(failIdx < promptIdx && promptIdx < fixedIdx && fixedIdx < summaryIdx) {
+		t.Errorf("expected order [FAIL] < prompt < [FIXED] < summary; got idxs %d %d %d %d\n%s",
+			failIdx, promptIdx, fixedIdx, summaryIdx, out)
+	}
+	// The misleading "Run with --fix" tail must NOT appear in --fix mode.
+	if strings.Contains(out, "Run with --fix") {
+		t.Errorf("unexpected 'Run with --fix' suggestion in --fix output:\n%s", out)
+	}
+}
+
 // stubExec replaces the sudo preflight executor with a configurable result.
 type stubExec struct{ err error }
 

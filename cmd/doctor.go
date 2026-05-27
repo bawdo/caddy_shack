@@ -73,19 +73,26 @@ func renderDoctorJSON(w io.Writer, rep app.DoctorReport) {
 	_, _ = fmt.Fprintln(w, string(out))
 }
 
+// writeCheckLine prints one check's [TAG] line, its detail lines, and the
+// fix label (if any). Used by both renderDoctorHuman and the --fix loop so
+// the two paths agree on what a check looks like on screen.
+func writeCheckLine(w io.Writer, c app.CheckResult) {
+	_, _ = fmt.Fprintf(w, "[%s] %-20s %s\n", severityTag(c.Status), c.Name, c.Summary)
+	for _, d := range c.Detail {
+		_, _ = fmt.Fprintf(w, "       %s\n", d)
+	}
+	if c.Fix != nil {
+		sudo := ""
+		if c.Fix.RequiresSudo {
+			sudo = " (requires sudo)"
+		}
+		_, _ = fmt.Fprintf(w, "       fix: %s%s\n", c.Fix.Label, sudo)
+	}
+}
+
 func renderDoctorHuman(w io.Writer, rep app.DoctorReport) {
 	for _, c := range rep.Checks {
-		_, _ = fmt.Fprintf(w, "[%s] %-20s %s\n", severityTag(c.Status), c.Name, c.Summary)
-		for _, d := range c.Detail {
-			_, _ = fmt.Fprintf(w, "       %s\n", d)
-		}
-		if c.Fix != nil {
-			sudo := ""
-			if c.Fix.RequiresSudo {
-				sudo = " (requires sudo)"
-			}
-			_, _ = fmt.Fprintf(w, "       fix: %s%s\n", c.Fix.Label, sudo)
-		}
+		writeCheckLine(w, c)
 	}
 	_, _ = fmt.Fprintln(w)
 
@@ -118,10 +125,6 @@ func runFixLoop(cmd *cobra.Command, a *app.App, rep app.DoctorReport, yes bool) 
 	in := cmd.InOrStdin()
 	reader := bufio.NewReader(in)
 
-	// Print the report first so the user sees the whole picture before
-	// being asked anything.
-	renderDoctorHuman(out, rep)
-
 	prompt := func(label string) bool {
 		if yes {
 			return true
@@ -140,6 +143,7 @@ func runFixLoop(cmd *cobra.Command, a *app.App, rep app.DoctorReport, yes bool) 
 		firstErr                 error
 	)
 	for _, r := range rep.Checks {
+		writeCheckLine(out, r)
 		if r.Fix == nil {
 			continue
 		}
