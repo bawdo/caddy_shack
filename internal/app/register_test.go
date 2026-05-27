@@ -206,3 +206,65 @@ func TestRegisterPostsBuiltConfig(t *testing.T) {
 		t.Errorf("body missing 'apps' key: %s", f.lastBody)
 	}
 }
+
+func TestDeregisterRemovesBackendAndPushesConfig(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	if err := f.app.Register(context.Background(), RegisterInput{Name: "foo", Upstream: "127.0.0.1:3000"}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	if err := f.app.Deregister(context.Background(), "foo"); err != nil {
+		t.Fatalf("Deregister: %v", err)
+	}
+
+	s, _ := state.Load(f.statePath)
+	if _, ok := s.Backends["foo"]; ok {
+		t.Error("backend still present in state")
+	}
+	// Caddy should have been called twice: register + deregister.
+	if f.caddyHits != 2 {
+		t.Errorf("caddy hits: got %d want 2", f.caddyHits)
+	}
+}
+
+func TestDeregisterUnknownNameIsNoOp(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	hits := f.caddyHits
+	if err := f.app.Deregister(context.Background(), "unknown"); err != nil {
+		t.Errorf("expected nil err, got %v", err)
+	}
+	if f.caddyHits != hits {
+		t.Error("Caddy was called for unknown name")
+	}
+}
+
+func TestDeregisterCaddyRejectionLeavesStateIntact(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	if err := f.app.Register(context.Background(), RegisterInput{Name: "foo", Upstream: "127.0.0.1:3000"}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	// Swap server to return 400 from now on.
+	f.caddySrv.Close()
+	rejecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer rejecting.Close()
+	f.app = NewWithPaths(
+		Paths{StatePath: f.statePath, LockPath: f.statePath + ".lock"},
+		caddyapi.NewClient(rejecting.URL, time.Second),
+		f.app.docker,
+	)
+
+	err := f.app.Deregister(context.Background(), "foo")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "rejected") && !strings.Contains(err.Error(), "stub") {
+		t.Logf("error: %v", err)
+	}
+	s, _ := state.Load(f.statePath)
+	if _, ok := s.Backends["foo"]; !ok {
+		t.Error("state lost despite Caddy rejection")
+	}
+}
