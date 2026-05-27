@@ -47,9 +47,11 @@ func (CLI) ContainerState(name string) (ContainerState, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		// "No such object" => absent. exec.ExitError reflects docker's exit 1.
+		// "no such object" => absent. exec.ExitError reflects docker's exit 1.
+		// Match case-insensitively: docker has used both "No such object" and
+		// "no such object" historically.
 		var ee *exec.ExitError
-		if errors.As(err, &ee) && strings.Contains(stderr.String(), "No such object") {
+		if errors.As(err, &ee) && strings.Contains(strings.ToLower(stderr.String()), "no such object") {
 			return StateAbsent, nil
 		}
 		return StateAbsent, fmt.Errorf("docker inspect %s: %w: %s", name, err, stderr.String())
