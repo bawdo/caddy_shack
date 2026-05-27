@@ -60,6 +60,7 @@ full design.`,
 	root.AddCommand(newDeregisterCmd())
 	root.AddCommand(newListCmd())
 	root.AddCommand(newStatusCmd())
+	root.AddCommand(newDoctorCmd())
 	applyHelpBareword(root)
 	return root
 }
