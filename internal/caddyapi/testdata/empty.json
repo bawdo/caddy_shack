@@ -1,0 +1,25 @@
+{
+  "apps": {
+    "http": {
+      "servers": {
+        "srv0": {
+          "listen": [":443"],
+          "routes": [],
+          "automatic_https": {
+            "disable_redirects": false
+          }
+        }
+      }
+    },
+    "tls": {
+      "automation": {
+        "policies": [
+          {
+            "subjects": ["*.test"],
+            "issuers": [{"module": "internal"}]
+          }
+        ]
+      }
+    }
+  }
+}
