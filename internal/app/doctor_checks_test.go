@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -258,13 +259,33 @@ func TestCheckDNSFailWhenDscacheReturnsNothing(t *testing.T) {
 	if !r.Fix.RequiresSudo {
 		t.Errorf("DNS fix requires sudo")
 	}
+	if strings.Contains(r.Fix.Label, "(requires sudo)") {
+		t.Errorf("fix label should not embed '(requires sudo)': %q", r.Fix.Label)
+	}
+	joined := strings.Join(r.Detail, "\n")
+	for _, want := range []string{
+		"to fix manually:",
+		"brew install dnsmasq",
+		"echo 'address=/.test/127.0.0.1' > $(brew --prefix)/etc/dnsmasq.d/caddy_shack.conf",
+		"sudo brew services restart dnsmasq",
+		"sudo mkdir -p /etc/resolver",
+		"echo 'nameserver 127.0.0.1' | sudo tee /etc/resolver/test",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("detail missing %q:\n%s", want, joined)
+		}
+	}
 }
 
-// fakeRootCert returns a stable 200-byte payload and its hex SHA-256.
+// fakeRootCert returns a PEM-encoded stub "certificate" and the hex
+// SHA-256 of the inner DER bytes. The DER content is just a stable byte
+// pattern (not a real cert) - we only need a payload whose SHA-256 we
+// know, plus PEM framing so checkTrustStore exercises its pem.Decode path.
 func fakeRootCert() ([]byte, string) {
-	payload := bytes.Repeat([]byte{0xAB}, 200)
-	sum := sha256.Sum256(payload)
-	return payload, strings.ToUpper(hex.EncodeToString(sum[:]))
+	der := bytes.Repeat([]byte{0xAB}, 200)
+	sum := sha256.Sum256(der)
+	encoded := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	return encoded, strings.ToUpper(hex.EncodeToString(sum[:]))
 }
 
 func TestCheckTrustStorePassWhenSHAFound(t *testing.T) {
@@ -319,13 +340,16 @@ func TestCheckTrustStoreFailWhenSHAMissing(t *testing.T) {
 	if strings.Contains(r.Fix.Label, "(requires sudo)") {
 		t.Errorf("fix label should not embed '(requires sudo)': %q", r.Fix.Label)
 	}
-	// Detail should explain why and identify the cert source so the user
-	// can verify by hand.
+	// Detail should explain why, identify the cert source, and include the
+	// exact copy-paste commands a user needs to fix it by hand.
 	joined := strings.Join(r.Detail, "\n")
 	for _, want := range []string{
 		"expected SHA-256 not present in System keychain dump",
-		"expected SHA-256:",
-		"cert read from: " + CaddyContainerName + ":/data/caddy/pki/authorities/local/root.crt",
+		"expected SHA-256 (DER):",
+		"cert source: " + CaddyContainerName + ":/data/caddy/pki/authorities/local/root.crt",
+		"to fix manually:",
+		"docker exec " + CaddyContainerName + " cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt",
+		"sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/caddy_shack_root.crt",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("detail missing %q:\n%s", want, joined)

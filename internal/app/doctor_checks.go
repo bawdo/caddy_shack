@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
@@ -177,9 +178,17 @@ func checkDNS(ctx context.Context, _ *App, sh shellExecutor, tty shellExecutor) 
 	if _, err := sh(ctx, "test", "-f", "/etc/resolver/test"); err != nil {
 		detail = append(detail, "/etc/resolver/test: missing")
 	}
+	detail = append(detail,
+		"to fix manually:",
+		"  brew install dnsmasq",
+		"  echo 'address=/.test/127.0.0.1' > $(brew --prefix)/etc/dnsmasq.d/caddy_shack.conf",
+		"  sudo brew services restart dnsmasq",
+		"  sudo mkdir -p /etc/resolver",
+		"  echo 'nameserver 127.0.0.1' | sudo tee /etc/resolver/test",
+	)
 
 	fix := &FixAction{
-		Label:        "install dnsmasq + write /etc/resolver/test",
+		Label:        "install dnsmasq and write resolver entry for .test",
 		RequiresSudo: true,
 		Apply: func(ctx context.Context) error {
 			return applyDNSFix(ctx, sh, tty)
@@ -241,7 +250,16 @@ func checkTrustStore(ctx context.Context, a *App, sh shellExecutor, tty shellExe
 			Detail:  []string{err.Error()},
 		}
 	}
-	sum := sha256.Sum256(cert)
+	// security find-certificate -Z reports the SHA-256 of the DER-encoded
+	// certificate, not the SHA of whatever file format we read. Decode the
+	// PEM block first; fall back to hashing the raw bytes if it isn't PEM
+	// (Caddy currently writes PEM but the defensive path keeps the check
+	// producing a fingerprint either way).
+	derBytes := cert
+	if block, _ := pem.Decode(cert); block != nil {
+		derBytes = block.Bytes
+	}
+	sum := sha256.Sum256(derBytes)
 	wantSHA := strings.ToUpper(hex.EncodeToString(sum[:]))
 
 	dump, err := sh(ctx, "security", "find-certificate", "-a", "-Z", "/Library/Keychains/System.keychain")
@@ -259,8 +277,11 @@ func checkTrustStore(ctx context.Context, a *App, sh shellExecutor, tty shellExe
 		detail = append(detail, "expected SHA-256 not present in System keychain dump")
 	}
 	detail = append(detail,
-		"expected SHA-256: "+wantSHA,
-		"cert read from: "+CaddyContainerName+":/data/caddy/pki/authorities/local/root.crt",
+		"expected SHA-256 (DER): "+wantSHA,
+		"cert source: "+CaddyContainerName+":/data/caddy/pki/authorities/local/root.crt",
+		"to fix manually:",
+		"  docker exec "+CaddyContainerName+" cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt",
+		"  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/caddy_shack_root.crt",
 	)
 	return CheckResult{
 		Name:    "trust-store",
@@ -268,7 +289,7 @@ func checkTrustStore(ctx context.Context, a *App, sh shellExecutor, tty shellExe
 		Summary: "Caddy root CA not trusted in System keychain",
 		Detail:  detail,
 		Fix: &FixAction{
-			Label:        "trust Caddy root CA via 'security add-trusted-cert'",
+			Label:        "trust Caddy root CA in System keychain",
 			RequiresSudo: true,
 			Apply: func(ctx context.Context) error {
 				return applyTrustStoreFix(ctx, tty, cert)
