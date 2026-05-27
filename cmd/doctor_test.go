@@ -2,11 +2,15 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/bawdo/caddy_shack/internal/app"
+	"github.com/bawdo/caddy_shack/internal/docker"
 )
 
 func TestDoctorYesWithoutFixIsError(t *testing.T) {
@@ -128,5 +132,96 @@ func TestRenderDoctorJSONSchema(t *testing.T) {
 		if _, present := summary[k]; !present {
 			t.Errorf("missing summary key %q", k)
 		}
+	}
+}
+
+func TestRunFixLoopAppliesFixesWhenUserAcceptsY(t *testing.T) {
+	dir := t.TempDir()
+	a := app.NewWithPaths(app.Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  filepath.Join(dir, "state.json.lock"),
+	}, nil, docker.NewFake())
+
+	applied := 0
+	rep := app.DoctorReport{
+		Checks: []app.CheckResult{
+			{Name: "x", Status: app.SeverityFail, Fix: &app.FixAction{
+				Label: "do the thing",
+				Apply: func(context.Context) error { applied++; return nil },
+			}},
+		},
+	}
+
+	cmd := newDoctorCmd()
+	cmd.SetIn(strings.NewReader("y\n"))
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetContext(context.Background())
+
+	if err := runFixLoop(cmd, a, rep, false); err != nil {
+		t.Fatalf("runFixLoop: %v", err)
+	}
+	if applied != 1 {
+		t.Errorf("expected one fix applied, got %d", applied)
+	}
+	if !strings.Contains(buf.String(), "[FIXED] x") {
+		t.Errorf("expected [FIXED] x in output:\n%s", buf.String())
+	}
+}
+
+func TestRunFixLoopSkipsOnUserDeclineN(t *testing.T) {
+	dir := t.TempDir()
+	a := app.NewWithPaths(app.Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  filepath.Join(dir, "state.json.lock"),
+	}, nil, docker.NewFake())
+
+	applied := 0
+	rep := app.DoctorReport{
+		Checks: []app.CheckResult{
+			{Name: "x", Status: app.SeverityFail, Fix: &app.FixAction{
+				Apply: func(context.Context) error { applied++; return nil },
+			}},
+		},
+	}
+
+	cmd := newDoctorCmd()
+	cmd.SetIn(strings.NewReader("n\n"))
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetContext(context.Background())
+
+	_ = runFixLoop(cmd, a, rep, false)
+	if applied != 0 {
+		t.Errorf("expected zero fixes, got %d", applied)
+	}
+	if !strings.Contains(buf.String(), "skipped") {
+		t.Errorf("expected 'skipped' in output:\n%s", buf.String())
+	}
+}
+
+func TestRunFixLoopReturnsErrorWhenAnyFixFails(t *testing.T) {
+	dir := t.TempDir()
+	a := app.NewWithPaths(app.Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  filepath.Join(dir, "state.json.lock"),
+	}, nil, docker.NewFake())
+
+	want := errors.New("boom")
+	rep := app.DoctorReport{
+		Checks: []app.CheckResult{
+			{Name: "x", Status: app.SeverityFail, Fix: &app.FixAction{
+				Apply: func(context.Context) error { return want },
+			}},
+		},
+	}
+	cmd := newDoctorCmd()
+	cmd.SetIn(strings.NewReader("y\n"))
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetContext(context.Background())
+
+	err := runFixLoop(cmd, a, rep, false)
+	if err == nil {
+		t.Fatal("expected error when fix fails")
 	}
 }

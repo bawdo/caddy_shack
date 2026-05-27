@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os/exec"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -109,10 +113,84 @@ func severityTag(s app.Severity) string {
 	}
 }
 
-// runFixLoop is implemented in Task 17.
 func runFixLoop(cmd *cobra.Command, a *app.App, rep app.DoctorReport, yes bool) error {
-	_, _ = a, rep
-	_ = yes
-	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "fix loop not yet implemented")
-	return nil
+	out := cmd.OutOrStdout()
+	in := cmd.InOrStdin()
+	reader := bufio.NewReader(in)
+
+	// Print the report first so the user sees the whole picture before
+	// being asked anything.
+	renderDoctorHuman(out, rep)
+
+	prompt := func(label string) bool {
+		if yes {
+			return true
+		}
+		_, _ = fmt.Fprintf(out, "Apply fix? (%s) [y/N]: ", label)
+		line, err := reader.ReadString('\n')
+		if err != nil && line == "" {
+			return false
+		}
+		ans := strings.ToLower(strings.TrimSpace(line))
+		return ans == "y" || ans == "yes"
+	}
+
+	var (
+		applied, skipped, failed int
+		firstErr                 error
+	)
+	for _, r := range rep.Checks {
+		if r.Fix == nil {
+			continue
+		}
+		if r.Status != app.SeverityFail && r.Status != app.SeverityWarn {
+			continue
+		}
+
+		if yes && r.Fix.RequiresSudo {
+			if err := sudoNonInteractiveCheck(cmd.Context()); err != nil {
+				_, _ = fmt.Fprintf(out, "[FIX-FAILED] %s (sudo password required, re-run interactively)\n", r.Name)
+				failed++
+				if firstErr == nil {
+					firstErr = fmt.Errorf("fix %s: %w", r.Name, err)
+				}
+				continue
+			}
+		}
+
+		outcome, err := a.ApplyFix(cmd.Context(), r, prompt)
+		switch outcome {
+		case app.FixApplied:
+			_, _ = fmt.Fprintf(out, "[FIXED] %s\n", r.Name)
+			applied++
+		case app.FixSkipped:
+			_, _ = fmt.Fprintf(out, "[--] %s skipped\n", r.Name)
+			skipped++
+		case app.FixFailed:
+			_, _ = fmt.Fprintf(out, "[FIX-FAILED] %s: %v\n", r.Name, err)
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	_, _ = fmt.Fprintf(out, "\n%d fixed, %d skipped, %d failed.\n", applied, skipped, failed)
+	return firstErr
+}
+
+// sudoNonInteractiveCheck succeeds only if `sudo -n true` succeeds (i.e.
+// the user has a fresh credential cache and no password prompt is needed).
+// Used by --yes mode to fail fast before invoking a sudo-requiring fix.
+func sudoNonInteractiveCheck(ctx context.Context) error {
+	return execCommandContext(ctx, "sudo", "-n", "true").Run()
+}
+
+// runnable is the smallest interface execCommandContext returns so tests
+// can stub it with their own no-op or error-returning implementation.
+type runnable interface{ Run() error }
+
+// execCommandContext is a var so tests can replace it. The production
+// implementation returns *exec.Cmd, which already satisfies runnable.
+var execCommandContext = func(ctx context.Context, name string, args ...string) runnable {
+	return exec.CommandContext(ctx, name, args...)
 }
