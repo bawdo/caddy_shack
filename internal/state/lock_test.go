@@ -33,7 +33,7 @@ func TestLockContentionTimesOut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first acquire: %v", err)
 	}
-	defer held.Release()
+	defer func() { _ = held.Release() }()
 
 	start := time.Now()
 	_, err = AcquireLock(lockPath, 200*time.Millisecond)

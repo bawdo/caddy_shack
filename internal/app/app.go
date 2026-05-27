@@ -1,6 +1,8 @@
 package app
 
 import (
+	"time"
+
 	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/docker"
 )
@@ -38,7 +40,7 @@ func New() (*App, error) {
 // docker substitutes the production defaults; tests pass their own.
 func NewWithPaths(p Paths, caddy *caddyapi.Client, dock docker.Client) *App {
 	if caddy == nil {
-		caddy = caddyapi.NewClient("http://127.0.0.1:2019", 0)
+		caddy = caddyapi.NewClient("http://127.0.0.1:2019", 10*time.Second)
 	}
 	if dock == nil {
 		dock = docker.NewCLI()

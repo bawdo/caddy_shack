@@ -3,7 +3,8 @@
 // Package integration spins up real CaddyShack-managed Caddy containers
 // against a temporary state directory. Tests in this package require the
 // `docker` CLI on PATH and a running docker daemon. Run with:
-//   go test -tags integration ./test/integration/...
+//
+//	go test -tags integration ./test/integration/...
 package integration
 
 import (
@@ -72,10 +73,12 @@ func MustAppWithTempState(t *testing.T, statePath string) *app.App {
 // docker for inspections). Always reports the container as running.
 type fakeRunningDocker struct{}
 
-func (fakeRunningDocker) DaemonReachable() error                                { return nil }
-func (fakeRunningDocker) EnsureVolume(string) error                             { return nil }
-func (fakeRunningDocker) PullImage(string) error                                { return nil }
-func (fakeRunningDocker) ContainerState(string) (docker.ContainerState, error)  { return docker.StateRunning, nil }
-func (fakeRunningDocker) CreateAndStart(docker.ContainerSpec) error             { return nil }
-func (fakeRunningDocker) Start(string) error                                    { return nil }
-func (fakeRunningDocker) Stop(string) error                                     { return nil }
+func (fakeRunningDocker) DaemonReachable() error    { return nil }
+func (fakeRunningDocker) EnsureVolume(string) error { return nil }
+func (fakeRunningDocker) PullImage(string) error    { return nil }
+func (fakeRunningDocker) ContainerState(string) (docker.ContainerState, error) {
+	return docker.StateRunning, nil
+}
+func (fakeRunningDocker) CreateAndStart(docker.ContainerSpec) error { return nil }
+func (fakeRunningDocker) Start(string) error                        { return nil }
+func (fakeRunningDocker) Stop(string) error                         { return nil }

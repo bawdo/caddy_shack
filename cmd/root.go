@@ -26,8 +26,8 @@ func classifyError(err error) int {
 
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:           "caddy_shack",
-		Short:         "Manage a local Caddy instance for HTTPS .test URLs",
+		Use:   "caddy_shack",
+		Short: "Manage a local Caddy instance for HTTPS .test URLs",
 		Long: `caddy_shack manages a locally-running Caddy container so backend services
 can register themselves and get a stable HTTPS URL under the .test TLD.
 

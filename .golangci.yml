@@ -13,6 +13,17 @@ linters:
       - path: _test\.go
         linters:
           - gosec
+      # gosec G204 in cli.go: exec.Command args are derived from internal
+      # constants (CaddyContainerName, CaddyImage, named volumes), not from
+      # untrusted input. False positive for the MVP threat model.
+      - path: internal/docker/cli\.go
+        linters:
+          - gosec
+      # gosec G304 in state package: paths come from DefaultPaths()
+      # (rooted at os.UserConfigDir) or t.TempDir() in tests. False positive.
+      - path: internal/state/
+        linters:
+          - gosec
       # QF1001 (apply De Morgan's law) and QF1011 (omit inferable type) are
       # stylistic "quickfix" suggestions, not correctness checks. QF1011
       # specifically fires on deliberate interface-conformance assertions
