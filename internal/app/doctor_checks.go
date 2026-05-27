@@ -2,12 +2,27 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"net"
+	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/bawdo/caddy_shack/internal/docker"
 )
+
+// shellExecutor runs an external command and returns combined output. Only
+// checks that shell out to system tools (dscacheutil, security, brew,
+// sudo) take this parameter; tests substitute a fake.
+type shellExecutor func(ctx context.Context, name string, args ...string) ([]byte, error)
+
+// defaultShell is the production executor. CommandContext lets ctx cancel
+// the child if Doctor is cancelled.
+func defaultShell(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
 
 func checkDockerDaemon(_ context.Context, a *App) CheckResult {
 	if err := a.docker.DaemonReachable(); err != nil {
@@ -81,6 +96,96 @@ func checkContainerHealth(ctx context.Context, a *App) CheckResult {
 		Status:  SeverityPass,
 		Summary: "running; admin API responding",
 	}
+}
+
+func randomTestSubdomain() string {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 12)
+	_, _ = rand.Read(b)
+	for i := range b {
+		b[i] = charset[int(b[i])%len(charset)]
+	}
+	return string(b) + ".test"
+}
+
+// dnsmasqConfPaths returns the candidate brew dnsmasq.d directories. The
+// first one that exists wins. brew --prefix isn't shelled out here - we
+// pick from the two known macOS install locations.
+func dnsmasqConfPaths(sh shellExecutor) []string {
+	if out, err := sh(context.Background(), "brew", "--prefix"); err == nil {
+		prefix := strings.TrimSpace(string(out))
+		if prefix != "" {
+			return []string{filepath.Join(prefix, "etc", "dnsmasq.d")}
+		}
+	}
+	return []string{"/opt/homebrew/etc/dnsmasq.d", "/usr/local/etc/dnsmasq.d"}
+}
+
+func checkDNS(ctx context.Context, _ *App, sh shellExecutor) CheckResult {
+	host := randomTestSubdomain()
+	out, _ := sh(ctx, "dscacheutil", "-q", "host", "-a", "name", host)
+	if strings.Contains(string(out), "127.0.0.1") {
+		return CheckResult{
+			Name:    "dns-test-tld",
+			Status:  SeverityPass,
+			Summary: ".test resolves to 127.0.0.1",
+		}
+	}
+
+	// Diagnostic sub-probes.
+	var detail []string
+	if _, err := sh(ctx, "brew", "list", "dnsmasq"); err != nil {
+		detail = append(detail, "dnsmasq: not installed via brew")
+	} else {
+		detail = append(detail, "dnsmasq: installed")
+	}
+	foundConf := false
+	for _, dir := range dnsmasqConfPaths(sh) {
+		if _, err := sh(ctx, "test", "-f", filepath.Join(dir, "caddy_shack.conf")); err == nil {
+			foundConf = true
+			break
+		}
+	}
+	if !foundConf {
+		detail = append(detail, "dnsmasq.d/caddy_shack.conf: missing")
+	}
+	if _, err := sh(ctx, "test", "-f", "/etc/resolver/test"); err != nil {
+		detail = append(detail, "/etc/resolver/test: missing")
+	}
+
+	fix := &FixAction{
+		Label:        "install dnsmasq + write /etc/resolver/test (requires sudo)",
+		RequiresSudo: true,
+		Apply: func(ctx context.Context) error {
+			return applyDNSFix(ctx, sh)
+		},
+	}
+	return CheckResult{
+		Name:    "dns-test-tld",
+		Status:  SeverityFail,
+		Summary: ".test does not resolve to 127.0.0.1",
+		Detail:  detail,
+		Fix:     fix,
+	}
+}
+
+// applyDNSFix runs the brew + sudo commands documented in the README's
+// "local DNS for .test" section. Returns on the first error.
+func applyDNSFix(ctx context.Context, sh shellExecutor) error {
+	steps := [][]string{
+		{"brew", "install", "dnsmasq"},
+		{"sh", "-c", `mkdir -p "$(brew --prefix)/etc/dnsmasq.d" && echo 'address=/.test/127.0.0.1' > "$(brew --prefix)/etc/dnsmasq.d/caddy_shack.conf"`},
+		{"sudo", "brew", "services", "restart", "dnsmasq"},
+		{"sudo", "mkdir", "-p", "/etc/resolver"},
+		{"sudo", "sh", "-c", "echo 'nameserver 127.0.0.1' > /etc/resolver/test"},
+	}
+	for _, s := range steps {
+		out, err := sh(ctx, s[0], s[1:]...)
+		if err != nil {
+			return fmt.Errorf("%s %s: %w: %s", s[0], strings.Join(s[1:], " "), err, out)
+		}
+	}
+	return nil
 }
 
 // checkBackends is implemented in Task 13.

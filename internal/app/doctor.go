@@ -140,10 +140,12 @@ func (a *App) Doctor(ctx context.Context, opts DoctorOptions) (DoctorReport, err
 // buildCheckList returns the ordered checks Doctor will run. Each entry is
 // a closure capturing the App so the check signature stays uniform.
 func (a *App) buildCheckList(opts DoctorOptions) []func(context.Context) CheckResult {
+	sh := defaultShell
 	checks := []func(context.Context) CheckResult{
 		func(ctx context.Context) CheckResult { return checkDockerDaemon(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkPortAvailability(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkContainerHealth(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkDNS(ctx, a, sh) },
 	}
 	if !opts.SkipBackends {
 		checks = append(checks, func(ctx context.Context) CheckResult { return checkBackends(ctx, a) })

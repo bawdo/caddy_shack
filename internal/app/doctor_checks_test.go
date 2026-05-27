@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -192,5 +194,73 @@ func TestCheckContainerHealthSkipWhenDaemonDown(t *testing.T) {
 	r := checkContainerHealth(context.Background(), a)
 	if r.Status != SeveritySkip {
 		t.Errorf("status: %v summary=%s", r.Status, r.Summary)
+	}
+}
+
+// scriptedShell returns canned output keyed by "<name> <args joined by space>".
+func scriptedShell(t *testing.T, table map[string]struct {
+	out []byte
+	err error
+}) shellExecutor {
+	t.Helper()
+	return func(_ context.Context, name string, args ...string) ([]byte, error) {
+		key := name
+		if len(args) > 0 {
+			key = name + " " + strings.Join(args, " ")
+		}
+		v, ok := table[key]
+		if !ok {
+			t.Errorf("unexpected shell call: %q", key)
+			return nil, errors.New("unexpected")
+		}
+		return v.out, v.err
+	}
+}
+
+func TestCheckDNSPassWhenDscacheReturnsLoopback(t *testing.T) {
+	a := newDoctorApp(t, docker.NewFake(), "http://127.0.0.1:1")
+
+	// The check should call dscacheutil first; if it returns 127.0.0.1 it
+	// passes without invoking any sub-probes.
+	sh := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "dscacheutil" {
+			return []byte("name: anything.test\nip_address: 127.0.0.1\n"), nil
+		}
+		// Sub-probes only matter on failure; if invoked, return harmless
+		// "found" responses.
+		return []byte("ok"), nil
+	}
+
+	r := checkDNS(context.Background(), a, sh)
+	if r.Status != SeverityPass {
+		t.Errorf("status: %v summary=%s", r.Status, r.Summary)
+	}
+}
+
+func TestCheckDNSFailWhenDscacheReturnsNothing(t *testing.T) {
+	a := newDoctorApp(t, docker.NewFake(), "http://127.0.0.1:1")
+
+	sh := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "dscacheutil":
+			return []byte(""), nil
+		case "brew":
+			if len(args) > 0 && args[0] == "list" {
+				return nil, errors.New("not installed")
+			}
+			return []byte("/opt/homebrew"), nil
+		}
+		return nil, errors.New("unexpected")
+	}
+
+	r := checkDNS(context.Background(), a, sh)
+	if r.Status != SeverityFail {
+		t.Errorf("status: %v", r.Status)
+	}
+	if r.Fix == nil {
+		t.Fatal("DNS fail must offer fix")
+	}
+	if !r.Fix.RequiresSudo {
+		t.Errorf("DNS fix requires sudo")
 	}
 }
