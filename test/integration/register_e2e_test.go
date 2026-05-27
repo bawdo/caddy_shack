@@ -37,6 +37,7 @@ func TestRegisterE2EReverseProxiesOverHTTPS(t *testing.T) {
 	}
 
 	cmd := exec.Command("docker", "run", "-d", "--name", testContainerName,
+		"--add-host=host.docker.internal:host-gateway",
 		"-p", fmt.Sprintf("127.0.0.1:%d:2019", adminPort),
 		"-p", fmt.Sprintf("127.0.0.1:%d:443", httpsPort),
 		"-p", fmt.Sprintf("127.0.0.1:%d:80", httpPort),
