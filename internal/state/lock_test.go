@@ -26,6 +26,20 @@ func TestLockAcquireAndRelease(t *testing.T) {
 	_ = l2.Release()
 }
 
+// TestLockCreatesParentDir covers the first-ever register on a fresh
+// install: the state directory doesn't exist yet when AcquireLock runs
+// (state.Save is what normally creates it, but Register acquires the
+// lock first). Without MkdirAll the open fails with ENOENT.
+func TestLockCreatesParentDir(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "doesnotexist", "state.json.lock")
+
+	l, err := AcquireLock(lockPath, time.Second)
+	if err != nil {
+		t.Fatalf("AcquireLock on missing parent dir: %v", err)
+	}
+	_ = l.Release()
+}
+
 func TestLockContentionTimesOut(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "state.json.lock")
 

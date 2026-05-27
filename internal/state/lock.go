@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -18,8 +19,12 @@ type Lock struct {
 }
 
 // AcquireLock blocks until it can flock(2)-lock the file at path, or the
-// timeout elapses. The file is created if missing.
+// timeout elapses. The file (and its parent directory) are created if
+// missing.
 func AcquireLock(path string, timeout time.Duration) (*Lock, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("create lock dir: %w", err)
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open lock file: %w", err)
