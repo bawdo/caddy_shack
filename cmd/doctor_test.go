@@ -225,3 +225,78 @@ func TestRunFixLoopReturnsErrorWhenAnyFixFails(t *testing.T) {
 		t.Fatal("expected error when fix fails")
 	}
 }
+
+func TestRunFixLoopYesModeAppliesWithoutPrompt(t *testing.T) {
+	dir := t.TempDir()
+	a := app.NewWithPaths(app.Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  filepath.Join(dir, "state.json.lock"),
+	}, nil, docker.NewFake())
+
+	applied := 0
+	rep := app.DoctorReport{
+		Checks: []app.CheckResult{
+			{Name: "x", Status: app.SeverityFail, Fix: &app.FixAction{
+				Apply: func(context.Context) error { applied++; return nil },
+			}},
+		},
+	}
+
+	cmd := newDoctorCmd()
+	// No stdin set - --yes means no prompt is read.
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetContext(context.Background())
+
+	if err := runFixLoop(cmd, a, rep, true); err != nil {
+		t.Fatalf("runFixLoop: %v", err)
+	}
+	if applied != 1 {
+		t.Errorf("expected one fix applied, got %d", applied)
+	}
+}
+
+// stubExec replaces the sudo preflight executor with a configurable result.
+type stubExec struct{ err error }
+
+func (s stubExec) Run() error { return s.err }
+
+func TestRunFixLoopYesModeMarksSudoFixFailedWhenSudoCachedFalse(t *testing.T) {
+	prev := execCommandContext
+	defer func() { execCommandContext = prev }()
+	execCommandContext = func(context.Context, string, ...string) runnable {
+		return stubExec{err: errors.New("sudo: a password is required")}
+	}
+
+	dir := t.TempDir()
+	a := app.NewWithPaths(app.Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  filepath.Join(dir, "state.json.lock"),
+	}, nil, docker.NewFake())
+
+	applied := 0
+	rep := app.DoctorReport{
+		Checks: []app.CheckResult{
+			{Name: "needs-sudo", Status: app.SeverityFail, Fix: &app.FixAction{
+				RequiresSudo: true,
+				Apply:        func(context.Context) error { applied++; return nil },
+			}},
+		},
+	}
+
+	cmd := newDoctorCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetContext(context.Background())
+
+	err := runFixLoop(cmd, a, rep, true)
+	if err == nil {
+		t.Fatal("expected error when sudo preflight fails")
+	}
+	if applied != 0 {
+		t.Errorf("Apply must not be invoked when sudo preflight fails (got applied=%d)", applied)
+	}
+	if !strings.Contains(buf.String(), "[FIX-FAILED] needs-sudo") {
+		t.Errorf("expected [FIX-FAILED] in output:\n%s", buf.String())
+	}
+}
