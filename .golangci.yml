@@ -1,0 +1,27 @@
+version: "2"
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - gosec
+  exclusions:
+    rules:
+      # gosec flags test fixtures (file IO with derived paths, 0o755 perms
+      # on tempdir stubs) that aren't a real security concern in tests.
+      - path: _test\.go
+        linters:
+          - gosec
+      # QF1001 (apply De Morgan's law) and QF1011 (omit inferable type) are
+      # stylistic "quickfix" suggestions, not correctness checks. QF1011
+      # specifically fires on deliberate interface-conformance assertions
+      # like `var _ output.Renderer = NewFoo(...)` where the explicit type
+      # IS the test. Suppress by text so the default staticcheck check set
+      # (which omits ST1000 et al.) stays intact.
+      - linters:
+          - staticcheck
+        text: "QF1001"
+      - linters:
+          - staticcheck
+        text: "QF1011"

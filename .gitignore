@@ -1,0 +1,31 @@
+# Build artefacts
+/bin/
+*.test
+*.out
+
+# OS junk
+.DS_Store
+.obsidian/
+
+# IDE
+.idea/
+.vscode/
+
+# Claude/Superpowers (local notes only - specs and plans ARE tracked)
+.superpowers/
+docs/superpowers/*
+!docs/superpowers/specs/
+!docs/superpowers/plans/
+.claude/
+
+# Git worktrees
+.worktrees/
+
+# Pre-CI check artefacts (regenerated each run)
+coverage/pre-ci-*.txt
+coverage/.last-coverage
+
+# Bootstrapper scratch (defensive: bootstrapper currently writes
+# nothing here, but reserved so future provenance/state files do
+# not slip through)
+/.bootstrapper/

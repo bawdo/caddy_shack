@@ -1,0 +1,149 @@
+name: CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [ '*' ]
+  pull_request:
+    branches: [ '*' ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: Test
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          check-latest: true
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests (race detector)
+        run: go test -race ./...
+
+  lint:
+    name: Lint
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          check-latest: true
+          cache: true
+
+      - name: Check formatting (gofmt -s)
+        run: |
+          unformatted=$(gofmt -s -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need 'gofmt -s -w':"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.9.0
+          args: --timeout=5m
+
+  coverage:
+    name: Coverage
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          check-latest: true
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests with coverage
+        run: |
+          COVERPKG=$(go list ./... | grep -v testutil | tr '\n' ',' | sed 's/,$//')
+          go test -race -coverprofile=coverage.txt -covermode=atomic -coverpkg="$COVERPKG" ./...
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.txt
+          fail_ci_if_error: false
+          verbose: true
+
+  vuln:
+    name: Vulnerability Scan
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          check-latest: true
+          cache: true
+
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  build:
+    name: Build & Smoke
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          check-latest: true
+          cache: true
+
+      - name: Build caddy_shack binary
+        run: |
+          VERSION=$(git describe --tags --always --dirty)
+          COMMIT=$(git rev-parse HEAD)
+          TAG=$(git describe --exact-match --tags HEAD 2>/dev/null || echo "")
+          if [ -n "$(git status --porcelain)" ]; then DIRTY=true; else DIRTY=false; fi
+          LDFLAGS="-X github.com/bawdo/caddy_shack/internal/version.Version=$VERSION \
+          -X github.com/bawdo/caddy_shack/internal/version.Commit=$COMMIT \
+          -X github.com/bawdo/caddy_shack/internal/version.Tag=$TAG \
+          -X github.com/bawdo/caddy_shack/internal/version.Dirty=$DIRTY"
+          go build -ldflags "$LDFLAGS" -o bin/caddy_shack .
+
+      - name: CLI smoke test (caddy_shack version)
+        run: |
+          output=$(./bin/caddy_shack version)
+          echo "$output"
+          if ! echo "$output" | head -1 | grep -q '^caddy_shack '; then
+            echo "Smoke test failed: 'caddy_shack version' did not print build identity"
+            exit 1
+          fi
