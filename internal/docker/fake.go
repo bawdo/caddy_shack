@@ -1,6 +1,11 @@
 package docker
 
-import "sync"
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+)
 
 // Fake is an in-memory Client for app-layer tests. Records calls and
 // transitions container state per CreateAndStart/Start/Stop/Remove.
@@ -15,20 +20,29 @@ type Fake struct {
 	PullErr           error
 	CreateAndStartErr error
 
-	Volumes    map[string]bool
-	PulledImg  map[string]bool
-	Containers map[string]ContainerState
-	Spec       ContainerSpec
-	Removed    []string
+	Volumes       map[string]bool
+	PulledImg     map[string]bool
+	Containers    map[string]ContainerState
+	ExecResponses map[string]ExecResponse
+	Spec          ContainerSpec
+	Removed       []string
 }
 
 // NewFake returns a Fake with empty maps and a reachable daemon.
 func NewFake() *Fake {
 	return &Fake{
-		Volumes:    map[string]bool{},
-		PulledImg:  map[string]bool{},
-		Containers: map[string]ContainerState{},
+		Volumes:       map[string]bool{},
+		PulledImg:     map[string]bool{},
+		Containers:    map[string]ContainerState{},
+		ExecResponses: map[string]ExecResponse{},
 	}
+}
+
+// ExecResponse is one scripted response to Fake.Exec. The key in
+// ExecResponses is "<container>:<joined-argv>" (argv joined by single space).
+type ExecResponse struct {
+	Stdout []byte
+	Err    error
 }
 
 func (f *Fake) DaemonReachable() error { return f.DaemonErr }
@@ -100,4 +114,15 @@ func (f *Fake) Remove(name string) error {
 	f.Removed = append(f.Removed, name)
 	delete(f.Containers, name)
 	return nil
+}
+
+func (f *Fake) Exec(_ context.Context, name string, argv []string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := name + ":" + strings.Join(argv, " ")
+	r, ok := f.ExecResponses[key]
+	if !ok {
+		return nil, fmt.Errorf("fake docker: no scripted Exec response for %q", key)
+	}
+	return r.Stdout, r.Err
 }
