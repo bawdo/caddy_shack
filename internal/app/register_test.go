@@ -215,11 +215,11 @@ func TestDeregisterRemovesBackendAndPushesConfig(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	removed, err := f.app.Deregister(context.Background(), "foo")
+	res, err := f.app.Deregister(context.Background(), "foo", false)
 	if err != nil {
 		t.Fatalf("Deregister: %v", err)
 	}
-	if !removed {
+	if !res.Removed {
 		t.Error("Deregister should report removed=true for an existing backend")
 	}
 
@@ -236,11 +236,11 @@ func TestDeregisterRemovesBackendAndPushesConfig(t *testing.T) {
 func TestDeregisterUnknownNameIsNoOp(t *testing.T) {
 	f := newFixture(t, http.StatusOK)
 	hits := f.caddyHits
-	removed, err := f.app.Deregister(context.Background(), "unknown")
+	res, err := f.app.Deregister(context.Background(), "unknown", false)
 	if err != nil {
 		t.Errorf("expected nil err, got %v", err)
 	}
-	if removed {
+	if res.Removed {
 		t.Error("Deregister should report removed=false for an unknown backend")
 	}
 	if f.caddyHits != hits {
@@ -266,11 +266,11 @@ func TestDeregisterCaddyRejectionLeavesStateIntact(t *testing.T) {
 		f.app.docker,
 	)
 
-	removed, err := f.app.Deregister(context.Background(), "foo")
+	res, err := f.app.Deregister(context.Background(), "foo", false)
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if removed {
+	if res.Removed {
 		t.Error("Deregister should report removed=false when Caddy rejects")
 	}
 	if !strings.Contains(err.Error(), "rejected") && !strings.Contains(err.Error(), "stub") {
@@ -300,5 +300,77 @@ func TestRegisterRejectsMalformedDottedName(t *testing.T) {
 		if !errors.Is(err, ErrInvalidArgs) {
 			t.Errorf("name %q: want ErrInvalidArgs, got %v", bad, err)
 		}
+	}
+}
+
+// seedParentAndChild registers a parent and a subdomain override.
+func seedParentAndChild(t *testing.T, f *fixture) {
+	t.Helper()
+	if err := f.app.Register(context.Background(), RegisterInput{Name: "foo", Port: 2000}); err != nil {
+		t.Fatalf("seed foo: %v", err)
+	}
+	if err := f.app.Register(context.Background(), RegisterInput{Name: "bar.foo", Port: 3000}); err != nil {
+		t.Fatalf("seed bar.foo: %v", err)
+	}
+}
+
+func TestDeregisterParentLeavesChildByDefault(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	seedParentAndChild(t, f)
+
+	res, err := f.app.Deregister(context.Background(), "foo", false)
+	if err != nil {
+		t.Fatalf("Deregister: %v", err)
+	}
+	if !res.Removed {
+		t.Error("parent should be removed")
+	}
+	if len(res.ChildrenLeft) != 1 || res.ChildrenLeft[0] != "bar.foo" {
+		t.Errorf("ChildrenLeft: got %v want [bar.foo]", res.ChildrenLeft)
+	}
+	if res.ParentDomain != "foo.test" {
+		t.Errorf("ParentDomain: got %q want foo.test", res.ParentDomain)
+	}
+	if !strings.Contains(string(f.lastBody), "bar.foo.test") {
+		t.Errorf("child route should survive: %s", f.lastBody)
+	}
+	if strings.Contains(string(f.lastBody), `"foo.test"`) {
+		t.Errorf("parent exact route should be gone: %s", f.lastBody)
+	}
+}
+
+func TestDeregisterCascadeRemovesChildren(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	seedParentAndChild(t, f)
+
+	res, err := f.app.Deregister(context.Background(), "foo", true)
+	if err != nil {
+		t.Fatalf("Deregister cascade: %v", err)
+	}
+	if !res.Removed {
+		t.Error("parent should be removed")
+	}
+	if len(res.Cascaded) != 1 || res.Cascaded[0] != "bar.foo" {
+		t.Errorf("Cascaded: got %v want [bar.foo]", res.Cascaded)
+	}
+	if strings.Contains(string(f.lastBody), "bar.foo.test") {
+		t.Errorf("child route should be gone under cascade: %s", f.lastBody)
+	}
+}
+
+func TestDeregisterCascadeOnAbsentParentStillRemovesChildren(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	if err := f.app.Register(context.Background(), RegisterInput{Name: "bar.foo", Port: 3000}); err != nil {
+		t.Fatalf("seed bar.foo: %v", err)
+	}
+	res, err := f.app.Deregister(context.Background(), "foo", true)
+	if err != nil {
+		t.Fatalf("Deregister cascade: %v", err)
+	}
+	if res.Removed {
+		t.Error("absent parent should report Removed=false")
+	}
+	if len(res.Cascaded) != 1 || res.Cascaded[0] != "bar.foo" {
+		t.Errorf("Cascaded: got %v want [bar.foo]", res.Cascaded)
 	}
 }
