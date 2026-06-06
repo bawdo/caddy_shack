@@ -52,5 +52,10 @@ func renderList(w io.Writer, items []app.Listing, asJSON bool) error {
 	for _, it := range items {
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", it.Name, it.Domain, it.Upstream, it.RegisteredAt)
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "Each backend also serves *.<domain> unless a more specific override exists.")
+	return nil
 }

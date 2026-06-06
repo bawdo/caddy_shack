@@ -67,3 +67,34 @@ func TestRenderListJSONEmptyIsValidArray(t *testing.T) {
 		t.Errorf("empty JSON output: got %q want [] or null", out)
 	}
 }
+
+func TestRenderListHumanTableShowsWildcardFooter(t *testing.T) {
+	var buf bytes.Buffer
+	items := []app.Listing{
+		{Name: "web", Domain: "web.test", Upstream: "127.0.0.1:3000", RegisteredAt: "2026-06-06T00:00:00Z"},
+	}
+	if err := renderList(&buf, items, false); err != nil {
+		t.Fatalf("renderList: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Each backend also serves *.<domain> unless a more specific override exists.") {
+		t.Errorf("expected wildcard footer in human output, got:\n%s", buf.String())
+	}
+}
+
+func TestRenderListFooterAbsentWhenEmptyOrJSON(t *testing.T) {
+	var human bytes.Buffer
+	if err := renderList(&human, nil, false); err != nil {
+		t.Fatalf("renderList empty human: %v", err)
+	}
+	if strings.Contains(human.String(), "Each backend also serves") {
+		t.Errorf("footer should not appear when no backends: %q", human.String())
+	}
+	var js bytes.Buffer
+	items := []app.Listing{{Name: "web", Domain: "web.test", Upstream: "127.0.0.1:3000", RegisteredAt: "x"}}
+	if err := renderList(&js, items, true); err != nil {
+		t.Fatalf("renderList json: %v", err)
+	}
+	if strings.Contains(js.String(), "Each backend also serves") {
+		t.Errorf("footer should not appear in JSON: %q", js.String())
+	}
+}
