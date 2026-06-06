@@ -281,3 +281,24 @@ func TestDeregisterCaddyRejectionLeavesStateIntact(t *testing.T) {
 		t.Error("state lost despite Caddy rejection")
 	}
 }
+
+func TestRegisterAcceptsDottedSubdomainName(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	err := f.app.Register(context.Background(), RegisterInput{Name: "bar.foo", Port: 3000})
+	if err != nil {
+		t.Fatalf("Register dotted name: %v", err)
+	}
+	if !strings.Contains(string(f.lastBody), "bar.foo.test") {
+		t.Errorf("Caddy not given the dotted route: %s", f.lastBody)
+	}
+}
+
+func TestRegisterRejectsMalformedDottedName(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	for _, bad := range []string{"foo..bar", ".foo", "foo.", "-bad.foo", "foo.-bad"} {
+		err := f.app.Register(context.Background(), RegisterInput{Name: bad, Port: 3000})
+		if !errors.Is(err, ErrInvalidArgs) {
+			t.Errorf("name %q: want ErrInvalidArgs, got %v", bad, err)
+		}
+	}
+}

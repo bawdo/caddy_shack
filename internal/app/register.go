@@ -27,13 +27,16 @@ type RegisterInput struct {
 	Port   int
 }
 
-var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}$`)
+// nameRE accepts one or more dot-separated DNS labels. A single label (foo)
+// maps to foo.test; a dotted name (bar.foo) maps to bar.foo.test and acts as
+// a subdomain override. Each label keeps the original single-label rules.
+var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}(\.[a-z0-9][a-z0-9-]{0,30})*$`)
 
 // Register adds or updates a backend. Idempotent: identical re-registration
 // is a no-op (no Caddy push, no state write).
 func (a *App) Register(ctx context.Context, in RegisterInput) error {
 	if !nameRE.MatchString(in.Name) {
-		return fmt.Errorf("%w: name must match ^[a-z0-9][a-z0-9-]{0,30}$ (got %q)", ErrInvalidArgs, in.Name)
+		return fmt.Errorf("%w: name must match ^[a-z0-9][a-z0-9-]{0,30}(\\.[a-z0-9][a-z0-9-]{0,30})*$ (got %q)", ErrInvalidArgs, in.Name)
 	}
 	if in.Port < 1 || in.Port > 65535 {
 		return fmt.Errorf("%w: port out of range (got %d, must be 1-65535)", ErrInvalidArgs, in.Port)
