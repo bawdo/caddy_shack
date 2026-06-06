@@ -111,15 +111,36 @@ caddy_shack register api --port 4000 --domain api.internal.test
 Register is idempotent: same name + same fields is a no-op (no Caddy hit);
 same name + different fields updates the existing route.
 
+### Subdomains
+
+Registering a backend automatically serves all of its subdomains from the same
+upstream. After `caddy_shack register foo --port 2000`, both `foo.test` and any
+`*.foo.test` (e.g. `bar.foo.test`, `api.foo.test`) reverse-proxy to port 2000 -
+no extra commands.
+
+To point one subdomain at a different service, register it with a dotted name:
+
+```
+caddy_shack register bar.foo --port 3000
+# bar.foo.test now serves port 3000; the rest of *.foo.test still serves 2000
+```
+
+The explicit subdomain always wins over the parent's wildcard.
+
 ### Listing and deregistering
 
 ```
 caddy_shack list           # tabular; --json for scripts
-caddy_shack deregister myapp
+caddy_shack deregister myapp            # removes myapp and its *.myapp.test wildcard
+caddy_shack deregister myapp --cascade  # also removes subdomain overrides (e.g. bar.myapp)
 ```
 
 `deregister` is idempotent: unknown names exit 0 with a `no such backend`
 note on stderr.
+
+By default, deregistering a parent leaves any explicitly-registered subdomain
+backends in place and notes how many remain on stderr. `--cascade` removes them
+too.
 
 ### Exit codes
 

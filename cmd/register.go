@@ -20,7 +20,13 @@ service listening on the given host port.
 Caddy itself runs in a container; this command always routes through
 host.docker.internal, so all you supply is the port your service listens on
 locally. Whether your service binds 127.0.0.1, 0.0.0.0, or localhost on the
-host doesn't matter - the port is what we need.`,
+host doesn't matter - the port is what we need.
+
+Subdomains: registering a backend automatically serves every subdomain of
+its domain from the same upstream, so "register foo --port 2000" makes
+foo.test and *.foo.test (bar.foo.test, etc.) all reach port 2000. To send one
+subdomain elsewhere, register it explicitly with a dotted name:
+"register bar.foo --port 3000".`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := app.New()
