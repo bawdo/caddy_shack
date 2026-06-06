@@ -1,26 +1,19 @@
 {
-  "admin": {
-    "listen": "0.0.0.0:2019"
-  },
+  "admin": { "listen": "0.0.0.0:2019" },
   "apps": {
     "http": {
       "servers": {
         "srv0": {
           "listen": [":443"],
           "routes": [],
-          "automatic_https": {
-            "disable_redirects": false
-          }
+          "automatic_https": { "disable_redirects": false }
         }
       }
     },
     "tls": {
       "automation": {
         "policies": [
-          {
-            "subjects": ["*.test"],
-            "issuers": [{"module": "internal"}]
-          }
+          { "subjects": [], "issuers": [{ "module": "internal" }] }
         ]
       }
     }

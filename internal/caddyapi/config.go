@@ -73,17 +73,45 @@ func Build(s *state.State) []byte {
 	}
 	sort.Strings(domains)
 
-	routes := make([]route, 0, len(domains))
+	// Each backend yields an exact route (D) and a wildcard route (*.D) to
+	// the same upstream. All exact routes are emitted before all wildcard
+	// routes: a Caddy `*` matches exactly one label, so a request like
+	// bar.foo.test matches both the exact bar.foo.test route and the
+	// *.foo.test wildcard. reverse_proxy is terminal, so ordering every
+	// exact ahead of every wildcard guarantees an explicit override wins.
+	exactRoutes := make([]route, 0, len(domains))
+	wildcardRoutes := make([]route, 0, len(domains))
+	subjectSet := make(map[string]struct{}, len(domains)*2)
 	for _, d := range domains {
 		b := byDomain[d]
-		routes = append(routes, route{
+		wildcard := "*." + d
+		exactRoutes = append(exactRoutes, route{
 			Match: []match{{Host: []string{d}}},
 			Handle: []handler{{
 				Handler:   "reverse_proxy",
 				Upstreams: []upstream{{Dial: b.Upstream}},
 			}},
 		})
+		wildcardRoutes = append(wildcardRoutes, route{
+			Match: []match{{Host: []string{wildcard}}},
+			Handle: []handler{{
+				Handler:   "reverse_proxy",
+				Upstreams: []upstream{{Dial: b.Upstream}},
+			}},
+		})
+		subjectSet[d] = struct{}{}
+		subjectSet[wildcard] = struct{}{}
 	}
+	routes := append(exactRoutes, wildcardRoutes...)
+
+	// TLS subjects are derived from the registered names, not a static
+	// *.test: a single-label wildcard can't cover bar.foo.test or a
+	// *.foo.test wildcard cert. We mint certs only for names actually in use.
+	subjects := make([]string, 0, len(subjectSet))
+	for subj := range subjectSet {
+		subjects = append(subjects, subj)
+	}
+	sort.Strings(subjects)
 
 	cfg := config{
 		Admin: adminConfig{Listen: "0.0.0.0:2019"},
@@ -100,7 +128,7 @@ func Build(s *state.State) []byte {
 			TLS: tlsApp{
 				Automation: automation{
 					Policies: []policy{{
-						Subjects: []string{"*.test"},
+						Subjects: subjects,
 						Issuers:  []issuer{{Module: "internal"}},
 					}},
 				},

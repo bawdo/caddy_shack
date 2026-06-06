@@ -1,7 +1,5 @@
 {
-  "admin": {
-    "listen": "0.0.0.0:2019"
-  },
+  "admin": { "listen": "0.0.0.0:2019" },
   "apps": {
     "http": {
       "servers": {
@@ -9,27 +7,23 @@
           "listen": [":443"],
           "routes": [
             {
-              "match": [{"host": ["api.test"]}],
-              "handle": [
-                {
-                  "handler": "reverse_proxy",
-                  "upstreams": [{"dial": "127.0.0.1:4000"}]
-                }
-              ]
+              "match": [{ "host": ["api.test"] }],
+              "handle": [{ "handler": "reverse_proxy", "upstreams": [{ "dial": "127.0.0.1:4000" }] }]
             },
             {
-              "match": [{"host": ["web.test"]}],
-              "handle": [
-                {
-                  "handler": "reverse_proxy",
-                  "upstreams": [{"dial": "127.0.0.1:3000"}]
-                }
-              ]
+              "match": [{ "host": ["web.test"] }],
+              "handle": [{ "handler": "reverse_proxy", "upstreams": [{ "dial": "127.0.0.1:3000" }] }]
+            },
+            {
+              "match": [{ "host": ["*.api.test"] }],
+              "handle": [{ "handler": "reverse_proxy", "upstreams": [{ "dial": "127.0.0.1:4000" }] }]
+            },
+            {
+              "match": [{ "host": ["*.web.test"] }],
+              "handle": [{ "handler": "reverse_proxy", "upstreams": [{ "dial": "127.0.0.1:3000" }] }]
             }
           ],
-          "automatic_https": {
-            "disable_redirects": false
-          }
+          "automatic_https": { "disable_redirects": false }
         }
       }
     },
@@ -37,8 +31,8 @@
       "automation": {
         "policies": [
           {
-            "subjects": ["*.test"],
-            "issuers": [{"module": "internal"}]
+            "subjects": ["*.api.test", "*.web.test", "api.test", "web.test"],
+            "issuers": [{ "module": "internal" }]
           }
         ]
       }
