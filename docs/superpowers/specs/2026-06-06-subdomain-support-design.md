@@ -181,8 +181,13 @@ unchanged.
   a TLS check that the wildcard certificate is actually served; this is where
   the Caddy internal-CA caveat is verified for real.
 
-## Open question
+## Open question (resolved)
 
 - Whether the internal CA issues `*.<domain>` wildcard certs cleanly, or
-  whether on-demand TLS is needed instead (see TLS section). Resolved during
-  implementation against a running container.
+  whether on-demand TLS is needed instead (see TLS section).
+- **Resolved:** the internal CA serves `*.foo.test` wildcard certs cleanly. The
+  `TestSubdomainE2EWildcardAndOverride` integration test hits `random.foo.test`,
+  `foo.test`, and the `bar.foo.test` override over HTTPS against a real Caddy
+  container and all succeed with no TLS handshake errors. On-demand TLS was not
+  needed; the derived `{D, *.D}` subject list with the internal issuer is
+  sufficient.
