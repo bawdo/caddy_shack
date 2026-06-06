@@ -65,4 +65,3 @@ func TestRegisterIsSerialisedByFileLock(t *testing.T) {
 		t.Errorf("backends: got %d want %d (lock dropped writes)", len(s.Backends), n)
 	}
 }
-
