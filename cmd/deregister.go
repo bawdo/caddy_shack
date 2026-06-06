@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -29,26 +30,31 @@ under the named one.`,
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-			errOut := cmd.ErrOrStderr()
-
-			for _, child := range res.Cascaded {
-				_, _ = fmt.Fprintln(out, "deregistered:", child)
-			}
-			if res.Removed {
-				_, _ = fmt.Fprintln(out, "deregistered:", args[0])
-				if len(res.ChildrenLeft) > 0 {
-					_, _ = fmt.Fprintf(errOut,
-						"%d subdomain backend(s) still registered under %s (use --cascade to remove)\n",
-						len(res.ChildrenLeft), res.ParentDomain)
-				}
-			} else if len(res.Cascaded) == 0 {
-				_, _ = fmt.Fprintln(errOut, "no such backend:", args[0])
-			}
+			renderDeregister(cmd.OutOrStdout(), cmd.ErrOrStderr(), args[0], res)
 			return nil
 		},
 	}
 	c.Flags().BoolVar(&cascade, "cascade", false,
 		"Also remove subdomain backends registered under <name>")
 	return c
+}
+
+// renderDeregister writes the human-facing outcome of a deregister: success
+// lines (removed backend and any cascaded children) to out, and warnings or
+// not-found notices to errOut. Extracted from RunE so the messaging can be
+// tested without spinning up a real App.
+func renderDeregister(out, errOut io.Writer, name string, res app.DeregisterResult) {
+	for _, child := range res.Cascaded {
+		_, _ = fmt.Fprintln(out, "deregistered:", child)
+	}
+	if res.Removed {
+		_, _ = fmt.Fprintln(out, "deregistered:", name)
+		if len(res.ChildrenLeft) > 0 {
+			_, _ = fmt.Fprintf(errOut,
+				"%d subdomain backend(s) still registered under %s (use --cascade to remove)\n",
+				len(res.ChildrenLeft), res.ParentDomain)
+		}
+	} else if len(res.Cascaded) == 0 {
+		_, _ = fmt.Fprintln(errOut, "no such backend:", name)
+	}
 }
