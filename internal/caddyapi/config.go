@@ -81,7 +81,6 @@ func Build(s *state.State) []byte {
 	// exact ahead of every wildcard guarantees an explicit override wins.
 	exactRoutes := make([]route, 0, len(domains))
 	wildcardRoutes := make([]route, 0, len(domains))
-	subjectSet := make(map[string]struct{}, len(domains)*2)
 	for _, d := range domains {
 		b := byDomain[d]
 		wildcard := "*." + d
@@ -99,17 +98,15 @@ func Build(s *state.State) []byte {
 				Upstreams: []upstream{{Dial: b.Upstream}},
 			}},
 		})
-		subjectSet[d] = struct{}{}
-		subjectSet[wildcard] = struct{}{}
 	}
-	routes := append(exactRoutes, wildcardRoutes...)
+	routes := append(exactRoutes[:len(exactRoutes):len(exactRoutes)], wildcardRoutes...)
 
 	// TLS subjects are derived from the registered names, not a static
 	// *.test: a single-label wildcard can't cover bar.foo.test or a
 	// *.foo.test wildcard cert. We mint certs only for names actually in use.
-	subjects := make([]string, 0, len(subjectSet))
-	for subj := range subjectSet {
-		subjects = append(subjects, subj)
+	subjects := make([]string, 0, len(domains)*2)
+	for _, d := range domains {
+		subjects = append(subjects, d, "*."+d)
 	}
 	sort.Strings(subjects)
 
