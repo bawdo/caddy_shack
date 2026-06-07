@@ -24,7 +24,10 @@ func (a *App) Start() error {
 		if err := a.docker.Start(CaddyContainerName); err != nil {
 			return err
 		}
-		return a.ensureSharedNetwork()
+		if err := a.ensureSharedNetwork(); err != nil {
+			return fmt.Errorf("attach shared network: %w", err)
+		}
+		return nil
 	}
 	return nil
 }

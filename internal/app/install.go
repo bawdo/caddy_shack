@@ -27,7 +27,10 @@ func (a *App) Install() error {
 		if err := a.docker.Start(CaddyContainerName); err != nil {
 			return err
 		}
-		return a.ensureSharedNetwork()
+		if err := a.ensureSharedNetwork(); err != nil {
+			return fmt.Errorf("attach shared network: %w", err)
+		}
+		return nil
 	case docker.StateAbsent:
 		// fall through
 	}
