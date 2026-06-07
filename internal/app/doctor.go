@@ -146,6 +146,7 @@ func (a *App) buildCheckList(opts DoctorOptions) []func(context.Context) CheckRe
 		func(ctx context.Context) CheckResult { return checkDockerDaemon(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkPortAvailability(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkContainerHealth(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkSharedNetwork(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkDNS(ctx, a, sh, tty) },
 		func(ctx context.Context) CheckResult { return checkTrustStore(ctx, a, sh, tty) },
 		func(ctx context.Context) CheckResult { return checkStateIntegrity(ctx, a) },

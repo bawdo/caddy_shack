@@ -322,6 +322,60 @@ func applyTrustStoreFix(ctx context.Context, tty shellExecutor, cert []byte) err
 	return nil
 }
 
+func checkSharedNetwork(_ context.Context, a *App) CheckResult {
+	if err := a.docker.DaemonReachable(); err != nil {
+		return CheckResult{Name: "shared-network", Status: SeveritySkip, Summary: "docker daemon unreachable"}
+	}
+	cstate, _ := a.docker.ContainerState(CaddyContainerName)
+	if cstate != docker.StateRunning {
+		return CheckResult{Name: "shared-network", Status: SeveritySkip, Summary: "container not running"}
+	}
+	st, err := state.Load(a.paths.StatePath)
+	if err != nil {
+		return CheckResult{Name: "shared-network", Status: SeveritySkip, Summary: "state unreadable; covered by state-integrity"}
+	}
+	containerBackends := 0
+	for _, b := range st.Backends {
+		host, _, err := net.SplitHostPort(b.Upstream)
+		if err == nil && host != UpstreamHost {
+			containerBackends++
+		}
+	}
+	if containerBackends == 0 {
+		return CheckResult{
+			Name:    "shared-network",
+			Status:  SeverityPass,
+			Summary: "no container-mode backends; shared network not required",
+		}
+	}
+	attached, err := a.docker.NetworkAttached(CaddyNetworkName, CaddyContainerName)
+	if err != nil {
+		return CheckResult{
+			Name:    "shared-network",
+			Status:  SeverityWarn,
+			Summary: "cannot inspect container networks",
+			Detail:  []string{err.Error()},
+		}
+	}
+	if attached {
+		return CheckResult{
+			Name:    "shared-network",
+			Status:  SeverityPass,
+			Summary: fmt.Sprintf("caddy attached to %q (%d container-mode backend(s))", CaddyNetworkName, containerBackends),
+		}
+	}
+	return CheckResult{
+		Name:    "shared-network",
+		Status:  SeverityFail,
+		Summary: fmt.Sprintf("caddy not attached to %q but %d container-mode backend(s) need it", CaddyNetworkName, containerBackends),
+		Detail:  []string{"container-mode (--container) registrations are unreachable until caddy joins this network"},
+		Fix: &FixAction{
+			Label: "create and attach shared network ('docker network connect " + CaddyNetworkName + " " + CaddyContainerName + "')",
+			Apply: func(_ context.Context) error { return a.ensureSharedNetwork() },
+		},
+	}
+}
+
 func checkStateIntegrity(_ context.Context, a *App) CheckResult {
 	if _, err := state.Load(a.paths.StatePath); err != nil {
 		if state.IsCorrupt(err) {
