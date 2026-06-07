@@ -62,6 +62,15 @@ type Client interface {
 	// combined stdout/stderr bytes. Returns an error if the container is
 	// not running or the command exits non-zero.
 	Exec(ctx context.Context, name string, argv []string) ([]byte, error)
+	// EnsureNetwork creates the named user-defined bridge network if it
+	// does not exist. Idempotent: an already-existing network is success.
+	EnsureNetwork(name string) error
+	// ConnectNetwork attaches the named container to the named network.
+	// Idempotent: an already-attached container is success.
+	ConnectNetwork(network, container string) error
+	// NetworkAttached reports whether the named container is attached to
+	// the named network. Returns (false, nil) if the container is absent.
+	NetworkAttached(network, container string) (bool, error)
 }
 
 // ContainerSpec describes the CaddyShack container CreateAndStart should run.

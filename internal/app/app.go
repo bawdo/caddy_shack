@@ -19,6 +19,12 @@ const CaddyDataVolume = "caddy_shack_data"
 // CaddyConfigVolume holds Caddy's autosaved config.
 const CaddyConfigVolume = "caddy_shack_config"
 
+// CaddyNetworkName is the shared user-defined Docker network that
+// container-mode backends are reached over. The caddy container is attached
+// to it so it can resolve app containers by their network alias. Host-mode
+// (--port) backends never use it.
+const CaddyNetworkName = "caddy_shack"
+
 // App is the orchestrator that backs every CLI command.
 type App struct {
 	paths  Paths

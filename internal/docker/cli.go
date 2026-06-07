@@ -3,6 +3,7 @@ package docker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -123,4 +124,52 @@ func (CLI) Exec(ctx context.Context, name string, argv []string) ([]byte, error)
 		return out, fmt.Errorf("docker exec %s %v: %w: %s", name, argv, err, out)
 	}
 	return out, nil
+}
+
+func (CLI) EnsureNetwork(name string) error {
+	cmd := exec.Command("docker", "network", "create", name)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// `docker network create` errors if the network already exists;
+		// treat that as success so the call is idempotent.
+		if strings.Contains(strings.ToLower(string(out)), "already exists") {
+			return nil
+		}
+		return fmt.Errorf("docker network create %s: %w: %s", name, err, out)
+	}
+	return nil
+}
+
+func (CLI) ConnectNetwork(network, container string) error {
+	cmd := exec.Command("docker", "network", "connect", network, container)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		low := strings.ToLower(string(out))
+		// Already attached: docker reports "endpoint with name <c> already
+		// exists in network <n>". Treat as success (idempotent).
+		if strings.Contains(low, "already exists in network") ||
+			strings.Contains(low, "already in network") {
+			return nil
+		}
+		return fmt.Errorf("docker network connect %s %s: %w: %s", network, container, err, out)
+	}
+	return nil
+}
+
+func (CLI) NetworkAttached(network, container string) (bool, error) {
+	cmd := exec.Command("docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", container)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && strings.Contains(strings.ToLower(stderr.String()), "no such object") {
+			return false, nil
+		}
+		return false, fmt.Errorf("docker inspect %s networks: %w: %s", container, err, stderr.String())
+	}
+	var nets map[string]json.RawMessage
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &nets); err != nil {
+		return false, fmt.Errorf("parse networks for %s: %w", container, err)
+	}
+	_, ok := nets[network]
+	return ok, nil
 }
