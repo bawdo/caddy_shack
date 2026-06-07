@@ -24,7 +24,10 @@ func (a *App) Install() error {
 	case docker.StateRunning:
 		return nil
 	case docker.StateStopped:
-		return a.docker.Start(CaddyContainerName)
+		if err := a.docker.Start(CaddyContainerName); err != nil {
+			return err
+		}
+		return a.ensureSharedNetwork()
 	case docker.StateAbsent:
 		// fall through
 	}
@@ -74,6 +77,9 @@ func (a *App) Install() error {
 				"Underlying error: %w", err)
 		}
 		return err
+	}
+	if err := a.ensureSharedNetwork(); err != nil {
+		return fmt.Errorf("attach shared network: %w", err)
 	}
 	return nil
 }

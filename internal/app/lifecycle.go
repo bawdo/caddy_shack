@@ -21,7 +21,10 @@ func (a *App) Start() error {
 	case docker.StateRunning:
 		return nil
 	case docker.StateStopped:
-		return a.docker.Start(CaddyContainerName)
+		if err := a.docker.Start(CaddyContainerName); err != nil {
+			return err
+		}
+		return a.ensureSharedNetwork()
 	}
 	return nil
 }
