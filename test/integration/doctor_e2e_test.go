@@ -103,6 +103,11 @@ func (stoppedDocker) Remove(string) error                          { return nil 
 func (stoppedDocker) Exec(context.Context, string, []string) ([]byte, error) {
 	return nil, nil
 }
+func (stoppedDocker) EnsureNetwork(string) error          { return nil }
+func (stoppedDocker) ConnectNetwork(string, string) error { return nil }
+func (stoppedDocker) NetworkAttached(string, string) (bool, error) {
+	return false, nil
+}
 
 // execOnlyDocker is a docker.Client that only implements Exec against a
 // real container; the other methods always report "running" for the App's
@@ -123,6 +128,12 @@ func (execOnlyDocker) Remove(string) error                          { return nil
 func (e execOnlyDocker) Exec(ctx context.Context, _ string, argv []string) ([]byte, error) {
 	args := append([]string{"exec", e.container}, argv...)
 	return exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+}
+
+func (execOnlyDocker) EnsureNetwork(string) error          { return nil }
+func (execOnlyDocker) ConnectNetwork(string, string) error { return nil }
+func (execOnlyDocker) NetworkAttached(string, string) (bool, error) {
+	return true, nil
 }
 
 func TestDoctorBackendsFailWhenUpstreamDead(t *testing.T) {
