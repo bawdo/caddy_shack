@@ -30,9 +30,9 @@ type Fake struct {
 	Networks           map[string]bool
 	NetworkConnections map[string]bool // key: "<network>:<container>"
 
-	EnsureNetworkErr    error
-	ConnectNetworkErr   error
-	NetworkAttachedErr  error
+	EnsureNetworkErr   error
+	ConnectNetworkErr  error
+	NetworkAttachedErr error
 }
 
 // NewFake returns a Fake with empty maps and a reachable daemon.

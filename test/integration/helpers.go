@@ -92,8 +92,8 @@ func (fakeRunningDocker) Exec(context.Context, string, []string) ([]byte, error)
 // routing own the network lifecycle themselves (attaching their throwaway
 // caddy container directly via `docker run --network`), so App should not try
 // to touch docker networking through this stub.
-func (fakeRunningDocker) EnsureNetwork(string) error             { return nil }
-func (fakeRunningDocker) ConnectNetwork(string, string) error    { return nil }
+func (fakeRunningDocker) EnsureNetwork(string) error          { return nil }
+func (fakeRunningDocker) ConnectNetwork(string, string) error { return nil }
 func (fakeRunningDocker) NetworkAttached(string, string) (bool, error) {
 	return true, nil
 }
