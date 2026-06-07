@@ -30,8 +30,9 @@ type Fake struct {
 	Networks           map[string]bool
 	NetworkConnections map[string]bool // key: "<network>:<container>"
 
-	EnsureNetworkErr  error
-	ConnectNetworkErr error
+	EnsureNetworkErr    error
+	ConnectNetworkErr   error
+	NetworkAttachedErr  error
 }
 
 // NewFake returns a Fake with empty maps and a reachable daemon.
@@ -156,6 +157,9 @@ func (f *Fake) ConnectNetwork(network, container string) error {
 }
 
 func (f *Fake) NetworkAttached(network, container string) (bool, error) {
+	if f.NetworkAttachedErr != nil {
+		return false, f.NetworkAttachedErr
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.NetworkConnections[network+":"+container], nil

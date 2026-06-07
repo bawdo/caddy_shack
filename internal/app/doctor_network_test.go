@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -72,5 +73,21 @@ func TestSharedNetworkSkippedWhenContainerNotRunning(t *testing.T) {
 	r := checkSharedNetwork(context.Background(), a)
 	if r.Status != SeveritySkip {
 		t.Fatalf("status: got %v want skip", r.Status)
+	}
+}
+
+func TestSharedNetworkWarnsWhenInspectFails(t *testing.T) {
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	fake.NetworkAttachedErr = errors.New("inspect boom")
+	a := netDoctorApp(t, fake, map[string]state.Backend{
+		"app": {Domain: "app.test", Upstream: "app:3000"},
+	})
+	r := checkSharedNetwork(context.Background(), a)
+	if r.Status != SeverityWarn {
+		t.Fatalf("status: got %v want warn (%s)", r.Status, r.Summary)
+	}
+	if len(r.Detail) == 0 {
+		t.Error("expected non-empty Detail describing the inspect failure")
 	}
 }
