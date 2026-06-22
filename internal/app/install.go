@@ -7,6 +7,36 @@ import (
 	"github.com/bawdo/caddy_shack/internal/docker"
 )
 
+// caddyContainerSpec returns the ContainerSpec for the managed Caddy
+// container running the given image. Shared by install and upgrade so the
+// two cannot drift.
+func caddyContainerSpec(image string) docker.ContainerSpec {
+	return docker.ContainerSpec{
+		Name:  CaddyContainerName,
+		Image: image,
+		PortMappings: []docker.PortMapping{
+			{HostAddr: "127.0.0.1", HostPort: 80, ContainerPort: 80},
+			{HostAddr: "127.0.0.1", HostPort: 443, ContainerPort: 443},
+			{HostAddr: "127.0.0.1", HostPort: 2019, ContainerPort: 2019},
+		},
+		Volumes: []docker.VolumeMount{
+			{VolumeName: CaddyDataVolume, ContainerPath: "/data"},
+			{VolumeName: CaddyConfigVolume, ContainerPath: "/config"},
+		},
+		// Write a minimal Caddyfile that binds the admin endpoint to
+		// 0.0.0.0:2019 so the host port-forward can reach it (caddy:2's
+		// default binds admin to localhost:2019, invisible from outside the
+		// container). First `register` swaps the whole config via POST /load,
+		// so the Caddyfile contents don't matter beyond bootstrapping the
+		// admin listener.
+		Command: []string{
+			"sh", "-c",
+			"printf '{\\n\\tadmin 0.0.0.0:2019\\n}\\n' > /etc/caddy/Caddyfile && " +
+				"exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile",
+		},
+	}
+}
+
 // Install ensures Caddy is installed and running. Idempotent: a no-op if
 // the container is already running; starts it if stopped; creates from
 // scratch if absent.
@@ -44,30 +74,7 @@ func (a *App) Install() error {
 	if err := a.docker.PullImage(CaddyImage); err != nil {
 		return err
 	}
-	spec := docker.ContainerSpec{
-		Name:  CaddyContainerName,
-		Image: CaddyImage,
-		PortMappings: []docker.PortMapping{
-			{HostAddr: "127.0.0.1", HostPort: 80, ContainerPort: 80},
-			{HostAddr: "127.0.0.1", HostPort: 443, ContainerPort: 443},
-			{HostAddr: "127.0.0.1", HostPort: 2019, ContainerPort: 2019},
-		},
-		Volumes: []docker.VolumeMount{
-			{VolumeName: CaddyDataVolume, ContainerPath: "/data"},
-			{VolumeName: CaddyConfigVolume, ContainerPath: "/config"},
-		},
-		// Write a minimal Caddyfile that binds the admin endpoint to
-		// 0.0.0.0:2019 so the host port-forward can reach it (caddy:2's
-		// default binds admin to localhost:2019, invisible from outside the
-		// container). First `register` swaps the whole config via POST /load,
-		// so the Caddyfile contents don't matter beyond bootstrapping the
-		// admin listener.
-		Command: []string{
-			"sh", "-c",
-			"printf '{\\n\\tadmin 0.0.0.0:2019\\n}\\n' > /etc/caddy/Caddyfile && " +
-				"exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile",
-		},
-	}
+	spec := caddyContainerSpec(CaddyImage)
 	if err := a.docker.CreateAndStart(spec); err != nil {
 		// Roll back the half-created container so a retry has a clean slate.
 		// Ignoring the Remove error: the user already has a more useful error
