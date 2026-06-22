@@ -56,6 +56,7 @@ full design.`,
 	root.AddCommand(newStartCmd())
 	root.AddCommand(newStopCmd())
 	root.AddCommand(newRestartCmd())
+	root.AddCommand(newUpgradeCmd())
 	root.AddCommand(newRegisterCmd())
 	root.AddCommand(newDeregisterCmd())
 	root.AddCommand(newListCmd())
