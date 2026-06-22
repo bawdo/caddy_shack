@@ -154,6 +154,28 @@ func (CLI) ConnectNetwork(network, container string) error {
 	return nil
 }
 
+func (CLI) ImageID(ref string) (string, error) {
+	cmd := exec.Command("docker", "image", "inspect", "--format", "{{.Id}}", ref)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("docker image inspect %s: %w: %s", ref, err, stderr.String())
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+func (CLI) ContainerImageID(name string) (string, error) {
+	cmd := exec.Command("docker", "inspect", "--format", "{{.Image}}", name)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("docker inspect %s image: %w: %s", name, err, stderr.String())
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
 func (CLI) NetworkAttached(network, container string) (bool, error) {
 	cmd := exec.Command("docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", container)
 	var stdout, stderr bytes.Buffer

@@ -71,6 +71,12 @@ type Client interface {
 	// NetworkAttached reports whether the named container is attached to
 	// the named network. Returns (false, nil) if the container is absent.
 	NetworkAttached(network, container string) (bool, error)
+	// ImageID returns the local image ID (e.g. "sha256:...") for ref.
+	// Errors if the image is not present locally.
+	ImageID(ref string) (string, error)
+	// ContainerImageID returns the image ID the named container was created
+	// from. Works against stopped containers.
+	ContainerImageID(name string) (string, error)
 }
 
 // ContainerSpec describes the CaddyShack container CreateAndStart should run.

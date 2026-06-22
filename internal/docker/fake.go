@@ -33,6 +33,11 @@ type Fake struct {
 	EnsureNetworkErr   error
 	ConnectNetworkErr  error
 	NetworkAttachedErr error
+
+	ImageIDs            map[string]string // ref -> image id
+	ContainerImageIDs   map[string]string // container -> image id
+	ImageIDErr          error
+	ContainerImageIDErr error
 }
 
 // NewFake returns a Fake with empty maps and a reachable daemon.
@@ -44,6 +49,8 @@ func NewFake() *Fake {
 		ExecResponses:      map[string]ExecResponse{},
 		Networks:           map[string]bool{},
 		NetworkConnections: map[string]bool{},
+		ImageIDs:           map[string]string{},
+		ContainerImageIDs:  map[string]string{},
 	}
 }
 
@@ -154,6 +161,24 @@ func (f *Fake) ConnectNetwork(network, container string) error {
 	defer f.mu.Unlock()
 	f.NetworkConnections[network+":"+container] = true
 	return nil
+}
+
+func (f *Fake) ImageID(ref string) (string, error) {
+	if f.ImageIDErr != nil {
+		return "", f.ImageIDErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ImageIDs[ref], nil
+}
+
+func (f *Fake) ContainerImageID(name string) (string, error) {
+	if f.ContainerImageIDErr != nil {
+		return "", f.ContainerImageIDErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ContainerImageIDs[name], nil
 }
 
 func (f *Fake) NetworkAttached(network, container string) (bool, error) {

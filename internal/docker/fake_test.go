@@ -39,3 +39,27 @@ func TestFakeExecUnknownReturnsError(t *testing.T) {
 		t.Fatal("expected error for unscripted command")
 	}
 }
+
+func TestFakeImageIDReturnsConfiguredValue(t *testing.T) {
+	f := NewFake()
+	f.ImageIDs["caddy:2"] = "sha256:abc"
+	id, err := f.ImageID("caddy:2")
+	if err != nil {
+		t.Fatalf("ImageID: %v", err)
+	}
+	if id != "sha256:abc" {
+		t.Errorf("ImageID: got %q want %q", id, "sha256:abc")
+	}
+}
+
+func TestFakeContainerImageIDReturnsConfiguredValue(t *testing.T) {
+	f := NewFake()
+	f.ContainerImageIDs["caddy_shack"] = "sha256:def"
+	id, err := f.ContainerImageID("caddy_shack")
+	if err != nil {
+		t.Fatalf("ContainerImageID: %v", err)
+	}
+	if id != "sha256:def" {
+		t.Errorf("ContainerImageID: got %q want %q", id, "sha256:def")
+	}
+}
