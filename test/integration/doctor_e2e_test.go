@@ -108,6 +108,8 @@ func (stoppedDocker) ConnectNetwork(string, string) error { return nil }
 func (stoppedDocker) NetworkAttached(string, string) (bool, error) {
 	return false, nil
 }
+func (stoppedDocker) ImageID(string) (string, error)          { return "", nil }
+func (stoppedDocker) ContainerImageID(string) (string, error) { return "", nil }
 
 // execOnlyDocker is a docker.Client that only implements Exec against a
 // real container; the other methods always report "running" for the App's
@@ -135,6 +137,8 @@ func (execOnlyDocker) ConnectNetwork(string, string) error { return nil }
 func (execOnlyDocker) NetworkAttached(string, string) (bool, error) {
 	return true, nil
 }
+func (execOnlyDocker) ImageID(string) (string, error)          { return "", nil }
+func (execOnlyDocker) ContainerImageID(string) (string, error) { return "", nil }
 
 func TestDoctorBackendsFailWhenUpstreamDead(t *testing.T) {
 	SkipUnlessDocker(t)

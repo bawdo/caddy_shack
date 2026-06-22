@@ -97,3 +97,5 @@ func (fakeRunningDocker) ConnectNetwork(string, string) error { return nil }
 func (fakeRunningDocker) NetworkAttached(string, string) (bool, error) {
 	return true, nil
 }
+func (fakeRunningDocker) ImageID(string) (string, error)          { return "", nil }
+func (fakeRunningDocker) ContainerImageID(string) (string, error) { return "", nil }
