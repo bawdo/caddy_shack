@@ -15,8 +15,7 @@ This is a helpful wrapper around the Caddy API that helps do things like:
 - Report container and admin-API health (`caddy_shack status`)
 
 CaddyShack also simplifies installing Caddy (via Docker), keeping it running,
-and checking on its status. Updating the image without losing configuration
-is planned for a later phase.
+upgrading it without losing configuration, and checking on its status.
 
 CaddyShack only manages the locally running caddy server via the API.
 
@@ -85,8 +84,14 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 caddy_shack start      # idempotent; errors if not installed
 caddy_shack stop       # no-op when already stopped
 caddy_shack restart
+caddy_shack upgrade    # re-pull caddy:2; recreate only if the image changed
 caddy_shack status     # --json for scripts; exit 0 healthy, exit 1 unhealthy
 ```
+
+`upgrade` re-pulls the `caddy:2` image and, if the digest changed, recreates
+the container against it. Both named volumes are preserved, so certificates
+and ACME state survive, and registered backends are restored from state so
+every `.test` URL keeps working. It is a no-op when already current.
 
 ### Registering a backend
 
