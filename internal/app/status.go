@@ -14,6 +14,9 @@ type StatusReport struct {
 	AdminReachable bool   `json:"admin_reachable"`
 	BackendCount   int    `json:"backend_count"`
 	Healthy        bool   `json:"healthy"`
+	// CaddyVersion is the running Caddy version (e.g. "v2.8.4"). Empty when
+	// the container is not running or the probe was unavailable.
+	CaddyVersion string `json:"caddy_version,omitempty"`
 }
 
 // Status reports container state, admin API reachability, and backend
@@ -43,6 +46,11 @@ func (a *App) Status(ctx context.Context) (StatusReport, error) {
 	}
 
 	rep.AdminReachable = a.caddy.Reachable(ctx)
+
+	// Best-effort version probe; only meaningful while the container runs.
+	if rep.ContainerState == docker.StateRunning.String() {
+		rep.CaddyVersion = a.caddyVersion(ctx)
+	}
 
 	if s, err := state.Load(a.paths.StatePath); err != nil {
 		if state.IsCorrupt(err) && priorityErr == nil {

@@ -43,6 +43,49 @@ func TestStatusHealthyWhenRunningAndReachable(t *testing.T) {
 	}
 }
 
+func TestStatusReportsCaddyVersionWhenRunning(t *testing.T) {
+	dir := t.TempDir()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+	fakeDock := docker.NewFake()
+	fakeDock.Containers[CaddyContainerName] = docker.StateRunning
+	fakeDock.ExecResponses["caddy_shack:caddy version"] = docker.ExecResponse{
+		Stdout: []byte("v2.8.4 h1:abcdef="),
+	}
+
+	a := NewWithPaths(Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  filepath.Join(dir, "state.json.lock"),
+	}, caddyapi.NewClient(srv.URL, time.Second), fakeDock)
+
+	rep, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if rep.CaddyVersion != "v2.8.4" {
+		t.Errorf("CaddyVersion: got %q want v2.8.4", rep.CaddyVersion)
+	}
+}
+
+func TestStatusOmitsCaddyVersionWhenStopped(t *testing.T) {
+	dir := t.TempDir()
+	fakeDock := docker.NewFake()
+	fakeDock.Containers[CaddyContainerName] = docker.StateStopped
+
+	a := NewWithPaths(Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  filepath.Join(dir, "state.json.lock"),
+	}, caddyapi.NewClient("http://127.0.0.1:1", 200*time.Millisecond), fakeDock)
+
+	rep, _ := a.Status(context.Background())
+	if rep.CaddyVersion != "" {
+		t.Errorf("CaddyVersion: got %q want empty when not running", rep.CaddyVersion)
+	}
+}
+
 func TestStatusUnhealthyWhenContainerStopped(t *testing.T) {
 	dir := t.TempDir()
 	fakeDock := docker.NewFake()
