@@ -3,6 +3,7 @@ package caddyapi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -78,6 +79,38 @@ func (c *Client) GetConfig(ctx context.Context) ([]byte, error) {
 		return body, nil
 	}
 	return nil, &ErrRejected{Status: resp.StatusCode, Body: string(body)}
+}
+
+// CAInfo is the subset of Caddy's /pki/ca/<id> response CaddyShack needs:
+// the PEM-encoded root and intermediate certificates of a CA.
+type CAInfo struct {
+	RootCertificate         string `json:"root_certificate"`
+	IntermediateCertificate string `json:"intermediate_certificate"`
+}
+
+// LocalCA retrieves Caddy's built-in "local" CA (GET /pki/ca/local), the CA
+// that signs certificates for the .test TLD. 2xx returns the parsed CAInfo.
+// Connection errors wrap ErrUnreachable. Non-2xx returns *ErrRejected. Honours
+// ctx so Ctrl+C during a hanging probe exits promptly.
+func (c *Client) LocalCA(ctx context.Context) (CAInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/pki/ca/local", nil)
+	if err != nil {
+		return CAInfo{}, fmt.Errorf("build request: %w", err)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return CAInfo{}, fmt.Errorf("%w: %v", ErrUnreachable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return CAInfo{}, &ErrRejected{Status: resp.StatusCode, Body: string(body)}
+	}
+	var info CAInfo
+	if err := json.Unmarshal(body, &info); err != nil {
+		return CAInfo{}, fmt.Errorf("decode CA info: %w", err)
+	}
+	return info, nil
 }
 
 // Reachable returns true when GET /config/ returns 2xx within the client's

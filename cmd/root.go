@@ -62,6 +62,7 @@ full design.`,
 	root.AddCommand(newListCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newDoctorCmd())
+	root.AddCommand(newCACmd())
 	applyHelpBareword(root)
 	return root
 }

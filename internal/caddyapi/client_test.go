@@ -167,6 +167,61 @@ func TestClientGetConfigErrUnreachable(t *testing.T) {
 	}
 }
 
+func TestClientLocalCAReturnsRootAndIntermediate(t *testing.T) {
+	var gotPath, gotMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"local","root_certificate":"-----BEGIN CERTIFICATE-----\nROOT\n-----END CERTIFICATE-----\n","intermediate_certificate":"-----BEGIN CERTIFICATE-----\nINT\n-----END CERTIFICATE-----\n"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, time.Second)
+	info, err := c.LocalCA(context.Background())
+	if err != nil {
+		t.Fatalf("LocalCA: %v", err)
+	}
+	if gotPath != "/pki/ca/local" {
+		t.Errorf("path: got %q want /pki/ca/local", gotPath)
+	}
+	if gotMethod != http.MethodGet {
+		t.Errorf("method: got %q want GET", gotMethod)
+	}
+	if !strings.Contains(info.RootCertificate, "ROOT") {
+		t.Errorf("RootCertificate: %q", info.RootCertificate)
+	}
+	if !strings.Contains(info.IntermediateCertificate, "INT") {
+		t.Errorf("IntermediateCertificate: %q", info.IntermediateCertificate)
+	}
+}
+
+func TestClientLocalCAErrUnreachable(t *testing.T) {
+	c := NewClient("http://127.0.0.1:1", 200*time.Millisecond)
+	_, err := c.LocalCA(context.Background())
+	if !errors.Is(err, ErrUnreachable) {
+		t.Errorf("expected ErrUnreachable, got %v", err)
+	}
+}
+
+func TestClientLocalCAErrRejectedOnNon2xx(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"unknown CA"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, time.Second)
+	_, err := c.LocalCA(context.Background())
+	var rej *ErrRejected
+	if !errors.As(err, &rej) {
+		t.Fatalf("expected ErrRejected, got %v", err)
+	}
+	if rej.Status != 404 {
+		t.Errorf("status: %d", rej.Status)
+	}
+}
+
 func TestClientGetConfigErrRejectedOn5xx(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

@@ -147,6 +147,26 @@ By default, deregistering a parent leaves any explicitly-registered subdomain
 backends in place and notes how many remain on stderr. `--cascade` removes them
 too.
 
+### Trusting the CA (`.test` over HTTPS from other tools/containers)
+
+Caddy signs `*.test` certificates with a local root CA that only caddy_shack
+knows about. Anything that needs to verify `https://*.test` (a distroless
+container that trusts only public CAs, a script, a language runtime) needs that
+root CA in its trust store. `caddy_shack ca` prints it as PEM to stdout, so you
+never have to know the container name or reach into Caddy's internal PKI paths:
+
+```
+caddy_shack ca > root.crt                 # write the root CA to a file
+caddy_shack ca --intermediate             # append the intermediate after the root
+caddy_shack ca | docker exec -i myapp \
+  tee /usr/local/share/ca-certificates/caddy_shack.crt   # seed a container's trust store
+```
+
+Only the PEM goes to stdout (notes and errors go to stderr), so it is safe to
+redirect or pipe. The command reads the CA from the running Caddy admin API, so
+the export always matches what Caddy is actually serving. It returns exit 6 when
+caddy isn't installed and exit 5 when the container isn't running.
+
 ### Exit codes
 
 Stable contract, documented under `caddy_shack --help`:
