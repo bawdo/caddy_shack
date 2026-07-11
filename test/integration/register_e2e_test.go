@@ -129,7 +129,11 @@ func getWithRetry(t *testing.T, client *http.Client, url string, timeout time.Du
 
 func startUpstream(t *testing.T) (*http.Server, string) {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	// Bind all interfaces, not just loopback. Caddy runs in a container and
+	// dials host.docker.internal, which on Linux CI resolves to the Docker
+	// bridge gateway (via --add-host=host-gateway) rather than loopback. A
+	// 127.0.0.1-only listener is unreachable from the bridge and yields 502.
+	l, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		t.Fatal(err)
 	}
