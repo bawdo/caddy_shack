@@ -15,7 +15,7 @@ func newRestartCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return a.Restart()
+			return a.Restart(cmd.Context())
 		},
 	}
 }

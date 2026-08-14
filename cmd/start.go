@@ -15,7 +15,7 @@ func newStartCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return a.Start()
+			return a.Start(cmd.Context())
 		},
 	}
 }

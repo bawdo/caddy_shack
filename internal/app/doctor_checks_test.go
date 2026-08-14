@@ -183,9 +183,19 @@ func TestCheckContainerHealthFailWhenAbsentOffersInstallFix(t *testing.T) {
 }
 
 func TestCheckContainerHealthFailWhenStoppedOffersStartFix(t *testing.T) {
+	// checkContainerHealth itself runs against an unreachable admin API (the
+	// container is stopped, so nothing is listening yet), but applying the
+	// fix starts the container and then restores backends, which needs the
+	// admin API to actually come up.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
 	fake := docker.NewFake()
 	fake.Containers[CaddyContainerName] = docker.StateStopped
-	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+	a := newDoctorApp(t, fake, srv.URL)
 
 	r := checkContainerHealth(context.Background(), a)
 	if r.Status != SeverityFail {
