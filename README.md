@@ -56,6 +56,102 @@ dscacheutil -q host -a name anything.test
 `caddy_shack doctor --fix` will install dnsmasq and write the resolver
 entries for you.
 
+## Omarchy (Linux)
+
+The steps above are macOS-specific: `brew`, `dscacheutil`, and
+`/etc/resolver/` don't exist on Linux. Omarchy has no NetworkManager either,
+so the usual `nmcli`-based dnsmasq guides for Linux don't apply directly.
+Omarchy manages networking with `systemd-networkd` and DNS with
+`systemd-resolved`, configured via drop-ins - the same mechanism Omarchy
+itself uses for its own DNS provider picker (`omarchy-setup-dns`) and for the
+Docker DNS stub listener (`/etc/systemd/resolved.conf.d/20-docker-dns.conf`).
+
+`dnsmasq` is still required - `.test` needs wildcard resolution (`foo.test`,
+`*.foo.test`, any name under the TLD -> `127.0.0.1`), and neither
+`/etc/hosts` nor `systemd-resolved` can synthesize a whole TLD themselves.
+`systemd-resolved` can only *route* queries for a domain to a nameserver; you
+still need a real nameserver answering them, which is what dnsmasq is for.
+
+1. Point dnsmasq at `.test` and stop it from claiming the wildcard address on
+   port 53 (`systemd-resolved`'s stub listener already owns
+   `127.0.0.53:53`/`127.0.0.54:53`, and dnsmasq's default of binding all
+   interfaces collides with that):
+
+   ```
+   sudo mkdir -p /etc/dnsmasq.d
+   echo 'address=/.test/127.0.0.1' | sudo tee /etc/dnsmasq.d/caddy_shack.conf
+
+   sudo sed -i \
+     -e 's/^#conf-dir=\/etc\/dnsmasq.d\/,\*\.conf$/conf-dir=\/etc\/dnsmasq.d\/,*.conf/' \
+     -e 's/^#bind-interfaces$/bind-interfaces/' \
+     /etc/dnsmasq.conf
+
+   sudo systemctl reset-failed dnsmasq   # clears any earlier port-53 failures
+   sudo systemctl enable --now dnsmasq
+   ```
+
+2. Route only `.test` queries to dnsmasq, leaving every other domain on your
+   normal upstream DNS. This is the Omarchy-native equivalent of macOS's
+   `/etc/resolver/test` - a drop-in under
+   `/etc/systemd/resolved.conf.d/`, not a NetworkManager or per-link
+   `systemd-networkd` setting (per-link config on `lo` does not work here;
+   `systemd-resolved` never gives loopback an active query scope):
+
+   ```
+   sudo tee /etc/systemd/resolved.conf.d/30-caddy-shack-test-tld.conf <<'EOF'
+   [Resolve]
+   DNS=127.0.0.1
+   Domains=~test
+   EOF
+
+   sudo systemctl restart systemd-resolved
+   ```
+
+3. Verify:
+
+   ```
+   resolvectl query anything.test
+   # expect: anything.test: 127.0.0.1
+   getent ahosts anything.test
+   # expect: 127.0.0.1 ...
+   ```
+
+   Use `getent ahosts`, not `getent hosts` - the latter has a known hang
+   against the `resolve` NSS module on some systemd versions unrelated to
+   this setup. `curl`, browsers, and everything else that goes through
+   `getaddrinfo(3)` are unaffected.
+
+4. Trust Caddy's internal root CA so HTTPS is warning-free. Omarchy/Arch use
+   `p11-kit`'s `trust` command in place of macOS's `security`:
+
+   ```
+   docker exec caddy_shack cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt
+   sudo trust anchor /tmp/caddy_shack_root.crt
+   ```
+
+   This updates the shared system trust store (`curl`, `wget`, and
+   Chromium-based browsers via NSS/p11-kit all pick it up). Firefox keeps its
+   own certificate store and needs the root imported separately
+   (Settings -> Privacy & Security -> Certificates -> View Certificates ->
+   Import), unless `security.enterprise_roots.enabled` is turned on so it
+   defers to the system store.
+
+`caddy_shack doctor` detects Linux and checks/fixes DNS and CA trust the
+Linux way (`getent`/`resolvectl` and a system CA bundle scan instead of
+`dscacheutil`/`security`), so on Omarchy `doctor` and `doctor --fix` do steps
+1-4 for you rather than reporting a false `FAIL`. The automatic DNS fix only
+supports `systemd-resolved` setups (Omarchy and most modern distros); on
+other DNS stacks it declines and points back at this section.
+
+Known gap on Linux, not fixed by the above:
+
+- `host.docker.internal` (what `caddy_shack register` uses by default to
+  reach services on the host) is a Docker Desktop feature and isn't provided
+  by native Docker Engine on Linux, so host-mode backends won't be reachable
+  from the caddy container out of the box. Use `caddy_shack register <name>
+  --port <port> --container <alias>` and attach your service to the shared
+  `caddy_shack` Docker network instead.
+
 ## Usage
 
 Day-to-day flow. Once-off setup first, then register/deregister per project.
@@ -77,6 +173,9 @@ To get HTTPS without browser warnings, trust Caddy's internal root CA once:
 docker exec caddy_shack cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt
 sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/caddy_shack_root.crt
 ```
+
+(Omarchy/Linux: see [Omarchy (Linux)](#omarchy-linux) for the `trust anchor`
+equivalent.)
 
 ### Container lifecycle
 

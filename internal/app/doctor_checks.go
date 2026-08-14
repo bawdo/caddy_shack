@@ -147,7 +147,7 @@ func dnsmasqConfPaths(ctx context.Context, sh shellExecutor) []string {
 	return []string{"/opt/homebrew/etc/dnsmasq.d", "/usr/local/etc/dnsmasq.d"}
 }
 
-func checkDNS(ctx context.Context, _ *App, sh shellExecutor, tty shellExecutor) CheckResult {
+func checkDNSDarwin(ctx context.Context, _ *App, sh shellExecutor, tty shellExecutor) CheckResult {
 	host := randomTestSubdomain()
 	out, _ := sh(ctx, "dscacheutil", "-q", "host", "-a", "name", host)
 	if strings.Contains(string(out), "127.0.0.1") {
@@ -191,7 +191,7 @@ func checkDNS(ctx context.Context, _ *App, sh shellExecutor, tty shellExecutor) 
 		Label:        "install dnsmasq and write resolver entry for .test",
 		RequiresSudo: true,
 		Apply: func(ctx context.Context) error {
-			return applyDNSFix(ctx, sh, tty)
+			return applyDNSFixDarwin(ctx, sh, tty)
 		},
 	}
 	return CheckResult{
@@ -203,11 +203,11 @@ func checkDNS(ctx context.Context, _ *App, sh shellExecutor, tty shellExecutor) 
 	}
 }
 
-// applyDNSFix runs the brew + sudo commands documented in the README's
-// "local DNS for .test" section. Returns on the first error.
+// applyDNSFixDarwin runs the brew + sudo commands documented in the
+// README's "local DNS for .test" section. Returns on the first error.
 // Non-sudo steps use sh; sudo steps use tty so the password prompt reaches
 // the user's terminal.
-func applyDNSFix(ctx context.Context, sh, tty shellExecutor) error {
+func applyDNSFixDarwin(ctx context.Context, sh, tty shellExecutor) error {
 	type step struct {
 		cmd  []string
 		sudo bool
@@ -232,7 +232,7 @@ func applyDNSFix(ctx context.Context, sh, tty shellExecutor) error {
 	return nil
 }
 
-func checkTrustStore(ctx context.Context, a *App, sh shellExecutor, tty shellExecutor) CheckResult {
+func checkTrustStoreDarwin(ctx context.Context, a *App, sh shellExecutor, tty shellExecutor) CheckResult {
 	state, _ := a.docker.ContainerState(CaddyContainerName)
 	if state != docker.StateRunning {
 		return CheckResult{
@@ -292,13 +292,13 @@ func checkTrustStore(ctx context.Context, a *App, sh shellExecutor, tty shellExe
 			Label:        "trust Caddy root CA in System keychain",
 			RequiresSudo: true,
 			Apply: func(ctx context.Context) error {
-				return applyTrustStoreFix(ctx, tty, cert)
+				return applyTrustStoreFixDarwin(ctx, tty, cert)
 			},
 		},
 	}
 }
 
-func applyTrustStoreFix(ctx context.Context, tty shellExecutor, cert []byte) error {
+func applyTrustStoreFixDarwin(ctx context.Context, tty shellExecutor, cert []byte) error {
 	// Write cert to a temp file the user's sudo can read.
 	tmp, err := os.CreateTemp("", "caddy_shack_root_*.crt")
 	if err != nil {
@@ -320,6 +320,242 @@ func applyTrustStoreFix(ctx context.Context, tty shellExecutor, cert []byte) err
 		return fmt.Errorf("security add-trusted-cert: %w: %s", err, out)
 	}
 	return nil
+}
+
+// Linux paths for the dns-test-tld and trust-store checks. Kept as package
+// vars (not consts) so tests can point them at a scratch directory instead
+// of the real /etc.
+var (
+	linuxDNSMasqCaddyConfPath = "/etc/dnsmasq.d/caddy_shack.conf"
+	linuxResolvedDropinDir    = "/etc/systemd/resolved.conf.d"
+	linuxResolvedDropinPath   = "/etc/systemd/resolved.conf.d/30-caddy-shack-test-tld.conf"
+)
+
+// linuxCABundlePaths are the well-known locations Linux distros write their
+// extracted system CA bundle to. Checked in order; the first that exists is
+// used. Covers Arch/Omarchy and Debian/Ubuntu (ca-certificates.crt) and
+// Fedora/RHEL (ca-bundle.crt / tls-ca-bundle.pem).
+var linuxCABundlePaths = []string{
+	"/etc/ssl/certs/ca-certificates.crt",
+	"/etc/pki/tls/certs/ca-bundle.crt",
+	"/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+	"/etc/ssl/ca-bundle.pem",
+}
+
+// checkDNSLinux is the Linux counterpart of checkDNSDarwin. Linux DNS
+// stacks vary a lot more than macOS's (systemd-resolved, NetworkManager +
+// dnsmasq, plain resolv.conf), so the resolution probe itself goes through
+// getent (the same NSS/getaddrinfo(3) path curl, browsers, and most
+// language runtimes use) rather than a stack-specific tool. The diagnostic
+// sub-probes and the automatic fix are systemd-resolved-specific (Omarchy
+// and most modern distros default to it); on other stacks the fix declines
+// and points at the README's manual steps instead of guessing.
+func checkDNSLinux(ctx context.Context, _ *App, sh shellExecutor, tty shellExecutor) CheckResult {
+	host := randomTestSubdomain()
+	out, _ := sh(ctx, "getent", "ahosts", host)
+	if strings.Contains(string(out), "127.0.0.1") {
+		return CheckResult{
+			Name:    "dns-test-tld",
+			Status:  SeverityPass,
+			Summary: ".test resolves to 127.0.0.1",
+		}
+	}
+
+	var detail []string
+	if _, err := sh(ctx, "sh", "-c", "command -v dnsmasq"); err != nil {
+		detail = append(detail, "dnsmasq: not installed")
+	} else {
+		detail = append(detail, "dnsmasq: installed")
+		if out, err := sh(ctx, "systemctl", "is-active", "dnsmasq"); err != nil || !strings.Contains(string(out), "active") {
+			detail = append(detail, "dnsmasq.service: not active")
+		} else {
+			detail = append(detail, "dnsmasq.service: active")
+		}
+	}
+	if _, err := sh(ctx, "test", "-f", linuxDNSMasqCaddyConfPath); err != nil {
+		detail = append(detail, linuxDNSMasqCaddyConfPath+": missing")
+	}
+	if _, err := sh(ctx, "sh", "-c", "grep -rl 'Domains=.*test' "+linuxResolvedDropinDir+" 2>/dev/null"); err != nil {
+		detail = append(detail, linuxResolvedDropinDir+": no *.test routing domain found")
+	}
+	detail = append(detail,
+		"to fix manually (systemd-resolved, e.g. Omarchy - see README's Omarchy section for other DNS stacks):",
+		"  sudo mkdir -p /etc/dnsmasq.d",
+		"  echo 'address=/.test/127.0.0.1' | sudo tee "+linuxDNSMasqCaddyConfPath,
+		"  sudo sed -i -e 's/^#conf-dir=\\/etc\\/dnsmasq.d\\/,\\*\\.conf$/conf-dir=\\/etc\\/dnsmasq.d\\/,*.conf/' -e 's/^#bind-interfaces$/bind-interfaces/' /etc/dnsmasq.conf",
+		"  sudo systemctl reset-failed dnsmasq; sudo systemctl enable --now dnsmasq",
+		"  printf '[Resolve]\\nDNS=127.0.0.1\\nDomains=~test\\n' | sudo tee "+linuxResolvedDropinPath,
+		"  sudo systemctl restart systemd-resolved",
+	)
+
+	return CheckResult{
+		Name:    "dns-test-tld",
+		Status:  SeverityFail,
+		Summary: ".test does not resolve to 127.0.0.1",
+		Detail:  detail,
+		Fix: &FixAction{
+			Label:        "install dnsmasq and route .test via systemd-resolved",
+			RequiresSudo: true,
+			Apply: func(ctx context.Context) error {
+				return applyDNSFixLinux(ctx, sh, tty)
+			},
+		},
+	}
+}
+
+// applyDNSFixLinux mirrors the steps in the README's Omarchy section. It
+// only supports systemd-resolved setups; it refuses rather than guessing at
+// NetworkManager/nmcli commands for other DNS stacks.
+func applyDNSFixLinux(ctx context.Context, sh, tty shellExecutor) error {
+	if _, err := sh(ctx, "systemctl", "is-active", "systemd-resolved"); err != nil {
+		return fmt.Errorf("systemd-resolved not active: this automatic fix only supports systemd-resolved setups (e.g. Omarchy); see README's Omarchy section for manual steps on other DNS stacks: %w", err)
+	}
+	script := "set -e\n" +
+		"mkdir -p /etc/dnsmasq.d\n" +
+		"echo 'address=/.test/127.0.0.1' > " + linuxDNSMasqCaddyConfPath + "\n" +
+		`sed -i -e 's/^#conf-dir=\/etc\/dnsmasq.d\/,\*\.conf$/conf-dir=\/etc\/dnsmasq.d\/,*.conf/' -e 's/^#bind-interfaces$/bind-interfaces/' /etc/dnsmasq.conf` + "\n" +
+		"systemctl reset-failed dnsmasq || true\n" +
+		"systemctl enable --now dnsmasq\n" +
+		"mkdir -p " + linuxResolvedDropinDir + "\n" +
+		`printf '[Resolve]\nDNS=127.0.0.1\nDomains=~test\n' > ` + linuxResolvedDropinPath + "\n" +
+		"systemctl restart systemd-resolved\n"
+	out, err := tty(ctx, "sudo", "sh", "-c", script)
+	if err != nil {
+		return fmt.Errorf("dns fix: %w: %s", err, out)
+	}
+	return nil
+}
+
+// checkTrustStoreLinux is the Linux counterpart of checkTrustStoreDarwin.
+// There is no single "system keychain" on Linux; instead distros extract
+// trusted anchors into a flat PEM bundle at one of a few well-known paths
+// (linuxCABundlePaths). The check reads whichever bundle exists and looks
+// for a certificate block whose SHA-256(DER) matches the CA fetched from
+// the running container.
+func checkTrustStoreLinux(ctx context.Context, a *App, sh shellExecutor, tty shellExecutor) CheckResult {
+	state, _ := a.docker.ContainerState(CaddyContainerName)
+	if state != docker.StateRunning {
+		return CheckResult{
+			Name:    "trust-store",
+			Status:  SeveritySkip,
+			Summary: "container not running",
+		}
+	}
+	cert, err := a.docker.Exec(ctx, CaddyContainerName, []string{"cat", "/data/caddy/pki/authorities/local/root.crt"})
+	if err != nil {
+		return CheckResult{
+			Name:    "trust-store",
+			Status:  SeverityWarn,
+			Summary: "no root CA yet (register a backend to trigger provisioning)",
+			Detail:  []string{err.Error()},
+		}
+	}
+	derBytes := cert
+	if block, _ := pem.Decode(cert); block != nil {
+		derBytes = block.Bytes
+	}
+	sum := sha256.Sum256(derBytes)
+	wantSHA := strings.ToUpper(hex.EncodeToString(sum[:]))
+
+	var checkedPaths []string
+	for _, path := range linuxCABundlePaths {
+		if _, err := sh(ctx, "test", "-f", path); err != nil {
+			continue
+		}
+		checkedPaths = append(checkedPaths, path)
+		bundle, err := sh(ctx, "cat", path)
+		if err != nil {
+			continue
+		}
+		if bundleContainsSHA256(bundle, wantSHA) {
+			return CheckResult{
+				Name:    "trust-store",
+				Status:  SeverityPass,
+				Summary: "Caddy root CA trusted in system CA bundle (" + path + ")",
+			}
+		}
+	}
+
+	detail := []string{
+		"expected SHA-256 (DER): " + wantSHA,
+		"cert source: " + CaddyContainerName + ":/data/caddy/pki/authorities/local/root.crt",
+		"checked bundles: " + strings.Join(checkedPaths, ", "),
+		"to fix manually (Arch/Omarchy/Fedora - p11-kit):",
+		"  docker exec " + CaddyContainerName + " cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt",
+		"  sudo trust anchor /tmp/caddy_shack_root.crt",
+		"to fix manually (Debian/Ubuntu):",
+		"  docker exec " + CaddyContainerName + " cat /data/caddy/pki/authorities/local/root.crt | sudo tee /usr/local/share/ca-certificates/caddy_shack.crt",
+		"  sudo update-ca-certificates",
+	}
+	return CheckResult{
+		Name:    "trust-store",
+		Status:  SeverityFail,
+		Summary: "Caddy root CA not found in system CA bundle",
+		Detail:  detail,
+		Fix: &FixAction{
+			Label:        "trust Caddy root CA in the system CA store",
+			RequiresSudo: true,
+			Apply: func(ctx context.Context) error {
+				return applyTrustStoreFixLinux(ctx, sh, tty, cert)
+			},
+		},
+	}
+}
+
+// bundleContainsSHA256 reports whether any CERTIFICATE PEM block in bundle
+// hashes (SHA-256 over its DER bytes) to want (uppercase hex).
+func bundleContainsSHA256(bundle []byte, want string) bool {
+	rest := bundle
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			return false
+		}
+		if block.Type == "CERTIFICATE" {
+			sum := sha256.Sum256(block.Bytes)
+			if strings.ToUpper(hex.EncodeToString(sum[:])) == want {
+				return true
+			}
+		}
+	}
+}
+
+// applyTrustStoreFixLinux prefers p11-kit's trust (Arch/Omarchy/Fedora),
+// falling back to update-ca-certificates (Debian/Ubuntu). Refuses if
+// neither is present rather than guessing at a third mechanism.
+func applyTrustStoreFixLinux(ctx context.Context, sh, tty shellExecutor, cert []byte) error {
+	tmp, err := os.CreateTemp("", "caddy_shack_root_*.crt")
+	if err != nil {
+		return fmt.Errorf("temp file: %w", err)
+	}
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+	}()
+	if _, err := tmp.Write(cert); err != nil {
+		return fmt.Errorf("write cert: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close tmp: %w", err)
+	}
+
+	if _, err := sh(ctx, "sh", "-c", "command -v trust"); err == nil {
+		out, err := tty(ctx, "sudo", "trust", "anchor", tmp.Name())
+		if err != nil {
+			return fmt.Errorf("trust anchor: %w: %s", err, out)
+		}
+		return nil
+	}
+	if _, err := sh(ctx, "sh", "-c", "command -v update-ca-certificates"); err == nil {
+		out, err := tty(ctx, "sudo", "sh", "-c",
+			"cp "+tmp.Name()+" /usr/local/share/ca-certificates/caddy_shack.crt && update-ca-certificates")
+		if err != nil {
+			return fmt.Errorf("update-ca-certificates: %w: %s", err, out)
+		}
+		return nil
+	}
+	return fmt.Errorf("neither 'trust' (p11-kit) nor 'update-ca-certificates' found; see README's Omarchy section for manual steps")
 }
 
 func checkSharedNetwork(_ context.Context, a *App) CheckResult {

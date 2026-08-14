@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 )
 
 // Severity is the verdict of one check.
@@ -142,6 +143,12 @@ func (a *App) Doctor(ctx context.Context, opts DoctorOptions) (DoctorReport, err
 func (a *App) buildCheckList(opts DoctorOptions) []func(context.Context) CheckResult {
 	sh := defaultShell
 	tty := defaultTTYShell
+	checkDNS := checkDNSDarwin
+	checkTrustStore := checkTrustStoreDarwin
+	if runtime.GOOS == "linux" {
+		checkDNS = checkDNSLinux
+		checkTrustStore = checkTrustStoreLinux
+	}
 	checks := []func(context.Context) CheckResult{
 		func(ctx context.Context) CheckResult { return checkDockerDaemon(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkPortAvailability(ctx, a) },

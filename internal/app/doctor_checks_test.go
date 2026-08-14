@@ -213,7 +213,7 @@ func TestCheckContainerHealthSkipWhenDaemonDown(t *testing.T) {
 	}
 }
 
-func TestCheckDNSPassWhenDscacheReturnsLoopback(t *testing.T) {
+func TestCheckDNSDarwinPassWhenDscacheReturnsLoopback(t *testing.T) {
 	a := newDoctorApp(t, docker.NewFake(), "http://127.0.0.1:1")
 
 	// The check should call dscacheutil first; if it returns 127.0.0.1 it
@@ -227,13 +227,13 @@ func TestCheckDNSPassWhenDscacheReturnsLoopback(t *testing.T) {
 		return []byte("ok"), nil
 	}
 
-	r := checkDNS(context.Background(), a, sh, noopShell)
+	r := checkDNSDarwin(context.Background(), a, sh, noopShell)
 	if r.Status != SeverityPass {
 		t.Errorf("status: %v summary=%s", r.Status, r.Summary)
 	}
 }
 
-func TestCheckDNSFailWhenDscacheReturnsNothing(t *testing.T) {
+func TestCheckDNSDarwinFailWhenDscacheReturnsNothing(t *testing.T) {
 	a := newDoctorApp(t, docker.NewFake(), "http://127.0.0.1:1")
 
 	sh := func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -249,7 +249,7 @@ func TestCheckDNSFailWhenDscacheReturnsNothing(t *testing.T) {
 		return nil, errors.New("unexpected")
 	}
 
-	r := checkDNS(context.Background(), a, sh, noopShell)
+	r := checkDNSDarwin(context.Background(), a, sh, noopShell)
 	if r.Status != SeverityFail {
 		t.Errorf("status: %v", r.Status)
 	}
@@ -288,7 +288,7 @@ func fakeRootCert() ([]byte, string) {
 	return encoded, strings.ToUpper(hex.EncodeToString(sum[:]))
 }
 
-func TestCheckTrustStorePassWhenSHAFound(t *testing.T) {
+func TestCheckTrustStoreDarwinPassWhenSHAFound(t *testing.T) {
 	fake := docker.NewFake()
 	fake.Containers[CaddyContainerName] = docker.StateRunning
 	cert, sha := fakeRootCert()
@@ -305,13 +305,13 @@ func TestCheckTrustStorePassWhenSHAFound(t *testing.T) {
 		return nil, errors.New("unexpected")
 	}
 
-	r := checkTrustStore(context.Background(), a, sh, noopShell)
+	r := checkTrustStoreDarwin(context.Background(), a, sh, noopShell)
 	if r.Status != SeverityPass {
 		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
 	}
 }
 
-func TestCheckTrustStoreFailWhenSHAMissing(t *testing.T) {
+func TestCheckTrustStoreDarwinFailWhenSHAMissing(t *testing.T) {
 	fake := docker.NewFake()
 	fake.Containers[CaddyContainerName] = docker.StateRunning
 	cert, _ := fakeRootCert()
@@ -327,7 +327,7 @@ func TestCheckTrustStoreFailWhenSHAMissing(t *testing.T) {
 		return nil, errors.New("unexpected")
 	}
 
-	r := checkTrustStore(context.Background(), a, sh, noopShell)
+	r := checkTrustStoreDarwin(context.Background(), a, sh, noopShell)
 	if r.Status != SeverityFail {
 		t.Errorf("status: %v", r.Status)
 	}
@@ -357,7 +357,7 @@ func TestCheckTrustStoreFailWhenSHAMissing(t *testing.T) {
 	}
 }
 
-func TestCheckTrustStoreFailWhenSecurityErrors(t *testing.T) {
+func TestCheckTrustStoreDarwinFailWhenSecurityErrors(t *testing.T) {
 	fake := docker.NewFake()
 	fake.Containers[CaddyContainerName] = docker.StateRunning
 	cert, _ := fakeRootCert()
@@ -373,7 +373,7 @@ func TestCheckTrustStoreFailWhenSecurityErrors(t *testing.T) {
 		return nil, errors.New("unexpected")
 	}
 
-	r := checkTrustStore(context.Background(), a, sh, noopShell)
+	r := checkTrustStoreDarwin(context.Background(), a, sh, noopShell)
 	if r.Status != SeverityFail {
 		t.Errorf("status: %v", r.Status)
 	}
@@ -390,24 +390,296 @@ var noopShell shellExecutor = func(context.Context, string, ...string) ([]byte, 
 	return nil, nil
 }
 
-func TestCheckTrustStoreSkipWhenContainerNotRunning(t *testing.T) {
+func TestCheckTrustStoreDarwinSkipWhenContainerNotRunning(t *testing.T) {
 	fake := docker.NewFake() // absent
 	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
-	r := checkTrustStore(context.Background(), a, noopShell, noopShell)
+	r := checkTrustStoreDarwin(context.Background(), a, noopShell, noopShell)
 	if r.Status != SeveritySkip {
 		t.Errorf("status: %v", r.Status)
 	}
 }
 
-func TestCheckTrustStoreWarnWhenCertNotProvisioned(t *testing.T) {
+func TestCheckTrustStoreDarwinWarnWhenCertNotProvisioned(t *testing.T) {
 	fake := docker.NewFake()
 	fake.Containers[CaddyContainerName] = docker.StateRunning
 	// No ExecResponses entry => Fake.Exec returns "no scripted response" error.
 	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
 
-	r := checkTrustStore(context.Background(), a, noopShell, noopShell)
+	r := checkTrustStoreDarwin(context.Background(), a, noopShell, noopShell)
 	if r.Status != SeverityWarn {
 		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
+	}
+}
+
+func TestCheckDNSLinuxPassWhenGetentReturnsLoopback(t *testing.T) {
+	a := newDoctorApp(t, docker.NewFake(), "http://127.0.0.1:1")
+
+	sh := func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "getent" {
+			return []byte("STREAM 127.0.0.1 anything.test\n"), nil
+		}
+		return []byte("ok"), nil
+	}
+
+	r := checkDNSLinux(context.Background(), a, sh, noopShell)
+	if r.Status != SeverityPass {
+		t.Errorf("status: %v summary=%s", r.Status, r.Summary)
+	}
+}
+
+func TestCheckDNSLinuxFailWhenGetentReturnsNothing(t *testing.T) {
+	a := newDoctorApp(t, docker.NewFake(), "http://127.0.0.1:1")
+
+	sh := func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "getent" {
+			return nil, errors.New("not found")
+		}
+		return nil, errors.New("missing")
+	}
+
+	r := checkDNSLinux(context.Background(), a, sh, noopShell)
+	if r.Status != SeverityFail {
+		t.Errorf("status: %v", r.Status)
+	}
+	if r.Fix == nil || !r.Fix.RequiresSudo {
+		t.Fatalf("DNS fail must offer a sudo fix: %+v", r.Fix)
+	}
+	if strings.Contains(r.Fix.Label, "(requires sudo)") {
+		t.Errorf("fix label should not embed '(requires sudo)': %q", r.Fix.Label)
+	}
+	joined := strings.Join(r.Detail, "\n")
+	for _, want := range []string{
+		"to fix manually (systemd-resolved",
+		"address=/.test/127.0.0.1",
+		"Domains=~test",
+		"systemctl restart systemd-resolved",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("detail missing %q:\n%s", want, joined)
+		}
+	}
+}
+
+func TestApplyDNSFixLinuxRunsScriptWhenResolvedActive(t *testing.T) {
+	ctx := context.Background()
+	var shCalls, ttyCalls []shellCall
+	sh := recordingShell(&shCalls, struct {
+		Out []byte
+		Err error
+	}{nil, nil}) // systemctl is-active systemd-resolved -> success
+	tty := recordingShell(&ttyCalls)
+
+	if err := applyDNSFixLinux(ctx, sh, tty); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(shCalls) != 1 || shCalls[0].Name != "systemctl" {
+		t.Fatalf("expected one systemctl is-active probe, got %+v", shCalls)
+	}
+	if len(ttyCalls) != 1 {
+		t.Fatalf("tty calls: want 1, got %d", len(ttyCalls))
+	}
+	c := ttyCalls[0]
+	if c.Name != "sudo" || len(c.Args) < 3 || c.Args[0] != "sh" || c.Args[1] != "-c" {
+		t.Fatalf("tty[0]: want sudo sh -c <script>, got %v %v", c.Name, c.Args)
+	}
+	script := c.Args[2]
+	for _, want := range []string{
+		"address=/.test/127.0.0.1",
+		"Domains=~test",
+		"systemctl enable --now dnsmasq",
+		"systemctl restart systemd-resolved",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script missing %q:\n%s", want, script)
+		}
+	}
+}
+
+func TestApplyDNSFixLinuxRefusesWhenResolvedNotActive(t *testing.T) {
+	ctx := context.Background()
+	injected := errors.New("unit not found")
+	var shCalls, ttyCalls []shellCall
+	sh := recordingShell(&shCalls, struct {
+		Out []byte
+		Err error
+	}{nil, injected})
+	tty := recordingShell(&ttyCalls)
+
+	err := applyDNSFixLinux(ctx, sh, tty)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, injected) {
+		t.Errorf("error does not wrap injected error: %v", err)
+	}
+	if len(ttyCalls) != 0 {
+		t.Errorf("tty should not have been called, got %d calls", len(ttyCalls))
+	}
+}
+
+func TestCheckTrustStoreLinuxPassWhenBundleContainsCert(t *testing.T) {
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	cert, _ := fakeRootCert()
+	fake.ExecResponses["caddy_shack:cat /data/caddy/pki/authorities/local/root.crt"] = docker.ExecResponse{
+		Stdout: cert,
+	}
+	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+
+	sh := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "test" {
+			if args[1] == linuxCABundlePaths[0] {
+				return nil, nil
+			}
+			return nil, errors.New("not found")
+		}
+		if name == "cat" {
+			return cert, nil // the bundle IS the cert for this test
+		}
+		return nil, errors.New("unexpected")
+	}
+
+	r := checkTrustStoreLinux(context.Background(), a, sh, noopShell)
+	if r.Status != SeverityPass {
+		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
+	}
+}
+
+func TestCheckTrustStoreLinuxFailWhenBundleMissingCert(t *testing.T) {
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	cert, _ := fakeRootCert()
+	fake.ExecResponses["caddy_shack:cat /data/caddy/pki/authorities/local/root.crt"] = docker.ExecResponse{
+		Stdout: cert,
+	}
+	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+
+	otherDER := bytes.Repeat([]byte{0xCD}, 200)
+	otherPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: otherDER})
+
+	sh := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "test" {
+			if args[1] == linuxCABundlePaths[0] {
+				return nil, nil
+			}
+			return nil, errors.New("not found")
+		}
+		if name == "cat" {
+			return otherPEM, nil
+		}
+		return nil, errors.New("unexpected")
+	}
+
+	r := checkTrustStoreLinux(context.Background(), a, sh, noopShell)
+	if r.Status != SeverityFail {
+		t.Errorf("status: %v", r.Status)
+	}
+	if r.Fix == nil || !r.Fix.RequiresSudo {
+		t.Errorf("fix: %+v", r.Fix)
+	}
+	joined := strings.Join(r.Detail, "\n")
+	for _, want := range []string{
+		"expected SHA-256 (DER):",
+		"cert source: " + CaddyContainerName + ":/data/caddy/pki/authorities/local/root.crt",
+		"checked bundles: " + linuxCABundlePaths[0],
+		"sudo trust anchor /tmp/caddy_shack_root.crt",
+		"sudo update-ca-certificates",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("detail missing %q:\n%s", want, joined)
+		}
+	}
+}
+
+func TestCheckTrustStoreLinuxSkipWhenContainerNotRunning(t *testing.T) {
+	fake := docker.NewFake() // absent
+	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+	r := checkTrustStoreLinux(context.Background(), a, noopShell, noopShell)
+	if r.Status != SeveritySkip {
+		t.Errorf("status: %v", r.Status)
+	}
+}
+
+func TestCheckTrustStoreLinuxWarnWhenCertNotProvisioned(t *testing.T) {
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+
+	r := checkTrustStoreLinux(context.Background(), a, noopShell, noopShell)
+	if r.Status != SeverityWarn {
+		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
+	}
+}
+
+func TestApplyTrustStoreFixLinuxUsesTrustAnchorWhenAvailable(t *testing.T) {
+	ctx := context.Background()
+	cert := []byte("fake-cert-data")
+	var ttyCalls []shellCall
+
+	sh := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "sh" && len(args) > 1 && strings.Contains(args[1], "trust") {
+			return nil, nil // command -v trust succeeds
+		}
+		return nil, errors.New("not found")
+	}
+	tty := recordingShell(&ttyCalls)
+
+	if err := applyTrustStoreFixLinux(ctx, sh, tty, cert); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ttyCalls) != 1 {
+		t.Fatalf("tty calls: want 1, got %d", len(ttyCalls))
+	}
+	c := ttyCalls[0]
+	wantPrefix := []string{"trust", "anchor"}
+	if c.Name != "sudo" || len(c.Args) < len(wantPrefix)+1 || !equalArgs(c.Args[:len(wantPrefix)], wantPrefix) {
+		t.Errorf("tty[0]: want sudo %v <tmpfile>, got %v %v", wantPrefix, c.Name, c.Args)
+	}
+}
+
+func TestApplyTrustStoreFixLinuxFallsBackToUpdateCACertificates(t *testing.T) {
+	ctx := context.Background()
+	cert := []byte("fake-cert-data")
+	var ttyCalls []shellCall
+
+	sh := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "sh" && len(args) > 1 && strings.Contains(args[1], "command -v trust") {
+			return nil, errors.New("not found")
+		}
+		if name == "sh" && len(args) > 1 && strings.Contains(args[1], "update-ca-certificates") {
+			return nil, nil
+		}
+		return nil, errors.New("unexpected")
+	}
+	tty := recordingShell(&ttyCalls)
+
+	if err := applyTrustStoreFixLinux(ctx, sh, tty, cert); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ttyCalls) != 1 {
+		t.Fatalf("tty calls: want 1, got %d", len(ttyCalls))
+	}
+	c := ttyCalls[0]
+	if c.Name != "sudo" || len(c.Args) < 2 || c.Args[0] != "sh" || c.Args[1] != "-c" {
+		t.Fatalf("tty[0]: want sudo sh -c ..., got %v %v", c.Name, c.Args)
+	}
+	if !strings.Contains(c.Args[2], "update-ca-certificates") {
+		t.Errorf("tty[0] script missing update-ca-certificates: %q", c.Args[2])
+	}
+}
+
+func TestApplyTrustStoreFixLinuxErrorsWhenNeitherToolPresent(t *testing.T) {
+	ctx := context.Background()
+	cert := []byte("fake-cert-data")
+
+	sh := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("not found")
+	}
+	tty := noopShell
+
+	err := applyTrustStoreFixLinux(ctx, sh, tty, cert)
+	if err == nil {
+		t.Fatal("expected error, got nil")
 	}
 }
 
@@ -718,13 +990,13 @@ func recordingShell(calls *[]shellCall, responses ...struct {
 	}
 }
 
-func TestApplyDNSFixRunsExpectedSteps(t *testing.T) {
+func TestApplyDNSFixDarwinRunsExpectedSteps(t *testing.T) {
 	ctx := context.Background()
 	var shCalls, ttyCalls []shellCall
 	sh := recordingShell(&shCalls)
 	tty := recordingShell(&ttyCalls)
 
-	if err := applyDNSFix(ctx, sh, tty); err != nil {
+	if err := applyDNSFixDarwin(ctx, sh, tty); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -774,7 +1046,7 @@ func TestApplyDNSFixRunsExpectedSteps(t *testing.T) {
 	}
 }
 
-func TestApplyDNSFixStopsOnFirstError(t *testing.T) {
+func TestApplyDNSFixDarwinStopsOnFirstError(t *testing.T) {
 	ctx := context.Background()
 	injected := errors.New("brew write failed")
 	var shCalls, ttyCalls []shellCall
@@ -792,7 +1064,7 @@ func TestApplyDNSFixStopsOnFirstError(t *testing.T) {
 	)
 	tty := recordingShell(&ttyCalls)
 
-	err := applyDNSFix(ctx, sh, tty)
+	err := applyDNSFixDarwin(ctx, sh, tty)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -809,7 +1081,7 @@ func TestApplyDNSFixStopsOnFirstError(t *testing.T) {
 	}
 }
 
-func TestApplyTrustStoreFixRunsSecurityAddTrustedCert(t *testing.T) {
+func TestApplyTrustStoreFixDarwinRunsSecurityAddTrustedCert(t *testing.T) {
 	ctx := context.Background()
 	cert := []byte("fake-cert-data")
 
@@ -829,7 +1101,7 @@ func TestApplyTrustStoreFixRunsSecurityAddTrustedCert(t *testing.T) {
 		return nil, nil
 	}
 
-	if err := applyTrustStoreFix(ctx, tty, cert); err != nil {
+	if err := applyTrustStoreFixDarwin(ctx, tty, cert); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -862,7 +1134,7 @@ func TestApplyTrustStoreFixRunsSecurityAddTrustedCert(t *testing.T) {
 	}
 }
 
-func TestApplyTrustStoreFixReturnsErrorOnSecurityFailure(t *testing.T) {
+func TestApplyTrustStoreFixDarwinReturnsErrorOnSecurityFailure(t *testing.T) {
 	ctx := context.Background()
 	cert := []byte("fake-cert-data")
 	injected := errors.New("security exit status 1")
@@ -875,7 +1147,7 @@ func TestApplyTrustStoreFixReturnsErrorOnSecurityFailure(t *testing.T) {
 		}{nil, injected},
 	)
 
-	err := applyTrustStoreFix(ctx, tty, cert)
+	err := applyTrustStoreFixDarwin(ctx, tty, cert)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
