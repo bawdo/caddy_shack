@@ -120,7 +120,7 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 		RegisteredAt: now,
 	}
 
-	cfg := caddyapi.Build(s)
+	cfg := caddyapi.Build(s, nil)
 	if err := a.caddy.Load(ctx, cfg); err != nil {
 		if errors.Is(err, caddyapi.ErrUnreachable) {
 			return fmt.Errorf("%w: %v", ErrCaddyNotRunning, err)

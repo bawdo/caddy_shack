@@ -593,7 +593,7 @@ func checkConfigDrift(ctx context.Context, a *App) CheckResult {
 			Summary: "state unreadable; covered by state-integrity",
 		}
 	}
-	desired := caddyapi.Build(st)
+	desired := caddyapi.Build(st, nil)
 	liveRoutes := extractRoutes(live)
 	desiredRoutes := extractRoutes(desired)
 
@@ -632,7 +632,7 @@ func applyDriftFix(ctx context.Context, a *App) error {
 	if err != nil {
 		return err
 	}
-	cfg := caddyapi.Build(st)
+	cfg := caddyapi.Build(st, nil)
 	if err := a.caddy.Load(ctx, cfg); err != nil {
 		return err
 	}
