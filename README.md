@@ -235,6 +235,14 @@ Certificate material is stored on this machine, not inside Caddy's volume, so it
 survives `caddy_shack upgrade` and container recreates the same way registered
 backends do.
 
+Worth knowing before you point `--production` at a real domain: the private
+key travels from that host-side store to Caddy over the loopback admin API,
+and Caddy also writes its own copy into the config it autosaves inside the
+`caddy_shack` container's Docker volume, in plaintext. That is an accepted
+trade-off for a local development tool on a machine you already trust, not a
+flaw to work around, but consider it before issuing a certificate for
+something that matters.
+
 ### Exit codes
 
 Stable contract, documented under `caddy_shack --help`:
@@ -251,6 +259,11 @@ Stable contract, documented under `caddy_shack --help`:
 8  state lock held by another caddy_shack process
 9  certificate issuance failed (ACME order, DNS validation, or rate limit)
 ```
+
+`state.json`'s format is upgraded in place the first time a newer caddy_shack
+binary writes it. That upgrade is one-way: downgrading to an older
+caddy_shack afterwards is not supported, and it exits 7 rather than reading a
+state file from a newer schema version.
 
 ### Quick smoke test
 

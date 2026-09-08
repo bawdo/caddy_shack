@@ -2,8 +2,10 @@ package app
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -492,5 +494,194 @@ func TestCertRemoveSuccessfulPushStillDeletesMaterialAndState(t *testing.T) {
 	}
 	if _, present := s.Certs["alpha.arrix.dev"]; present {
 		t.Error("a successful removal push must delete the state record")
+	}
+}
+
+// recordingCaddyServer starts an httptest server that always answers 200 and
+// records every POST body it receives, so a test can inspect what was last
+// pushed to Caddy.
+func recordingCaddyServer(t *testing.T) (*httptest.Server, *[][]byte) {
+	t.Helper()
+	var bodies [][]byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			body, _ := io.ReadAll(r.Body)
+			bodies = append(bodies, body)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &bodies
+}
+
+// lockStateDirForWriting chmods the directory holding the state file to
+// read+execute only, so state.Save's tmp-file-then-rename write fails while
+// reads still succeed. Cleanup restores it so t.TempDir can remove it.
+func lockStateDirForWriting(t *testing.T, statePath string) {
+	t.Helper()
+	dir := filepath.Dir(statePath)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("chmod state dir read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+}
+
+// TestCertRenewStateSaveFailureRollsBackConfigAndMaterial pins the fix for
+// the crash window between the Caddy push and state.Save in
+// issueAndInstall: if the push lands but the state write fails, Caddy must
+// not be left serving material that state.json has no record of. The
+// rollback must re-push the pre-change config and restore the pre-change
+// certificate material, and the returned error must mention both the save
+// failure and the rollback outcome.
+func TestCertRenewStateSaveFailureRollsBackConfigAndMaterial(t *testing.T) {
+	a, _ := certTestApp(t, docker.StateRunning)
+	if err := a.CertRequest(t.Context(), CertRequestInput{
+		Domain: "alpha.arrix.dev", Email: "k@example.com",
+	}, &noopPrompter{}); err != nil {
+		t.Fatalf("request: %v", err)
+	}
+
+	originalMaterial, err := a.certs.Load("alpha.arrix.dev")
+	if err != nil {
+		t.Fatalf("load original material: %v", err)
+	}
+	sBefore, err := state.Load(a.paths.StatePath)
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	certsBefore, err := a.loadedCerts(sBefore)
+	if err != nil {
+		t.Fatalf("loadedCerts: %v", err)
+	}
+	wantRollbackCfg := caddyapi.Build(sBefore, certsBefore)
+
+	// Swap in a recording server so the rollback push can be inspected, then
+	// make the renewed order return different material so a wrongly-kept
+	// new write is distinguishable from a correctly restored original.
+	srv, bodies := recordingCaddyServer(t)
+	a.caddy = caddyapi.NewClient(srv.URL, time.Second)
+	a.SetIssuer(acme.NewFakeIssuer(acme.Result{
+		CertPEM:  []byte("-----BEGIN CERTIFICATE-----\nNEWCERT\n-----END CERTIFICATE-----\n"),
+		KeyPEM:   []byte("-----BEGIN EC PRIVATE KEY-----\nNEWKEY\n-----END EC PRIVATE KEY-----\n"),
+		NotAfter: time.Now().Add(90 * 24 * time.Hour),
+	}, nil))
+
+	lockStateDirForWriting(t, a.paths.StatePath)
+
+	renewed, err := a.CertRenew(t.Context(), "alpha.arrix.dev", true, &noopPrompter{})
+	if err == nil {
+		t.Fatal("expected an error from the failed state.Save")
+	}
+	if renewed {
+		t.Error("renewed = true, want false when state.Save failed")
+	}
+	if !strings.Contains(err.Error(), "save state") {
+		t.Errorf("error must mention the save failure, got %q", err)
+	}
+	if !strings.Contains(err.Error(), "rolled back") {
+		t.Errorf("error must say the rollback succeeded, got %q", err)
+	}
+
+	// The last thing pushed to Caddy must be the pre-change config, not one
+	// containing the new, unrecorded material.
+	if len(*bodies) == 0 {
+		t.Fatal("expected the rollback to re-push a config")
+	}
+	lastPush := (*bodies)[len(*bodies)-1]
+	if string(lastPush) != string(wantRollbackCfg) {
+		t.Errorf("rollback push = %s, want the pre-change config %s", lastPush, wantRollbackCfg)
+	}
+
+	// The store must hold the original material again, not the new order's.
+	afterMaterial, err := a.certs.Load("alpha.arrix.dev")
+	if err != nil {
+		t.Fatalf("load material after rollback: %v", err)
+	}
+	if string(afterMaterial.CertPEM) != string(originalMaterial.CertPEM) {
+		t.Errorf("cert PEM after rollback = %q, want the original %q", afterMaterial.CertPEM, originalMaterial.CertPEM)
+	}
+	if string(afterMaterial.KeyPEM) != string(originalMaterial.KeyPEM) {
+		t.Errorf("key PEM after rollback = %q, want the original %q", afterMaterial.KeyPEM, originalMaterial.KeyPEM)
+	}
+}
+
+// TestCertRequestLowercasesDomain pins the fix for rejecting mixed-case
+// domains: DNS names are case-insensitive, so "Alpha.arrix.dev" must be
+// accepted and normalised to lower case throughout, matching what
+// downstream state and the cert store see.
+func TestCertRequestLowercasesDomain(t *testing.T) {
+	a, iss := certTestApp(t, docker.StateRunning)
+	if err := a.CertRequest(t.Context(), CertRequestInput{
+		Domain: "Alpha.arrix.dev", Email: "k@example.com",
+	}, &noopPrompter{}); err != nil {
+		t.Fatalf("request: %v", err)
+	}
+
+	if len(iss.Calls) != 1 {
+		t.Fatalf("expected one order, got %d", len(iss.Calls))
+	}
+	got := iss.Calls[0].Domains
+	if len(got) != 2 || got[0] != "alpha.arrix.dev" || got[1] != "*.alpha.arrix.dev" {
+		t.Errorf("domains ordered = %v, want lower-cased [alpha.arrix.dev *.alpha.arrix.dev]", got)
+	}
+
+	if !a.certs.Has("alpha.arrix.dev") {
+		t.Error("certificate material must be stored under the lower-cased domain")
+	}
+
+	s, err := state.Load(a.paths.StatePath)
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	c, ok := s.Certs["alpha.arrix.dev"]
+	if !ok {
+		t.Fatal("state must record the certificate under the lower-cased domain")
+	}
+	if c.Domain != "alpha.arrix.dev" {
+		t.Errorf("stored domain = %q, want lower-cased", c.Domain)
+	}
+}
+
+// TestCertRenewAndRemoveAgreeWithCertRequestOnCase pins the fix for a
+// regression the lower-casing fix introduced: CertRequest normalises the
+// domain before storing, but CertRenew and CertRemove looked it up with
+// whatever case was passed in, verbatim. A request for "Alpha.Arrix.dev"
+// then stored under "alpha.arrix.dev", so a renew or remove issued with the
+// SAME string the operator had just typed to request it could no longer
+// find the record: renew failed with a message telling the operator to run
+// the exact request command they had already run, and remove silently
+// no-opped (exit 0, nothing removed).
+//
+// Covers both directions: the exact mixed-case string as typed, and the
+// already-lower-cased form, must both find the record CertRequest created.
+func TestCertRenewAndRemoveAgreeWithCertRequestOnCase(t *testing.T) {
+	for _, lookup := range []string{"Alpha.Arrix.dev", "alpha.arrix.dev"} {
+		t.Run(lookup, func(t *testing.T) {
+			a, _ := certTestApp(t, docker.StateRunning)
+			if err := a.CertRequest(t.Context(), CertRequestInput{
+				Domain: "Alpha.Arrix.dev", Email: "k@example.com",
+			}, &noopPrompter{}); err != nil {
+				t.Fatalf("request: %v", err)
+			}
+
+			renewed, err := a.CertRenew(t.Context(), lookup, true, &noopPrompter{})
+			if err != nil {
+				t.Fatalf("renew %q: %v", lookup, err)
+			}
+			if !renewed {
+				t.Errorf("renewed = false for %q, want true (forced)", lookup)
+			}
+
+			removed, err := a.CertRemove(t.Context(), lookup)
+			if err != nil {
+				t.Fatalf("remove %q: %v", lookup, err)
+			}
+			if !removed {
+				t.Errorf("removed = false for %q, want true; the record must not silently no-op", lookup)
+			}
+			if a.certs.Has("alpha.arrix.dev") {
+				t.Error("material must be gone from the store after removal")
+			}
+		})
 	}
 }

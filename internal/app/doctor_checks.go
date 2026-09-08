@@ -567,6 +567,58 @@ func extractRoutes(cfg []byte) any {
 	return []any{}
 }
 
+// extractCertHashes pulls apps.tls.certificates.load_pem out of a Caddy
+// config blob and returns the SET of entries as SHA-256 hashes of each
+// entry's JSON encoding. Comparing hashes lets the drift check tell whether
+// the certificate picture matches without diffing PEM bytes directly and
+// without ever holding or printing the key material itself.
+func extractCertHashes(cfg []byte) map[string]bool {
+	var m map[string]any
+	if err := json.Unmarshal(cfg, &m); err != nil {
+		return map[string]bool{}
+	}
+	step := func(parent any, key string) any {
+		mp, ok := parent.(map[string]any)
+		if !ok {
+			return nil
+		}
+		return mp[key]
+	}
+	apps := step(m, "apps")
+	tlsApp := step(apps, "tls")
+	certificates := step(tlsApp, "certificates")
+	loadPEM := step(certificates, "load_pem")
+
+	out := map[string]bool{}
+	arr, ok := loadPEM.([]any)
+	if !ok {
+		return out
+	}
+	for _, entry := range arr {
+		b, err := json.Marshal(entry)
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(b)
+		out[hex.EncodeToString(sum[:])] = true
+	}
+	return out
+}
+
+// certSetsEqual reports whether two SHA-256 hash sets produced by
+// extractCertHashes contain the same entries.
+func certSetsEqual(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if !b[k] {
+			return false
+		}
+	}
+	return true
+}
+
 func checkConfigDrift(ctx context.Context, a *App) CheckResult {
 	cstate, _ := a.docker.ContainerState(CaddyContainerName)
 	if cstate != docker.StateRunning {
@@ -605,18 +657,33 @@ func checkConfigDrift(ctx context.Context, a *App) CheckResult {
 	desired := caddyapi.Build(st, certs)
 	liveRoutes := extractRoutes(live)
 	desiredRoutes := extractRoutes(desired)
+	routesDiffer := !reflect.DeepEqual(liveRoutes, desiredRoutes)
 
-	if reflect.DeepEqual(liveRoutes, desiredRoutes) {
+	liveCerts := extractCertHashes(live)
+	desiredCerts := extractCertHashes(desired)
+	certsDiffer := !certSetsEqual(liveCerts, desiredCerts)
+
+	if !routesDiffer && !certsDiffer {
 		return CheckResult{
 			Name:    "config-drift",
 			Status:  SeverityPass,
-			Summary: "live Caddy routes match state.json",
+			Summary: "live Caddy routes and certificates match state.json",
 		}
+	}
+
+	var summary string
+	switch {
+	case routesDiffer && certsDiffer:
+		summary = "live Caddy routes and certificates differ from state.json"
+	case routesDiffer:
+		summary = "live Caddy routes differ from state.json"
+	default:
+		summary = "live Caddy certificates differ from state.json"
 	}
 	return CheckResult{
 		Name:    "config-drift",
 		Status:  SeverityWarn,
-		Summary: "live Caddy routes differ from state.json",
+		Summary: summary,
 		Detail:  []string{"re-POST /load from state will overwrite live config"},
 		Fix: &FixAction{
 			Label: "re-POST /load from state.json (takes the state lock)",

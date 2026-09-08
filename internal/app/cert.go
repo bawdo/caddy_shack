@@ -67,6 +67,10 @@ func validateCertDomain(domain string) error {
 // limited, so spending one only to discover the container is down would cost a
 // week.
 func (a *App) CertRequest(ctx context.Context, in CertRequestInput, prompt acme.Prompter) error {
+	// DNS names are case-insensitive; normalise before validating so
+	// "Alpha.arrix.dev" is accepted the same as "alpha.arrix.dev" and
+	// nothing downstream (state, the cert store path) ever sees mixed case.
+	in.Domain = strings.ToLower(in.Domain)
 	if err := validateCertDomain(in.Domain); err != nil {
 		return err
 	}
@@ -137,6 +141,12 @@ func (a *App) issueAndInstall(ctx context.Context, domain, email, env string, pr
 		return err
 	}
 
+	// Capture the state's own pre-change picture of this domain (distinct
+	// from prior/hadPrior above, which track the certstore material) so a
+	// state.Save failure below can rebuild the exact config that was live
+	// before this call and re-push it.
+	priorCertEntry, hadPriorCertEntry := s.Certs[domain]
+
 	s.Certs[domain] = state.Cert{
 		Domain:   domain,
 		Subjects: subjects,
@@ -160,10 +170,58 @@ func (a *App) issueAndInstall(ctx context.Context, domain, email, env string, pr
 	}
 
 	if err := state.Save(a.paths.StatePath, s); err != nil {
-		// The push already landed but the state write failed; the material
-		// is now live in Caddy without a matching record. Leave the store
-		// alone (Caddy already has it) but surface the failure loudly.
-		return fmt.Errorf("save state: %w", err)
+		// The push already landed but the state write failed. Left alone,
+		// Caddy would keep serving material that state.json has no record
+		// of: the next register/deregister/doctor --fix rebuilds from
+		// state, drops the load_pem, and hands the domain back to the
+		// internal issuer. Roll the push back using the pre-change state so
+		// Caddy and the store both return to what they were before this
+		// call, then surface both the save failure and whether that
+		// rollback itself succeeded.
+		saveErr := fmt.Errorf("save state: %w", err)
+
+		preChangeState := &state.State{
+			SchemaVersion: s.SchemaVersion,
+			Backends:      s.Backends,
+			Certs:         make(map[string]state.Cert, len(s.Certs)),
+		}
+		for k, v := range s.Certs {
+			preChangeState.Certs[k] = v
+		}
+		if hadPriorCertEntry {
+			preChangeState.Certs[domain] = priorCertEntry
+		} else {
+			delete(preChangeState.Certs, domain)
+		}
+
+		// Restore the store material BEFORE rebuilding the rollback config:
+		// loadedCerts reads material back off disk, and the disk still holds
+		// the just-issued bytes at this point. Building the rollback config
+		// first would silently re-push the new material under the old
+		// routing, defeating the rollback.
+		materialErr := a.restoreMaterialOnly(domain, hadPrior, prior)
+
+		var rollbackErr error
+		rollbackCerts, certsErr := a.loadedCerts(preChangeState)
+		if certsErr != nil {
+			rollbackErr = fmt.Errorf("rebuild pre-change certificates: %w", certsErr)
+		} else {
+			rollbackCfg := caddyapi.Build(preChangeState, rollbackCerts)
+			if loadErr := a.caddy.Load(ctx, rollbackCfg); loadErr != nil {
+				rollbackErr = fmt.Errorf("re-push pre-change config: %w", loadErr)
+			}
+		}
+
+		switch {
+		case rollbackErr != nil && materialErr != nil:
+			return fmt.Errorf("%w (additionally, config rollback failed: %v; material rollback failed: %v)", saveErr, rollbackErr, materialErr)
+		case rollbackErr != nil:
+			return fmt.Errorf("%w (additionally, config rollback failed: %v)", saveErr, rollbackErr)
+		case materialErr != nil:
+			return fmt.Errorf("%w (additionally, material rollback failed: %v)", saveErr, materialErr)
+		default:
+			return fmt.Errorf("%w (config and material rolled back to their pre-request state)", saveErr)
+		}
 	}
 	return nil
 }
@@ -176,16 +234,22 @@ func (a *App) issueAndInstall(ctx context.Context, domain, email, env string, pr
 // the rollback; if the rollback itself fails, both are surfaced together so
 // the operator knows the store may be in a bad state.
 func (a *App) restoreMaterial(domain string, hadPrior bool, prior certstore.Material, pushErr error) error {
-	var restoreErr error
-	if hadPrior {
-		restoreErr = a.certs.Save(domain, prior.CertPEM, prior.KeyPEM)
-	} else {
-		restoreErr = a.certs.Remove(domain)
-	}
-	if restoreErr != nil {
+	if restoreErr := a.restoreMaterialOnly(domain, hadPrior, prior); restoreErr != nil {
 		return fmt.Errorf("%w (additionally, restoring prior certificate material failed: %v)", pushErr, restoreErr)
 	}
 	return pushErr
+}
+
+// restoreMaterialOnly undoes the certstore write issueAndInstall made,
+// restoring prior material exactly when there was any, or removing the new
+// material when there was none. It is the restore path shared by
+// restoreMaterial (push failure) and the state.Save failure branch of
+// issueAndInstall, which additionally rolls the pushed config back.
+func (a *App) restoreMaterialOnly(domain string, hadPrior bool, prior certstore.Material) error {
+	if hadPrior {
+		return a.certs.Save(domain, prior.CertPEM, prior.KeyPEM)
+	}
+	return a.certs.Remove(domain)
 }
 
 // CertList returns the stored certificates, sorted by domain.
@@ -227,6 +291,12 @@ func (a *App) CertList(ctx context.Context) ([]CertListing, error) {
 // reports whether anything was removed; an unknown domain is not an error,
 // matching Deregister.
 func (a *App) CertRemove(ctx context.Context, domain string) (bool, error) {
+	// Match the lower-casing CertRequest applies before storing, so a domain
+	// typed in whatever case still finds the record it created. Removal
+	// stays otherwise permissive: an unknown domain remains a no-op, not a
+	// validation error, matching Deregister.
+	domain = strings.ToLower(domain)
+
 	lock, err := state.AcquireLock(a.paths.LockPath, 5*time.Second)
 	if err != nil {
 		if errors.Is(err, state.ErrLockTimeout) {
@@ -282,6 +352,11 @@ func (a *App) CertRemove(ctx context.Context, domain string) (bool, error) {
 // unconditionally when force is set. The bool reports whether an order was
 // placed.
 func (a *App) CertRenew(ctx context.Context, domain string, force bool, prompt acme.Prompter) (bool, error) {
+	// Match the lower-casing CertRequest applies before storing, so renewing
+	// with the exact string the operator typed at request time (any case)
+	// still finds the record.
+	domain = strings.ToLower(domain)
+
 	s, err := state.Load(a.paths.StatePath)
 	if err != nil {
 		if state.IsCorrupt(err) {
