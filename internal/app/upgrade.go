@@ -102,7 +102,11 @@ func (a *App) Upgrade(ctx context.Context) (UpgradeReport, error) {
 	if err := a.waitForAdmin(ctx); err != nil {
 		return UpgradeReport{}, fmt.Errorf("recreated container but the caddy admin API did not come up; run 'caddy_shack status': %w", err)
 	}
-	if err := a.caddy.Load(ctx, caddyapi.Build(s, nil)); err != nil {
+	certs, err := a.loadedCerts(s)
+	if err != nil {
+		return UpgradeReport{}, fmt.Errorf("recreated container but failed to load certificates; run 'caddy_shack status': %w", err)
+	}
+	if err := a.caddy.Load(ctx, caddyapi.Build(s, certs)); err != nil {
 		return UpgradeReport{}, fmt.Errorf("recreated container but failed to restore backends; run 'caddy_shack status': %w", err)
 	}
 

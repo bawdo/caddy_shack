@@ -593,7 +593,16 @@ func checkConfigDrift(ctx context.Context, a *App) CheckResult {
 			Summary: "state unreadable; covered by state-integrity",
 		}
 	}
-	desired := caddyapi.Build(st, nil)
+	certs, err := a.loadedCerts(st)
+	if err != nil {
+		return CheckResult{
+			Name:    "config-drift",
+			Status:  SeverityFail,
+			Summary: "cannot load certificate material",
+			Detail:  []string{err.Error()},
+		}
+	}
+	desired := caddyapi.Build(st, certs)
 	liveRoutes := extractRoutes(live)
 	desiredRoutes := extractRoutes(desired)
 
@@ -632,7 +641,11 @@ func applyDriftFix(ctx context.Context, a *App) error {
 	if err != nil {
 		return err
 	}
-	cfg := caddyapi.Build(st, nil)
+	certs, err := a.loadedCerts(st)
+	if err != nil {
+		return fmt.Errorf("load certificate material: %w", err)
+	}
+	cfg := caddyapi.Build(st, certs)
 	if err := a.caddy.Load(ctx, cfg); err != nil {
 		return err
 	}
