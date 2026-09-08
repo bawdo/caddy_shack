@@ -161,3 +161,34 @@ The design reasoning about Caddy, the thing actually under test, held up exactly
 as written. The reasoning about everything adjacent did not. That is the useful
 finding here: the hypothesis was well chosen, and the confidence around it was
 not calibrated to the same standard.
+
+## After the close
+
+Two changes landed after this statement was written and after the closing
+commit. They are recorded here rather than folded into the sections above,
+because those sections answer the opening statement and this work was not part
+of it.
+
+The operator asked whether the CLI help, command output and make targets had
+been updated. An audit found the help for the new `cert` commands complete and
+exit code 9 documented, but three adjacent gaps the plan had not covered:
+
+- `caddy_shack status` said nothing about certificates, so a ninety day
+  certificate with manual renewal was visible only in `cert list`. Status now
+  reports the count and the soonest expiry, omitting both lines entirely when
+  there are none. `Healthy` was deliberately left unaffected, since an expiring
+  certificate is not an unhealthy install and scripts gate on that field.
+- `upgrade --help` said the named volumes are preserved "so certs survive",
+  which predated this feature and conflated two different mechanisms. Internal
+  CA certificates survive in the volume; externally issued ones survive on the
+  host and are re-pushed from state. The help now says both.
+- There is still no `make` target for the integration suite, so the Pebble tests
+  need `go test -tags integration` typed by hand and are effectively
+  undiscoverable through `make help`. The operator chose to leave this for a
+  separate change.
+
+The lesson for the method, rather than for the feature: the plan specified the
+new commands thoroughly and said nothing about the commands the new state would
+become visible through. A feature that introduces a managed object with a
+lifetime should have been expected to touch the health command, and the plan
+should have asked that question rather than waiting to be asked it.
