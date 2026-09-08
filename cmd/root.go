@@ -45,6 +45,7 @@ Exit codes (stable, script-friendly):
   6  caddy not installed (no container exists)
   7  state file corrupt - manual remediation required
   8  state lock held by another caddy_shack process
+  9  certificate issuance failed (ACME order, DNS validation, or rate limit)
 
 See docs/superpowers/specs/2026-05-27-mvp-vertical-slice-design.md for the
 full design.`,
@@ -63,6 +64,7 @@ full design.`,
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newCACmd())
+	root.AddCommand(newCertCmd())
 	applyHelpBareword(root)
 	return root
 }
