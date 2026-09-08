@@ -6,9 +6,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -47,6 +49,19 @@ type LegoIssuer struct {
 	// DirectoryOverride, when set, replaces the environment-derived
 	// directory URL. Integration tests point this at Pebble.
 	DirectoryOverride string
+	// InsecureSkipTLSVerify lets an integration test talk to a test ACME
+	// server such as Pebble, which serves its directory with a self-signed
+	// certificate. Never set this against a real ACME server.
+	InsecureSkipTLSVerify bool
+	// DNSResolvers, when set, makes propagation checks query these
+	// resolvers (host:port) instead of the public recursive ones, and drops
+	// the requirement that the zone's authoritative nameservers agree: a
+	// test DNS server such as pebble-challtestsrv answers the TXT lookup but
+	// has no real zone to answer the SOA/NS lookups authoritative-nameserver
+	// discovery needs. Integration tests point this at a challenge test
+	// server. Leave it empty in production, where checking the real
+	// authoritative nameservers is the behaviour we want.
+	DNSResolvers []string
 }
 
 // NewLegoIssuer returns an Issuer backed by Let's Encrypt.
@@ -75,13 +90,33 @@ func (l *LegoIssuer) Issue(ctx context.Context, req Request, prompt Prompter) (R
 	}
 	cfg.Certificate.KeyType = certcrypto.EC256
 
+	if l.InsecureSkipTLSVerify {
+		if tr, ok := cfg.HTTPClient.Transport.(*http.Transport); ok {
+			if tr.TLSClientConfig == nil {
+				tr.TLSClientConfig = &tls.Config{}
+			}
+			// #nosec G402 -- test-only escape hatch for a test ACME server
+			// (Pebble) that serves its directory with a self-signed
+			// certificate; InsecureSkipTLSVerify is never set for a real
+			// ACME server.
+			tr.TLSClientConfig.InsecureSkipVerify = true
+		}
+	}
+
 	client, err := lego.NewClient(cfg)
 	if err != nil {
 		return Result{}, fmt.Errorf("acme: new client: %w", err)
 	}
 
 	provider := newManualProvider(prompt)
-	if err := client.Challenge.SetDNS01Provider(provider, dns01.WrapPreCheck(provider.preCheck)); err != nil {
+	dnsOpts := []dns01.ChallengeOption{dns01.WrapPreCheck(provider.preCheck)}
+	if len(l.DNSResolvers) > 0 {
+		dnsOpts = append(dnsOpts,
+			dns01.AddRecursiveNameservers(l.DNSResolvers),
+			dns01.DisableAuthoritativeNssPropagationRequirement(),
+		)
+	}
+	if err := client.Challenge.SetDNS01Provider(provider, dnsOpts...); err != nil {
 		return Result{}, fmt.Errorf("acme: set dns-01 provider: %w", err)
 	}
 
