@@ -101,7 +101,7 @@ func TestFakeIssuerRecordsRequests(t *testing.T) {
 	want := Result{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")}
 	f := NewFakeIssuer(want, nil)
 
-	got, err := f.Issue(t.Context(), Request{Domains: []string{"a.example.com"}, Env: EnvStaging}, nil)
+	got, err := f.Issue(t.Context(), Request{Domains: []string{"a.example.com"}, Env: EnvStaging}, &recordingPrompter{})
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -110,6 +110,22 @@ func TestFakeIssuerRecordsRequests(t *testing.T) {
 	}
 	if len(f.Calls) != 1 || f.Calls[0].Env != EnvStaging {
 		t.Errorf("fake must record the request, got %+v", f.Calls)
+	}
+}
+
+// TestFakeIssuerRejectsNilPrompter pins the fake's fidelity to LegoIssuer:
+// the real issuer refuses a nil prompter, and an app-layer bug that forgets
+// to pass one must fail here too, not only in production against a real
+// ACME server.
+func TestFakeIssuerRejectsNilPrompter(t *testing.T) {
+	f := NewFakeIssuer(Result{CertPEM: []byte("CERT")}, nil)
+
+	_, err := f.Issue(t.Context(), Request{Domains: []string{"a.example.com"}, Env: EnvStaging}, nil)
+	if err == nil {
+		t.Fatal("expected an error for a nil prompter")
+	}
+	if len(f.Calls) != 0 {
+		t.Errorf("a rejected request must not be recorded, got %+v", f.Calls)
 	}
 }
 

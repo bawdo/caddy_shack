@@ -3,6 +3,7 @@ package app
 import (
 	"time"
 
+	"github.com/bawdo/caddy_shack/internal/acme"
 	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/certstore"
 	"github.com/bawdo/caddy_shack/internal/docker"
@@ -32,6 +33,7 @@ type App struct {
 	caddy  *caddyapi.Client
 	docker docker.Client
 	certs  *certstore.Store
+	issuer acme.Issuer
 }
 
 // New builds an App with default paths, a real Caddy client at the loopback
@@ -53,5 +55,11 @@ func NewWithPaths(p Paths, caddy *caddyapi.Client, dock docker.Client) *App {
 	if dock == nil {
 		dock = docker.NewCLI()
 	}
-	return &App{paths: p, caddy: caddy, docker: dock, certs: certstore.New(p.CertStoreDir)}
+	return &App{
+		paths:  p,
+		caddy:  caddy,
+		docker: dock,
+		certs:  certstore.New(p.CertStoreDir),
+		issuer: acme.NewLegoIssuer(),
+	}
 }

@@ -13,6 +13,10 @@ var (
 	ErrStateCorrupt      = errors.New("state file corrupt")
 	ErrLockContention    = errors.New("state lock held by another process")
 	ErrUnhealthy         = errors.New("caddy_shack is unhealthy")
+	// ErrCertIssuance covers any failure of an ACME order: the challenge, the
+	// DNS validation, or a rate limit. Distinguished from a generic failure
+	// because a script may want to back off rather than retry.
+	ErrCertIssuance = errors.New("certificate issuance failed")
 )
 
 // ExitCode maps an error to the documented exit codes.
@@ -35,6 +39,8 @@ func ExitCode(err error) int {
 		return 7
 	case errors.Is(err, ErrLockContention):
 		return 8
+	case errors.Is(err, ErrCertIssuance):
+		return 9
 	default:
 		return 1
 	}

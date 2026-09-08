@@ -1,6 +1,9 @@
 package acme
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // FakeIssuer is a test double for Issuer. It records every request and
 // returns a canned result, so the app layer can be tested without a network.
@@ -20,19 +23,25 @@ func NewFakeIssuer(result Result, err error) *FakeIssuer {
 	return &FakeIssuer{result: result, err: err}
 }
 
-// Issue records the request and returns the canned response. When a prompter
-// is supplied it is invoked once with a representative record, so tests can
-// assert the operator would have been asked.
+// Issue records the request and returns the canned response, after invoking
+// the prompter once with a representative record so tests can assert the
+// operator would have been asked. It mirrors LegoIssuer.Issue's upfront
+// validation (an empty domain list, or a nil prompter) so an app-layer bug
+// that would fail against the real issuer fails against the fake too.
 func (f *FakeIssuer) Issue(ctx context.Context, req Request, prompt Prompter) (Result, error) {
+	if len(req.Domains) == 0 {
+		return Result{}, fmt.Errorf("acme: no domains in request")
+	}
+	if prompt == nil {
+		return Result{}, fmt.Errorf("acme: no prompter supplied")
+	}
 	f.Calls = append(f.Calls, req)
-	if prompt != nil {
-		f.PromptCalls++
-		if err := prompt.Confirm([]Record{{
-			FQDN:  "_acme-challenge." + req.Domains[0] + ".",
-			Value: "fake-challenge-value",
-		}}); err != nil {
-			return Result{}, err
-		}
+	f.PromptCalls++
+	if err := prompt.Confirm([]Record{{
+		FQDN:  "_acme-challenge." + req.Domains[0] + ".",
+		Value: "fake-challenge-value",
+	}}); err != nil {
+		return Result{}, err
 	}
 	if f.err != nil {
 		return Result{}, f.err
