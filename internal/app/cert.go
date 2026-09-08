@@ -252,6 +252,21 @@ func (a *App) restoreMaterialOnly(domain string, hadPrior bool, prior certstore.
 	return a.certs.Remove(domain)
 }
 
+// daysRemaining returns the whole days remaining until notAfter, an RFC3339
+// timestamp, truncated toward zero the same way time.Duration division
+// always does. That truncation means a certificate a few hours past expiry
+// and one a few hours from expiry can both read as 0; callers that need to
+// tell those apart should treat 0 as "expiring or just expired", not as a
+// guarantee of either. ok is false when notAfter cannot be parsed, in which
+// case days is 0 and must not be treated as a real reading.
+func daysRemaining(notAfter string) (days int, ok bool) {
+	t, err := time.Parse(time.RFC3339, notAfter)
+	if err != nil {
+		return 0, false
+	}
+	return int(time.Until(t).Hours() / 24), true
+}
+
 // CertList returns the stored certificates, sorted by domain.
 func (a *App) CertList(ctx context.Context) ([]CertListing, error) {
 	if err := ctx.Err(); err != nil {
@@ -279,8 +294,8 @@ func (a *App) CertList(ctx context.Context) ([]CertListing, error) {
 			Subjects: c.Subjects,
 			NotAfter: c.NotAfter,
 		}
-		if t, err := time.Parse(time.RFC3339, c.NotAfter); err == nil {
-			row.DaysRemaining = int(time.Until(t).Hours() / 24)
+		if d, ok := daysRemaining(c.NotAfter); ok {
+			row.DaysRemaining = d
 		}
 		out = append(out, row)
 	}
