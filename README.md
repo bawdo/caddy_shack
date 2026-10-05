@@ -413,6 +413,53 @@ Doctor exits 1 if any check FAILs (or, in `--fix` mode, if any fix fails).
 DNS and trust-store fixes use `sudo`; you'll be prompted for your password
 unless `sudo` is already cached.
 
+## LAN exposure (planned, not yet implemented)
+
+A backend will optionally get a second, LAN-facing name (e.g.
+`gamma.arrix.home.lan`) next to its `.test` name, so other devices on the
+local network can reach it. `.test` names stay reachable from this machine
+only.
+
+```
+ this machine                                   LAN device
+ ───────────                                    ──────────
+ https://gamma.arrix.test                       https://gamma.arrix.home.lan
+        │                                              │
+ 127.0.0.1:443 ─┐                           192.168.1.x:443 / :80
+ 127.0.0.1:80  ─┤ (published, as today)            │ (published)
+ 127.0.0.1:2019┘                                   ▼
+        │                               ┌──────────────────────┐
+        │                               │ caddy_shack_lan      │  haproxy, static config,
+        │                               │ TCP only, no TLS     │  adds PROXY v2 header
+        │                               └──────────┬───────────┘
+        │                     caddy_shack network  │ :8443 / :8080 (NOT published)
+        ▼                                          ▼
+ ┌──────────────────────────────────────────────────────────────┐
+ │ caddy_shack (main Caddy, unchanged container spec)           │
+ │  srv0     :443  routes: .test names           (as today)     │
+ │  srv-lan  :8443 routes: opted-in LAN names only, PROXY proto │
+ │  lan-http :8080 308 redirect → https://{host}{uri}           │
+ └───────────────────────┬──────────────────────────────────────┘
+                         ▼
+          same upstream (host relay / host.docker.internal / container alias)
+```
+
+- The LAN binding lives in its own container, `caddy_shack_lan`, not in the
+  main Caddy container. Docker refuses to start a container whose published
+  host IP no longer exists (verified on Docker Desktop for Mac and native
+  Docker Engine on Linux), so keeping it separate means a vanished LAN IP
+  only takes down LAN access, never the `.test` sites.
+- `.test` names are unreachable from the LAN by construction: the only path
+  in from the LAN is `srv-lan`, which holds routes for opted-in LAN names
+  only.
+- Port 80 on the LAN only ever redirects to HTTPS.
+- TLS terminates once, in the main Caddy, using the same local CA as `.test`.
+  LAN devices must trust that CA (see `caddy_shack ca`).
+- PROXY protocol v2 carries the real LAN client IP through to Caddy and the
+  backends.
+- On native Linux, Docker's published ports bypass ufw, so binding to the
+  LAN IP exposes the ports whatever ufw says.
+
 ## Development
 
 Run the local pre-CI gauntlet before pushing:
