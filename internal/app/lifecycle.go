@@ -4,77 +4,49 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/bawdo/caddy_shack/internal/docker"
-	"github.com/bawdo/caddy_shack/internal/state"
 )
 
-// Start starts the existing CaddyShack container. Caddy always boots from a
-// bare admin-only Caddyfile (no --resume), so a container that was actually
-// stopped comes back up with no routes or TLS config at all; registered
-// backends are re-pushed from state once the admin API is reachable again so
-// a stop/start cycle doesn't silently orphan every .test URL.
+// Start starts the existing CaddyShack container, or confirms it is running,
+// and makes Caddy's live config match the registry. Caddy resumes its
+// autosave on boot, but a container created by an older caddy_shack boots
+// from the bare admin-only Caddyfile, and any Caddy may have drifted while
+// caddy_shack wasn't looking (e.g. a restart outside it before the
+// autosave existed). So both paths reconcile: start after a reboot is how
+// a user puts things right, and it must not be a no-op.
+//
+// Routes are restored before the relay is ensured, and a failure of one
+// doesn't skip the other: a relay problem then leaves only host-mode
+// backends down (and is reported) instead of a Caddy with no routes at all.
 func (a *App) Start(ctx context.Context) error {
 	if err := a.docker.DaemonReachable(); err != nil {
 		return fmt.Errorf("%w: %v", ErrDockerUnreachable, err)
 	}
-	st, err := a.docker.ContainerState(CaddyContainerName)
+	st, err := a.docker.ContainerState(a.inst.ContainerName)
 	if err != nil {
 		return fmt.Errorf("inspect container: %w", err)
 	}
 	switch st {
 	case docker.StateAbsent:
 		return fmt.Errorf("%w: run 'caddy_shack install' first", ErrNotInstalled)
-	case docker.StateRunning:
-		a.noteStaleCaddy()
-		return a.ensureRelay()
 	case docker.StateStopped:
-		if err := a.docker.Start(CaddyContainerName); err != nil {
+		if err := a.docker.Start(a.inst.ContainerName); err != nil {
 			return err
 		}
 		if err := a.ensureSharedNetwork(); err != nil {
 			return fmt.Errorf("attach shared network: %w", err)
 		}
-		if err := a.ensureRelay(); err != nil {
-			return err
-		}
-		a.noteStaleCaddy()
-		return a.restoreBackends(ctx)
 	}
-	return nil
+	a.noteStaleCaddy()
+	return a.restoreThenRelay(ctx)
 }
 
-// restoreBackends waits for the admin API to come back up, then re-pushes
-// every backend from state.json into Caddy. Shared by Start (stopped ->
-// running) and Upgrade (recreate); both leave Caddy with nothing but its
-// bare admin config until this runs.
-func (a *App) restoreBackends(ctx context.Context) error {
-	if err := a.waitForAdmin(ctx); err != nil {
-		return fmt.Errorf("caddy admin API did not come up; run 'caddy_shack status': %w", err)
-	}
-
-	lock, err := state.AcquireLock(a.paths.LockPath, 5*time.Second)
-	if err != nil {
-		if errors.Is(err, state.ErrLockTimeout) {
-			return fmt.Errorf("%w: %v", ErrLockContention, err)
-		}
-		return err
-	}
-	defer func() { _ = lock.Release() }()
-
-	s, err := state.Load(a.paths.StatePath)
-	if err != nil {
-		if state.IsCorrupt(err) {
-			return fmt.Errorf("%w: %v", ErrStateCorrupt, err)
-		}
-		return err
-	}
-
-	if err := a.caddy.Load(ctx, a.buildConfig(s)); err != nil {
-		return fmt.Errorf("failed to restore backends; run 'caddy_shack status': %w", err)
-	}
-	return nil
+// restoreThenRelay restores the registry into Caddy, then ensures the relay,
+// attempting both and reporting every failure.
+func (a *App) restoreThenRelay(ctx context.Context) error {
+	restoreErr := a.restoreBackends(ctx)
+	return errors.Join(restoreErr, a.ensureRelay())
 }
 
 // Stop stops the CaddyShack container, and the native-Linux relay, if
@@ -83,12 +55,12 @@ func (a *App) Stop() error {
 	if err := a.docker.DaemonReachable(); err != nil {
 		return fmt.Errorf("%w: %v", ErrDockerUnreachable, err)
 	}
-	st, err := a.docker.ContainerState(CaddyContainerName)
+	st, err := a.docker.ContainerState(a.inst.ContainerName)
 	if err != nil {
 		return fmt.Errorf("inspect container: %w", err)
 	}
 	if st == docker.StateRunning {
-		if err := a.docker.Stop(CaddyContainerName); err != nil {
+		if err := a.docker.Stop(a.inst.ContainerName); err != nil {
 			return err
 		}
 	}

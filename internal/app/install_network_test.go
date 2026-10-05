@@ -10,11 +10,7 @@ import (
 
 func newNetFixtureApp(t *testing.T, fake *docker.Fake) *App {
 	t.Helper()
-	dir := t.TempDir()
-	return NewWithPaths(Paths{
-		StatePath: dir + "/state.json",
-		LockPath:  dir + "/state.json.lock",
-	}, nil, fake)
+	return newFixtureWith(t, http.StatusOK, fake).app
 }
 
 func TestInstallAttachesSharedNetwork(t *testing.T) {

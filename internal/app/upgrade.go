@@ -37,7 +37,7 @@ func (a *App) Upgrade(ctx context.Context) (UpgradeReport, error) {
 		return UpgradeReport{}, fmt.Errorf("%w: %v", ErrDockerUnreachable, err)
 	}
 
-	st, err := a.docker.ContainerState(CaddyContainerName)
+	st, err := a.docker.ContainerState(a.inst.ContainerName)
 	if err != nil {
 		return UpgradeReport{}, fmt.Errorf("inspect container: %w", err)
 	}
@@ -53,7 +53,7 @@ func (a *App) Upgrade(ctx context.Context) (UpgradeReport, error) {
 	if err != nil {
 		return UpgradeReport{}, fmt.Errorf("image id: %w", err)
 	}
-	curID, err := a.docker.ContainerImageID(CaddyContainerName)
+	curID, err := a.docker.ContainerImageID(a.inst.ContainerName)
 	if err != nil {
 		return UpgradeReport{}, fmt.Errorf("container image id: %w", err)
 	}
@@ -92,7 +92,7 @@ func (a *App) waitForAdmin(ctx context.Context) error {
 // the container. Best-effort: returns "" when the exec fails or output is
 // empty.
 func (a *App) caddyVersion(ctx context.Context) string {
-	out, err := a.docker.Exec(ctx, CaddyContainerName, []string{"caddy", "version"})
+	out, err := a.docker.Exec(ctx, a.inst.ContainerName, []string{"caddy", "version"})
 	if err != nil {
 		return ""
 	}

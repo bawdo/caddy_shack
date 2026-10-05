@@ -27,7 +27,7 @@ func (a *App) ExportCA(ctx context.Context, includeIntermediate bool) (string, e
 		return "", fmt.Errorf("%w: %v", ErrDockerUnreachable, err)
 	}
 
-	st, err := a.docker.ContainerState(CaddyContainerName)
+	st, err := a.docker.ContainerState(a.inst.ContainerName)
 	if err != nil {
 		return "", fmt.Errorf("inspect container: %w", err)
 	}

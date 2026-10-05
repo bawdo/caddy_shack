@@ -5,15 +5,12 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -73,7 +70,7 @@ func checkContainerHealth(ctx context.Context, a *App) CheckResult {
 			Summary: "docker daemon unreachable",
 		}
 	}
-	state, err := a.docker.ContainerState(CaddyContainerName)
+	state, err := a.docker.ContainerState(a.inst.ContainerName)
 	if err != nil {
 		return CheckResult{
 			Name:    "container-health",
@@ -232,7 +229,7 @@ func applyDNSFixDarwin(ctx context.Context, sh, tty shellExecutor) error {
 }
 
 func checkTrustStoreDarwin(ctx context.Context, a *App, sh shellExecutor, tty shellExecutor) CheckResult {
-	state, _ := a.docker.ContainerState(CaddyContainerName)
+	state, _ := a.docker.ContainerState(a.inst.ContainerName)
 	if state != docker.StateRunning {
 		return CheckResult{
 			Name:    "trust-store",
@@ -240,7 +237,7 @@ func checkTrustStoreDarwin(ctx context.Context, a *App, sh shellExecutor, tty sh
 			Summary: "container not running",
 		}
 	}
-	cert, err := a.docker.Exec(ctx, CaddyContainerName, []string{"cat", "/data/caddy/pki/authorities/local/root.crt"})
+	cert, err := a.docker.Exec(ctx, a.inst.ContainerName, []string{"cat", "/data/caddy/pki/authorities/local/root.crt"})
 	if err != nil {
 		return CheckResult{
 			Name:    "trust-store",
@@ -277,9 +274,9 @@ func checkTrustStoreDarwin(ctx context.Context, a *App, sh shellExecutor, tty sh
 	}
 	detail = append(detail,
 		"expected SHA-256 (DER): "+wantSHA,
-		"cert source: "+CaddyContainerName+":/data/caddy/pki/authorities/local/root.crt",
+		"cert source: "+a.inst.ContainerName+":/data/caddy/pki/authorities/local/root.crt",
 		"to fix manually:",
-		"  docker exec "+CaddyContainerName+" cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt",
+		"  docker exec "+a.inst.ContainerName+" cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt",
 		"  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/caddy_shack_root.crt",
 	)
 	return CheckResult{
@@ -432,7 +429,7 @@ func applyDNSFixLinux(ctx context.Context, sh, tty shellExecutor) error {
 // for a certificate block whose SHA-256(DER) matches the CA fetched from
 // the running container.
 func checkTrustStoreLinux(ctx context.Context, a *App, sh shellExecutor, tty shellExecutor) CheckResult {
-	state, _ := a.docker.ContainerState(CaddyContainerName)
+	state, _ := a.docker.ContainerState(a.inst.ContainerName)
 	if state != docker.StateRunning {
 		return CheckResult{
 			Name:    "trust-store",
@@ -440,7 +437,7 @@ func checkTrustStoreLinux(ctx context.Context, a *App, sh shellExecutor, tty she
 			Summary: "container not running",
 		}
 	}
-	cert, err := a.docker.Exec(ctx, CaddyContainerName, []string{"cat", "/data/caddy/pki/authorities/local/root.crt"})
+	cert, err := a.docker.Exec(ctx, a.inst.ContainerName, []string{"cat", "/data/caddy/pki/authorities/local/root.crt"})
 	if err != nil {
 		return CheckResult{
 			Name:    "trust-store",
@@ -477,13 +474,13 @@ func checkTrustStoreLinux(ctx context.Context, a *App, sh shellExecutor, tty she
 
 	detail := []string{
 		"expected SHA-256 (DER): " + wantSHA,
-		"cert source: " + CaddyContainerName + ":/data/caddy/pki/authorities/local/root.crt",
+		"cert source: " + a.inst.ContainerName + ":/data/caddy/pki/authorities/local/root.crt",
 		"checked bundles: " + strings.Join(checkedPaths, ", "),
 		"to fix manually (Arch/Omarchy/Fedora - p11-kit):",
-		"  docker exec " + CaddyContainerName + " cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt",
+		"  docker exec " + a.inst.ContainerName + " cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt",
 		"  sudo trust anchor /tmp/caddy_shack_root.crt",
 		"to fix manually (Debian/Ubuntu):",
-		"  docker exec " + CaddyContainerName + " cat /data/caddy/pki/authorities/local/root.crt | sudo tee /usr/local/share/ca-certificates/caddy_shack.crt",
+		"  docker exec " + a.inst.ContainerName + " cat /data/caddy/pki/authorities/local/root.crt | sudo tee /usr/local/share/ca-certificates/caddy_shack.crt",
 		"  sudo update-ca-certificates",
 	}
 	return CheckResult{
@@ -561,7 +558,7 @@ func checkSharedNetwork(_ context.Context, a *App) CheckResult {
 	if err := a.docker.DaemonReachable(); err != nil {
 		return CheckResult{Name: "shared-network", Status: SeveritySkip, Summary: "docker daemon unreachable"}
 	}
-	cstate, _ := a.docker.ContainerState(CaddyContainerName)
+	cstate, _ := a.docker.ContainerState(a.inst.ContainerName)
 	if cstate != docker.StateRunning {
 		return CheckResult{Name: "shared-network", Status: SeveritySkip, Summary: "container not running"}
 	}
@@ -583,7 +580,7 @@ func checkSharedNetwork(_ context.Context, a *App) CheckResult {
 			Summary: "no container-mode backends; shared network not required",
 		}
 	}
-	attached, err := a.docker.NetworkAttached(CaddyNetworkName, CaddyContainerName)
+	attached, err := a.docker.NetworkAttached(a.inst.NetworkName, a.inst.ContainerName)
 	if err != nil {
 		return CheckResult{
 			Name:    "shared-network",
@@ -596,16 +593,16 @@ func checkSharedNetwork(_ context.Context, a *App) CheckResult {
 		return CheckResult{
 			Name:    "shared-network",
 			Status:  SeverityPass,
-			Summary: fmt.Sprintf("caddy attached to %q (%d container-mode backend(s))", CaddyNetworkName, containerBackends),
+			Summary: fmt.Sprintf("caddy attached to %q (%d container-mode backend(s))", a.inst.NetworkName, containerBackends),
 		}
 	}
 	return CheckResult{
 		Name:    "shared-network",
 		Status:  SeverityFail,
-		Summary: fmt.Sprintf("caddy not attached to %q but %d container-mode backend(s) need it", CaddyNetworkName, containerBackends),
+		Summary: fmt.Sprintf("caddy not attached to %q but %d container-mode backend(s) need it", a.inst.NetworkName, containerBackends),
 		Detail:  []string{"container-mode (--container) registrations are unreachable until caddy joins this network"},
 		Fix: &FixAction{
-			Label: "create and attach shared network ('docker network connect " + CaddyNetworkName + " " + CaddyContainerName + "')",
+			Label: "create and attach shared network ('docker network connect " + a.inst.NetworkName + " " + a.inst.ContainerName + "')",
 			Apply: func(_ context.Context) error { return a.ensureSharedNetwork() },
 		},
 	}
@@ -652,7 +649,7 @@ func checkStateIntegrity(_ context.Context, a *App) CheckResult {
 }
 
 func checkBackends(ctx context.Context, a *App) CheckResult {
-	cstate, _ := a.docker.ContainerState(CaddyContainerName)
+	cstate, _ := a.docker.ContainerState(a.inst.ContainerName)
 	if cstate != docker.StateRunning {
 		return CheckResult{
 			Name:    "backends",
@@ -694,11 +691,11 @@ func checkBackends(ctx context.Context, a *App) CheckResult {
 		if relayed && host == UpstreamHost {
 			// Probe the hop the relay makes: the host's own loopback, on
 			// either family, as the relay's localhost dial does.
-			if probeBackendFrom(ctx, a, RelayContainerName, "127.0.0.1", port) ||
-				probeBackendFrom(ctx, a, RelayContainerName, "::1", port) {
+			if probeBackendFrom(ctx, a, a.inst.RelayContainerName, "127.0.0.1", port) ||
+				probeBackendFrom(ctx, a, a.inst.RelayContainerName, "::1", port) {
 				continue
 			}
-			failed = append(failed, fmt.Sprintf("%s -> localhost:%s (via %s): unreachable", n, port, RelayContainerName))
+			failed = append(failed, fmt.Sprintf("%s -> localhost:%s (via %s): unreachable", n, port, a.inst.RelayContainerName))
 			continue
 		}
 		if probeBackend(ctx, a, host, port) {
@@ -725,7 +722,7 @@ func checkBackends(ctx context.Context, a *App) CheckResult {
 // Caddy container. Tries `nc -z` first; on any error, falls back to wget
 // --spider.
 func probeBackend(ctx context.Context, a *App, host, port string) bool {
-	return probeBackendFrom(ctx, a, CaddyContainerName, host, port)
+	return probeBackendFrom(ctx, a, a.inst.ContainerName, host, port)
 }
 
 // probeBackendFrom is probeBackend from an arbitrary container (the relay,
@@ -741,18 +738,29 @@ func probeBackendFrom(ctx context.Context, a *App, container, host, port string)
 	return err == nil
 }
 
-// doctorPorts is the list of loopback ports CaddyShack publishes from the
-// container. Kept package-private so the check has a single source of truth.
-var doctorPorts = []int{80, 443, 2019}
+// publishedPorts is the list of loopback ports this instance publishes from
+// the container.
+func (i Instance) publishedPorts() []int {
+	return []int{i.HTTPPort, i.HTTPSPort, i.AdminPort}
+}
 
 func checkPortAvailability(ctx context.Context, a *App) CheckResult {
-	return checkPortAvailabilityOn(ctx, a, doctorPorts)
+	return checkPortAvailabilityOn(ctx, a, a.inst.publishedPorts())
 }
 
 // checkPortAvailabilityOn is the test seam. Tests call it with a free
 // ephemeral port so they don't need root for 80/443.
 // Uses DialTimeout rather than net.Listen to avoid EACCES on ports 80/443
 // when running as a non-root user.
+// joinPorts renders ports as "80, 443, 2019".
+func joinPorts(ports []int) string {
+	s := make([]string, len(ports))
+	for i, p := range ports {
+		s[i] = strconv.Itoa(p)
+	}
+	return strings.Join(s, ", ")
+}
+
 func checkPortAvailabilityOn(_ context.Context, a *App, ports []int) CheckResult {
 	var taken []string
 	for _, p := range ports {
@@ -768,12 +776,12 @@ func checkPortAvailabilityOn(_ context.Context, a *App, ports []int) CheckResult
 		return CheckResult{
 			Name:    "port-availability",
 			Status:  SeverityPass,
-			Summary: "80, 443, 2019 free or held by caddy_shack",
+			Summary: fmt.Sprintf("%s free or held by caddy_shack", joinPorts(ports)),
 		}
 	}
 	// If our container is running, assume it holds the ports (the spec's
 	// "free or already held by caddy_shack" wording). PASS with a note.
-	state, _ := a.docker.ContainerState(CaddyContainerName)
+	state, _ := a.docker.ContainerState(a.inst.ContainerName)
 	if state == docker.StateRunning {
 		return CheckResult{
 			Name:    "port-availability",
@@ -789,55 +797,13 @@ func checkPortAvailabilityOn(_ context.Context, a *App, ports []int) CheckResult
 	}
 }
 
-// extractRoutes pulls apps.http.servers.srv0.routes out of a Caddy config
-// blob. Returns []any{} (never nil) so that an empty routes array from a
-// live config (Caddy normalises null→[]) compares equal to a nil slice
-// produced by caddyapi.Build when there are no backends.
-func extractRoutes(cfg []byte) any {
-	var m map[string]any
-	if err := json.Unmarshal(cfg, &m); err != nil {
-		return []any{}
-	}
-	step := func(parent any, key string) any {
-		mp, ok := parent.(map[string]any)
-		if !ok {
-			return nil
-		}
-		return mp[key]
-	}
-	apps := step(m, "apps")
-	http := step(apps, "http")
-	servers := step(http, "servers")
-	srv0 := step(servers, "srv0")
-	if mp, ok := srv0.(map[string]any); ok {
-		routes := mp["routes"]
-		if routes == nil {
-			return []any{}
-		}
-		if arr, ok := routes.([]any); ok && len(arr) == 0 {
-			return []any{}
-		}
-		return routes
-	}
-	return []any{}
-}
-
 func checkConfigDrift(ctx context.Context, a *App) CheckResult {
-	cstate, _ := a.docker.ContainerState(CaddyContainerName)
+	cstate, _ := a.docker.ContainerState(a.inst.ContainerName)
 	if cstate != docker.StateRunning {
 		return CheckResult{
 			Name:    "config-drift",
 			Status:  SeveritySkip,
 			Summary: "container not running",
-		}
-	}
-	live, err := a.caddy.GetConfig(ctx)
-	if err != nil {
-		return CheckResult{
-			Name:    "config-drift",
-			Status:  SeverityFail,
-			Summary: "cannot fetch live config",
-			Detail:  []string{err.Error()},
 		}
 	}
 	st, err := state.Load(a.paths.StatePath)
@@ -848,48 +814,58 @@ func checkConfigDrift(ctx context.Context, a *App) CheckResult {
 			Summary: "state unreadable; covered by state-integrity",
 		}
 	}
-	desired := a.buildConfig(st)
-	liveRoutes := extractRoutes(live)
-	desiredRoutes := extractRoutes(desired)
-
-	if reflect.DeepEqual(liveRoutes, desiredRoutes) {
+	d, err := a.liveDrift(ctx, st)
+	if err != nil {
+		return CheckResult{
+			Name:    "config-drift",
+			Status:  SeverityFail,
+			Summary: "cannot fetch live config",
+			Detail:  []string{err.Error()},
+		}
+	}
+	if d.InSync {
 		return CheckResult{
 			Name:    "config-drift",
 			Status:  SeverityPass,
-			Summary: "live Caddy routes match state.json",
+			Summary: "live Caddy config matches state.json",
 		}
 	}
 	return CheckResult{
 		Name:    "config-drift",
-		Status:  SeverityWarn,
-		Summary: "live Caddy routes differ from state.json",
-		Detail:  []string{"re-POST /load from state will overwrite live config"},
+		Status:  SeverityFail,
+		Summary: "live Caddy config differs from state.json",
+		Detail:  append(DriftDetail(d), "'caddy_shack sync' re-pushes state.json to Caddy"),
 		Fix: &FixAction{
-			Label: "re-POST /load from state.json (takes the state lock)",
+			Label: "re-push state.json to Caddy ('caddy_shack sync')",
 			Apply: func(ctx context.Context) error {
-				return applyDriftFix(ctx, a)
+				_, err := a.reconcile(ctx)
+				return err
 			},
 		},
 	}
 }
 
-func applyDriftFix(ctx context.Context, a *App) error {
-	lock, err := state.AcquireLock(a.paths.LockPath, 5*time.Second)
-	if err != nil {
-		if errors.Is(err, state.ErrLockTimeout) {
-			return fmt.Errorf("%w: %v", ErrLockContention, err)
-		}
-		return err
+// DriftDetail renders d as human-readable lines, shared by doctor and
+// status.
+func DriftDetail(d Drift) []string {
+	var out []string
+	if !d.HTTPApp {
+		out = append(out, "no http app: Caddy serves nothing on 80/443")
 	}
-	defer func() { _ = lock.Release() }()
-
-	st, err := state.Load(a.paths.StatePath)
-	if err != nil {
-		return err
+	if !d.TLSApp {
+		out = append(out, "no tls app: Caddy issues no certificates")
 	}
-	cfg := a.buildConfig(st)
-	if err := a.caddy.Load(ctx, cfg); err != nil {
-		return err
+	if len(d.Missing) > 0 {
+		out = append(out, "registered but not live: "+strings.Join(d.Missing, ", "))
 	}
-	return nil
+	if len(d.Changed) > 0 {
+		out = append(out, "live route differs from registry: "+strings.Join(d.Changed, ", "))
+	}
+	if len(d.Unknown) > 0 {
+		out = append(out, "live but not registered: "+strings.Join(d.Unknown, ", "))
+	}
+	if len(out) == 0 {
+		out = append(out, "live config differs from what the registry renders")
+	}
+	return out
 }

@@ -36,6 +36,7 @@ func TestRunArgsNetworkModeAndExtraHosts(t *testing.T) {
 // inspectFixture is trimmed from `docker inspect caddy_shack` on a native
 // Linux engine (Docker 29), for a container created before the relay.
 const inspectFixture = `{
+  "Config": {"Cmd": ["sh", "-c", "exec caddy run"]},
   "HostConfig": {"NetworkMode": "bridge", "ExtraHosts": null},
   "Mounts": [
     {"Type": "volume", "Name": "caddy_shack_data", "Source": "/var/lib/docker/volumes/caddy_shack_data/_data", "Destination": "/data"},
@@ -60,6 +61,7 @@ func TestParseContainerInfo(t *testing.T) {
 			{VolumeName: "caddy_shack_config", ContainerPath: "/config"},
 		},
 		Networks: []string{"bridge", "caddy_shack"},
+		Command:  []string{"sh", "-c", "exec caddy run"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("\n got  %+v\n want %+v", got, want)

@@ -161,7 +161,7 @@ func TestCheckContainerHealthPassWhenRunningAndReachable(t *testing.T) {
 func TestCheckContainerHealthFailWhenAbsentOffersInstallFix(t *testing.T) {
 	fake := docker.NewFake()
 	// container absent
-	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+	a := newFixtureWith(t, http.StatusOK, fake).app
 
 	r := checkContainerHealth(context.Background(), a)
 	if r.Status != SeverityFail {
@@ -768,7 +768,7 @@ func TestCheckConfigDriftPassWhenRoutesMatch(t *testing.T) {
 	}
 }
 
-func TestCheckConfigDriftWarnWhenRoutesDiffer(t *testing.T) {
+func TestCheckConfigDriftFailWhenRoutesDiffer(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
 	st := &state.State{SchemaVersion: 1, Backends: map[string]state.Backend{
@@ -820,8 +820,11 @@ func TestCheckConfigDriftWarnWhenRoutesDiffer(t *testing.T) {
 		caddyapi.NewClient(srv.URL, time.Second), fake)
 
 	r := checkConfigDrift(context.Background(), a)
-	if r.Status != SeverityWarn {
+	if r.Status != SeverityFail {
 		t.Errorf("status: %v summary=%s", r.Status, r.Summary)
+	}
+	if !strings.Contains(strings.Join(r.Detail, "\n"), "live route differs from registry: a") {
+		t.Errorf("detail should name the changed backend: %v", r.Detail)
 	}
 	if r.Fix == nil {
 		t.Fatal("expected re-load fix")

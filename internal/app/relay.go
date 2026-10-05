@@ -81,13 +81,13 @@ func relayConfig() string {
 // relayContainerSpec is the relay container. The config travels as $0 of
 // the sh -c script so no shell quoting is involved; a stale socket from a
 // previous run is removed before Caddy binds it.
-func relayContainerSpec(image string) docker.ContainerSpec {
+func relayContainerSpec(inst Instance, image string) docker.ContainerSpec {
 	return docker.ContainerSpec{
-		Name:        RelayContainerName,
+		Name:        inst.RelayContainerName,
 		Image:       image,
 		NetworkMode: "host",
 		Volumes: []docker.VolumeMount{
-			{VolumeName: RelayVolume, ContainerPath: RelaySocketDir},
+			{VolumeName: inst.RelayVolume, ContainerPath: RelaySocketDir},
 		},
 		Command: []string{
 			"sh", "-c",
@@ -123,31 +123,31 @@ func (a *App) ensureRelay() error {
 	if a.hostNetwork().Kind != EngineNativeLinux {
 		return nil
 	}
-	spec := relayContainerSpec(CaddyImage)
-	st, err := a.docker.ContainerState(RelayContainerName)
+	spec := relayContainerSpec(a.inst, CaddyImage)
+	st, err := a.docker.ContainerState(a.inst.RelayContainerName)
 	if err != nil {
 		return fmt.Errorf("inspect relay: %w", err)
 	}
 	if st != docker.StateAbsent {
-		info, err := a.docker.InspectContainer(RelayContainerName)
+		info, err := a.docker.InspectContainer(a.inst.RelayContainerName)
 		if err != nil {
 			return fmt.Errorf("inspect relay: %w", err)
 		}
 		if len(specDrift(spec, info)) == 0 {
 			if st == docker.StateStopped {
-				return a.docker.Start(RelayContainerName)
+				return a.docker.Start(a.inst.RelayContainerName)
 			}
 			return nil
 		}
-		if err := a.docker.Remove(RelayContainerName); err != nil {
+		if err := a.docker.Remove(a.inst.RelayContainerName); err != nil {
 			return err
 		}
 	}
-	if err := a.docker.EnsureVolume(RelayVolume); err != nil {
+	if err := a.docker.EnsureVolume(a.inst.RelayVolume); err != nil {
 		return err
 	}
 	if err := a.docker.CreateAndStart(spec); err != nil {
-		_ = a.docker.Remove(RelayContainerName)
+		_ = a.docker.Remove(a.inst.RelayContainerName)
 		return fmt.Errorf("start relay: %w", err)
 	}
 	return nil
@@ -156,20 +156,21 @@ func (a *App) ensureRelay() error {
 // stopRelay stops the relay if it is running. Safe on any engine: the relay
 // only ever exists on native Linux.
 func (a *App) stopRelay() error {
-	st, err := a.docker.ContainerState(RelayContainerName)
+	st, err := a.docker.ContainerState(a.inst.RelayContainerName)
 	if err != nil {
 		return fmt.Errorf("inspect relay: %w", err)
 	}
 	if st == docker.StateRunning {
-		return a.docker.Stop(RelayContainerName)
+		return a.docker.Stop(a.inst.RelayContainerName)
 	}
 	return nil
 }
 
 // specDrift lists the creation-time settings spec asks for that an existing
 // container (info) lacks. Only settings `docker run` fixes for a
-// container's lifetime and that differ between engines are compared:
-// network mode, extra hosts, and volume mounts. Empty means up to date.
+// container's lifetime that CaddyShack has changed between releases are
+// compared: network mode, extra hosts, volume mounts, and the command
+// (e.g. a Caddy container that predates --resume). Empty means up to date.
 func specDrift(spec docker.ContainerSpec, info docker.ContainerInfo) []string {
 	var drift []string
 	want := spec.NetworkMode
@@ -192,6 +193,9 @@ func specDrift(spec docker.ContainerSpec, info docker.ContainerInfo) []string {
 		if !slices.Contains(info.Mounts, v) {
 			drift = append(drift, fmt.Sprintf("missing volume %s:%s", v.VolumeName, v.ContainerPath))
 		}
+	}
+	if len(spec.Command) > 0 && !slices.Equal(spec.Command, info.Command) {
+		drift = append(drift, "outdated container command")
 	}
 	return drift
 }

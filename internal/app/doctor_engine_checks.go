@@ -40,7 +40,7 @@ func checkDockerEngine(_ context.Context, a *App) CheckResult {
 			Status:  SeverityPass,
 			Summary: fmt.Sprintf("%s (%s)", hn.Reason, hn.Kind),
 			Detail: []string{
-				"host-mode backends: via " + RelayContainerName + " (host network) over " + RelaySocketPath +
+				"host-mode backends: via " + a.inst.RelayContainerName + " (host network) over " + RelaySocketPath +
 					" to localhost:<port>",
 				ufw,
 			},
@@ -59,25 +59,19 @@ func checkDockerEngine(_ context.Context, a *App) CheckResult {
 }
 
 // checkContainerConfig verifies the containers match what this engine
-// needs. Only native Linux has anything to check: the Caddy container must
-// carry the relay socket volume and host-gateway entry (settings `docker
-// run` fixes at creation, so an older container must be recreated), and
-// the relay must be running with its socket visible to Caddy.
+// needs. On every engine the Caddy container must boot with the command
+// that resumes its autosave. On native Linux it must also carry the relay
+// socket volume and host-gateway entry, and the relay must be running with
+// its socket visible to Caddy. All are settings `docker run` fixes at
+// creation, so an older container must be recreated.
 func checkContainerConfig(ctx context.Context, a *App) CheckResult {
 	if err := a.docker.DaemonReachable(); err != nil {
 		return CheckResult{Name: "container-config", Status: SeveritySkip, Summary: "docker daemon unreachable"}
 	}
-	if st, _ := a.docker.ContainerState(CaddyContainerName); st != docker.StateRunning {
+	if st, _ := a.docker.ContainerState(a.inst.ContainerName); st != docker.StateRunning {
 		return CheckResult{Name: "container-config", Status: SeveritySkip, Summary: "container not running"}
 	}
 	hn := a.hostNetwork()
-	if hn.Kind != EngineNativeLinux {
-		return CheckResult{
-			Name:    "container-config",
-			Status:  SeverityPass,
-			Summary: fmt.Sprintf("no extra settings needed on the %s engine", hn.Kind),
-		}
-	}
 
 	drift, err := a.caddyDrift()
 	if err != nil {
@@ -87,22 +81,29 @@ func checkContainerConfig(ctx context.Context, a *App) CheckResult {
 		return CheckResult{
 			Name:    "container-config",
 			Status:  SeverityFail,
-			Summary: CaddyContainerName + " predates native Linux support; host-mode backends are unreachable",
+			Summary: a.inst.ContainerName + " was created by an older caddy_shack and must be recreated",
 			Detail: append(drift,
 				"settings fixed at 'docker run' time; the container must be recreated",
 				"volumes (certs and the local CA), networks and registered backends are kept"),
 			Fix: &FixAction{
-				Label: "recreate " + CaddyContainerName + " with the relay socket and host-gateway ('caddy_shack install')",
+				Label: "recreate " + a.inst.ContainerName + " with this version's settings ('caddy_shack install')",
 				Apply: func(ctx context.Context) error { return a.Install(ctx) },
 			},
 		}
 	}
+	if hn.Kind != EngineNativeLinux {
+		return CheckResult{
+			Name:    "container-config",
+			Status:  SeverityPass,
+			Summary: fmt.Sprintf("%s is up to date for the %s engine", a.inst.ContainerName, hn.Kind),
+		}
+	}
 
 	ensureRelayFix := &FixAction{
-		Label: "(re)create and start " + RelayContainerName,
+		Label: "(re)create and start " + a.inst.RelayContainerName,
 		Apply: func(_ context.Context) error { return a.ensureRelay() },
 	}
-	rs, err := a.docker.ContainerState(RelayContainerName)
+	rs, err := a.docker.ContainerState(a.inst.RelayContainerName)
 	if err != nil {
 		return CheckResult{Name: "container-config", Status: SeverityFail, Summary: "cannot inspect relay", Detail: []string{err.Error()}}
 	}
@@ -110,31 +111,31 @@ func checkContainerConfig(ctx context.Context, a *App) CheckResult {
 		return CheckResult{
 			Name:    "container-config",
 			Status:  SeverityFail,
-			Summary: fmt.Sprintf("%s is %s; host-mode backends are unreachable", RelayContainerName, rs),
+			Summary: fmt.Sprintf("%s is %s; host-mode backends are unreachable", a.inst.RelayContainerName, rs),
 			Fix:     ensureRelayFix,
 		}
 	}
-	if info, err := a.docker.InspectContainer(RelayContainerName); err == nil {
-		if d := specDrift(relayContainerSpec(CaddyImage), info); len(d) > 0 {
+	if info, err := a.docker.InspectContainer(a.inst.RelayContainerName); err == nil {
+		if d := specDrift(relayContainerSpec(a.inst, CaddyImage), info); len(d) > 0 {
 			return CheckResult{
 				Name:    "container-config",
 				Status:  SeverityFail,
-				Summary: RelayContainerName + " was created with the wrong settings",
+				Summary: a.inst.RelayContainerName + " was created with the wrong settings",
 				Detail:  d,
 				Fix:     ensureRelayFix,
 			}
 		}
 	}
-	if _, err := a.docker.Exec(ctx, CaddyContainerName, []string{"test", "-S", RelaySocketPath}); err != nil {
+	if _, err := a.docker.Exec(ctx, a.inst.ContainerName, []string{"test", "-S", RelaySocketPath}); err != nil {
 		return CheckResult{
 			Name:    "container-config",
 			Status:  SeverityFail,
-			Summary: "relay socket " + RelaySocketPath + " not present in " + CaddyContainerName,
-			Detail:  []string{"check 'docker logs " + RelayContainerName + "'"},
+			Summary: "relay socket " + RelaySocketPath + " not present in " + a.inst.ContainerName,
+			Detail:  []string{"check 'docker logs " + a.inst.RelayContainerName + "'"},
 			Fix: &FixAction{
-				Label: "recreate " + RelayContainerName,
+				Label: "recreate " + a.inst.RelayContainerName,
 				Apply: func(_ context.Context) error {
-					if err := a.docker.Remove(RelayContainerName); err != nil {
+					if err := a.docker.Remove(a.inst.RelayContainerName); err != nil {
 						return err
 					}
 					return a.ensureRelay()
@@ -145,7 +146,7 @@ func checkContainerConfig(ctx context.Context, a *App) CheckResult {
 	return CheckResult{
 		Name:    "container-config",
 		Status:  SeverityPass,
-		Summary: "relay running; " + CaddyContainerName + " has the relay socket and host-gateway",
+		Summary: "relay running; " + a.inst.ContainerName + " has the relay socket and host-gateway",
 	}
 }
 
@@ -154,19 +155,19 @@ func checkContainerConfig(ctx context.Context, a *App) CheckResult {
 // --add-host entry. A lookup that times out (rather than failing fast)
 // points at a hanging DNS forwarder; see checkDNSNegativeLinux.
 func checkHostGateway(ctx context.Context, a *App) CheckResult {
-	if st, _ := a.docker.ContainerState(CaddyContainerName); st != docker.StateRunning {
+	if st, _ := a.docker.ContainerState(a.inst.ContainerName); st != docker.StateRunning {
 		return CheckResult{Name: "host-gateway", Status: SeveritySkip, Summary: "container not running"}
 	}
 	lctx, cancel := context.WithTimeout(ctx, lookupTimeout)
 	defer cancel()
 	start := time.Now()
-	out, err := a.docker.Exec(lctx, CaddyContainerName, []string{"getent", "hosts", UpstreamHost})
+	out, err := a.docker.Exec(lctx, a.inst.ContainerName, []string{"getent", "hosts", UpstreamHost})
 	if err == nil {
 		if f := strings.Fields(string(out)); len(f) > 0 {
 			return CheckResult{
 				Name:    "host-gateway",
 				Status:  SeverityPass,
-				Summary: fmt.Sprintf("%s resolves to %s inside %s", UpstreamHost, f[0], CaddyContainerName),
+				Summary: fmt.Sprintf("%s resolves to %s inside %s", UpstreamHost, f[0], a.inst.ContainerName),
 			}
 		}
 	}
@@ -186,7 +187,7 @@ func checkHostGateway(ctx context.Context, a *App) CheckResult {
 	return CheckResult{
 		Name:    "host-gateway",
 		Status:  sev,
-		Summary: UpstreamHost + " does not resolve inside " + CaddyContainerName,
+		Summary: UpstreamHost + " does not resolve inside " + a.inst.ContainerName,
 		Detail:  detail,
 	}
 }

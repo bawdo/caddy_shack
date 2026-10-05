@@ -215,6 +215,7 @@ Exit codes are part of the public CLI contract and are documented in
 | 6 | Caddy not installed (no container exists) |
 | 7 | State file corrupt, manual remediation required |
 | 8 | Lock held by another caddy_shack process (5s timeout) |
+| 9 | `status` only: Caddy is up but its live config does not match the registry (added 2026-10-05; see addendum) |
 
 Code 1 is the catch-all primary failure for a command; specific codes are
 reserved for cross-cutting concerns scripts may want to branch on. The state
@@ -258,3 +259,30 @@ file is never rewritten on a failed Caddy API call.
 
 None at design time. Phase 2 work (doctor, setup, update, logs) will be
 designed in separate specs once MVP usage surfaces real pain points.
+
+## Addendum (2026-10-05): restarts, drift, and `status`
+
+An incident showed the "state file is the source of truth" rule only held
+while Caddy kept running. The container booted from a bare admin-only
+Caddyfile without `--resume`, so any restart caddy_shack didn't drive
+(`docker restart`, a daemon restart, a host reboot) left Caddy serving
+nothing, and on boot Caddy overwrote its autosave with that empty config.
+`list` and `status` read only the registry and admin reachability, so they
+reported healthy throughout. The design changes deliberately:
+
+- The Caddy container boots with `--resume` (after validating the autosave).
+  Existing containers are recreated by `install`, on every engine, because
+  their command is now compared like the other creation-time settings. This
+  supersedes the earlier rule that Docker Desktop containers are never
+  inspected or recreated.
+- Commands that talk to Caddy under the state lock (`start`, `restart`,
+  `install`, `register`, `deregister`, and the new `sync`) re-push the
+  registry when the live config differs from it, including the identical
+  re-`register` that used to be a no-op.
+- `status` compares the live config with the registry. Its health is no
+  longer just "container running and admin API reachable": a reachable Caddy
+  whose config has drifted is unhealthy and exits with the new code **9**.
+  `status` stays read-only.
+- `register`/`deregister` roll Caddy back to the previous registry if the
+  state write fails after `POST /load` succeeded.
+

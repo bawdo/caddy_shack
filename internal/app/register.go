@@ -45,7 +45,8 @@ var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}(\.[a-z0-9][a-z0-9-]{0,
 var containerRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 // Register adds or updates a backend. Idempotent: identical re-registration
-// is a no-op (no Caddy push, no state write).
+// writes no state and only pushes to Caddy if its live config has drifted
+// from the registry.
 func (a *App) Register(ctx context.Context, in RegisterInput) error {
 	if !nameRE.MatchString(in.Name) {
 		return fmt.Errorf("%w: name must match ^[a-z0-9][a-z0-9-]{0,30}(\\.[a-z0-9][a-z0-9-]{0,30})*$ (got %q)", ErrInvalidArgs, in.Name)
@@ -67,7 +68,7 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 	}
 
 	// Caddy must be running before we attempt any state change.
-	st, err := a.docker.ContainerState(CaddyContainerName)
+	st, err := a.docker.ContainerState(a.inst.ContainerName)
 	if err != nil {
 		return fmt.Errorf("inspect container: %w", err)
 	}
@@ -86,22 +87,16 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 		a.noteStaleCaddy()
 	}
 
-	lock, err := state.AcquireLock(a.paths.LockPath, 5*time.Second)
+	lock, err := acquireStateLock(a.paths.LockPath)
 	if err != nil {
-		if errors.Is(err, state.ErrLockTimeout) {
-			return fmt.Errorf("%w: %v", ErrLockContention, err)
-		}
 		return err
 	}
 	defer func() {
 		_ = lock.Release()
 	}()
 
-	s, err := state.Load(a.paths.StatePath)
+	s, err := loadState(a.paths.StatePath)
 	if err != nil {
-		if state.IsCorrupt(err) {
-			return fmt.Errorf("%w: %v", ErrStateCorrupt, err)
-		}
 		return err
 	}
 
@@ -114,27 +109,40 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 
 	existing, present := s.Backends[in.Name]
 	if present && existing.Domain == in.Domain && existing.Upstream == upstream {
-		// Identical re-registration. No-op.
-		return nil
+		// Identical re-registration: no state write. Caddy is still made
+		// to match the registry, so a caller that re-registers on startup
+		// gets its routes back after Caddy lost them.
+		_, err := a.reconcileLocked(ctx, s)
+		return err
 	}
 
-	now := time.Now().Format(time.RFC3339)
-	s.Backends[in.Name] = state.Backend{
+	updated := s.Clone()
+	updated.Backends[in.Name] = state.Backend{
 		Domain:       in.Domain,
 		Upstream:     upstream,
-		RegisteredAt: now,
+		RegisteredAt: time.Now().Format(time.RFC3339),
 	}
+	return a.commit(ctx, s, updated)
+}
 
-	cfg := a.buildConfig(s)
-	if err := a.caddy.Load(ctx, cfg); err != nil {
+// commit pushes updated to Caddy and then writes it as the registry. The
+// caller holds the state lock and prev is the registry as loaded under it.
+// Caddy goes first so a rejected config never reaches state.json. If the
+// state write then fails, Caddy is rolled back to prev so the two don't
+// diverge; if that rollback fails too, the error says so.
+func (a *App) commit(ctx context.Context, prev, updated *state.State) error {
+	if err := a.caddy.Load(ctx, a.buildConfig(updated)); err != nil {
 		if errors.Is(err, caddyapi.ErrUnreachable) {
 			return fmt.Errorf("%w: %v", ErrCaddyNotRunning, err)
 		}
 		return err
 	}
-
-	if err := state.Save(a.paths.StatePath, s); err != nil {
-		return fmt.Errorf("save state: %w", err)
+	if err := state.Save(a.paths.StatePath, updated); err != nil {
+		if rbErr := a.caddy.Load(ctx, a.buildConfig(prev)); rbErr != nil {
+			return fmt.Errorf("save state: %w; caddy now serves the change but the registry does not have it, "+
+				"and rolling caddy back failed (%v); fix the state file, then run 'caddy_shack sync'", err, rbErr)
+		}
+		return fmt.Errorf("save state: %w (caddy rolled back to the registry)", err)
 	}
 	return nil
 }

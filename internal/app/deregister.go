@@ -2,15 +2,11 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
-	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/docker"
-	"github.com/bawdo/caddy_shack/internal/state"
 )
 
 // DeregisterResult reports what Deregister did so the command layer can render
@@ -35,11 +31,12 @@ type DeregisterResult struct {
 // whose domain is a subdomain of the parent's domain.
 //
 // Idempotent: when nothing matches (unknown name and either cascade=false or
-// no children), it makes no Caddy call and returns Removed=false.
+// no children), it writes no state, only pushes to Caddy if its live config
+// has drifted from the registry, and returns Removed=false.
 func (a *App) Deregister(ctx context.Context, name string, cascade bool) (DeregisterResult, error) {
 	var res DeregisterResult
 
-	st, err := a.docker.ContainerState(CaddyContainerName)
+	st, err := a.docker.ContainerState(a.inst.ContainerName)
 	if err != nil {
 		return res, fmt.Errorf("inspect container: %w", err)
 	}
@@ -47,22 +44,16 @@ func (a *App) Deregister(ctx context.Context, name string, cascade bool) (Deregi
 		return res, fmt.Errorf("%w (state=%s)", ErrCaddyNotRunning, st)
 	}
 
-	lock, err := state.AcquireLock(a.paths.LockPath, 5*time.Second)
+	lock, err := acquireStateLock(a.paths.LockPath)
 	if err != nil {
-		if errors.Is(err, state.ErrLockTimeout) {
-			return res, fmt.Errorf("%w: %v", ErrLockContention, err)
-		}
 		return res, err
 	}
 	defer func() {
 		_ = lock.Release()
 	}()
 
-	s, err := state.Load(a.paths.StatePath)
+	s, err := loadState(a.paths.StatePath)
 	if err != nil {
-		if state.IsCorrupt(err) {
-			return res, fmt.Errorf("%w: %v", ErrStateCorrupt, err)
-		}
 		return res, err
 	}
 
@@ -96,29 +87,19 @@ func (a *App) Deregister(ctx context.Context, name string, cascade bool) (Deregi
 	}
 
 	if len(remove) == 0 {
-		// Nothing to remove: parent absent and (no cascade, or no children).
-		return res, nil
-	}
-
-	// Work on a copy so a Caddy failure leaves on-disk state intact.
-	updated := *s
-	updated.Backends = make(map[string]state.Backend, len(s.Backends))
-	for k, v := range s.Backends {
-		if !remove[k] {
-			updated.Backends[k] = v
-		}
-	}
-
-	cfg := a.buildConfig(&updated)
-	if err := a.caddy.Load(ctx, cfg); err != nil {
-		if errors.Is(err, caddyapi.ErrUnreachable) {
-			return res, fmt.Errorf("%w: %v", ErrCaddyNotRunning, err)
-		}
+		// Nothing to remove: parent absent and (no cascade, or no
+		// children). The registry is unchanged, but Caddy is still made to
+		// match it.
+		_, err := a.reconcileLocked(ctx, s)
 		return res, err
 	}
 
-	if err := state.Save(a.paths.StatePath, &updated); err != nil {
-		return res, fmt.Errorf("save state: %w", err)
+	updated := s.Clone()
+	for k := range remove {
+		delete(updated.Backends, k)
+	}
+	if err := a.commit(ctx, s, updated); err != nil {
+		return res, err
 	}
 
 	res.Removed = parentPresent

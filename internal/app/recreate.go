@@ -13,7 +13,7 @@ import (
 // ensureCaddyVolumes creates every named volume the Caddy container mounts
 // on this engine. Idempotent.
 func (a *App) ensureCaddyVolumes() error {
-	for _, v := range caddyContainerSpec(CaddyImage, a.hostNetwork()).Volumes {
+	for _, v := range caddyContainerSpec(a.inst, CaddyImage, a.hostNetwork()).Volumes {
 		if err := a.docker.EnsureVolume(v.VolumeName); err != nil {
 			return err
 		}
@@ -22,33 +22,30 @@ func (a *App) ensureCaddyVolumes() error {
 }
 
 // caddyDrift lists what the existing Caddy container lacks compared with the
-// spec this engine needs (see specDrift). Empty means up to date. Only
-// native Linux is ever checked: every other engine's spec is unchanged from
-// earlier releases, so there is nothing to migrate and Docker Desktop
-// installs are never inspected or recreated by this path.
+// spec this engine needs (see specDrift). Empty means up to date. Checked on
+// every engine: native Linux needs the relay socket and host-gateway, and
+// every engine needs the boot command that resumes Caddy's autosave.
 func (a *App) caddyDrift() ([]string, error) {
-	if a.hostNetwork().Kind != EngineNativeLinux {
-		return nil, nil
-	}
-	info, err := a.docker.InspectContainer(CaddyContainerName)
+	info, err := a.docker.InspectContainer(a.inst.ContainerName)
 	if err != nil {
 		return nil, fmt.Errorf("inspect container: %w", err)
 	}
-	return specDrift(caddyContainerSpec(CaddyImage, a.hostNetwork()), info), nil
+	return specDrift(caddyContainerSpec(a.inst, CaddyImage, a.hostNetwork()), info), nil
 }
 
 // noteStaleCaddy points the user at `install` when the existing container
-// predates this engine's settings. Used by commands that must not recreate
-// the container themselves (start, register). Best-effort and silent on
-// inspection errors.
+// predates the settings this version needs. Used by commands that must not
+// recreate the container themselves (start, register). Best-effort and
+// silent on inspection errors.
 func (a *App) noteStaleCaddy() {
 	drift, err := a.caddyDrift()
 	if err != nil || len(drift) == 0 {
 		return
 	}
-	a.notef("%s was created without the settings the %s engine needs (%s); host-mode backends won't be reachable "+
-		"until it is recreated. Run: caddy_shack install (keeps volumes, the local CA, networks and backends)\n",
-		CaddyContainerName, a.hostNetwork().Kind, strings.Join(drift, "; "))
+	a.notef("%s was created without settings this version needs on the %s engine (%s); until it is recreated, "+
+		"host-mode backends may be unreachable and routes are lost whenever the container restarts outside caddy_shack. "+
+		"Run: caddy_shack install (keeps volumes, the local CA, networks and backends)\n",
+		a.inst.ContainerName, a.hostNetwork().Kind, strings.Join(drift, "; "))
 }
 
 // recreateCaddy replaces the Caddy container with one built from image and
@@ -80,18 +77,18 @@ func (a *App) recreateCaddy(ctx context.Context, image string) error {
 		return err
 	}
 
-	info, err := a.docker.InspectContainer(CaddyContainerName)
+	info, err := a.docker.InspectContainer(a.inst.ContainerName)
 	if err != nil {
 		return fmt.Errorf("inspect container: %w", err)
 	}
 
-	if err := a.docker.Remove(CaddyContainerName); err != nil {
+	if err := a.docker.Remove(a.inst.ContainerName); err != nil {
 		return err
 	}
 	if err := a.ensureCaddyVolumes(); err != nil {
 		return err
 	}
-	if err := a.docker.CreateAndStart(caddyContainerSpec(image, a.hostNetwork())); err != nil {
+	if err := a.docker.CreateAndStart(caddyContainerSpec(a.inst, image, a.hostNetwork())); err != nil {
 		return err
 	}
 	for _, n := range info.Networks {
@@ -100,7 +97,7 @@ func (a *App) recreateCaddy(ctx context.Context, image string) error {
 			// Attached by `docker run` itself, or not attachable.
 			continue
 		}
-		if err := a.docker.ConnectNetwork(n, CaddyContainerName); err != nil {
+		if err := a.docker.ConnectNetwork(n, a.inst.ContainerName); err != nil {
 			return fmt.Errorf("reattach network %s: %w", n, err)
 		}
 	}

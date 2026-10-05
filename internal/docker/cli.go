@@ -279,6 +279,9 @@ func (CLI) InspectContainer(name string) (ContainerInfo, error) {
 // CaddyShack spec.
 func parseContainerInfo(out []byte) (ContainerInfo, error) {
 	var raw struct {
+		Config struct {
+			Cmd []string
+		}
 		HostConfig struct {
 			NetworkMode string
 			ExtraHosts  []string
@@ -298,6 +301,7 @@ func parseContainerInfo(out []byte) (ContainerInfo, error) {
 	info := ContainerInfo{
 		NetworkMode: raw.HostConfig.NetworkMode,
 		ExtraHosts:  raw.HostConfig.ExtraHosts,
+		Command:     raw.Config.Cmd,
 	}
 	for _, m := range raw.Mounts {
 		if m.Type == "volume" {

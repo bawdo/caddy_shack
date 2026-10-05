@@ -160,6 +160,7 @@ func (f *Fake) CreateAndStart(spec ContainerSpec) error {
 		ExtraHosts:  append([]string(nil), spec.ExtraHosts...),
 		Mounts:      append([]VolumeMount(nil), spec.Volumes...),
 		Networks:    []string{mode},
+		Command:     append([]string(nil), spec.Command...),
 	}
 	return nil
 }

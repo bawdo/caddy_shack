@@ -106,6 +106,9 @@ type ContainerInfo struct {
 	ExtraHosts  []string
 	Mounts      []VolumeMount
 	Networks    []string
+	// Command is the container's Config.Cmd: the command it was created
+	// with (the images CaddyShack runs have no entrypoint).
+	Command []string
 }
 
 // ContainerSpec describes a container CreateAndStart should run.

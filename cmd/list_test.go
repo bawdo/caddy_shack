@@ -98,3 +98,20 @@ func TestRenderListFooterAbsentWhenEmptyOrJSON(t *testing.T) {
 		t.Errorf("footer should not appear in JSON: %q", js.String())
 	}
 }
+
+func TestRenderListShowsLivenessAndWarns(t *testing.T) {
+	items := []app.Listing{
+		{Name: "alpha", Domain: "alpha.test", Live: app.LiveYes},
+		{Name: "bravo", Domain: "bravo.test", Live: app.LiveNo},
+	}
+	var buf bytes.Buffer
+	if err := renderList(&buf, items, false); err != nil {
+		t.Fatalf("renderList: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"LIVE", "1 backend(s) registered but not live", "caddy_shack sync"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q\nfull:\n%s", want, out)
+		}
+	}
+}

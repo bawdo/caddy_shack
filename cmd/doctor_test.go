@@ -342,3 +342,38 @@ func TestRunFixLoopYesModeMarksSudoFixFailedWhenSudoCachedFalse(t *testing.T) {
 		t.Errorf("expected [FIX-FAILED] in output:\n%s", buf.String())
 	}
 }
+
+// TestRunFixLoopFailsWhenFailingChecksRemain: --fix must not exit 0 while a
+// FAIL check had no fix to apply or its fix was declined.
+func TestRunFixLoopFailsWhenFailingChecksRemain(t *testing.T) {
+	dir := t.TempDir()
+	a := app.NewWithPaths(app.Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  filepath.Join(dir, "state.json.lock"),
+	}, nil, docker.NewFake())
+	noop := func(context.Context) error { return nil }
+
+	cases := []struct {
+		name    string
+		checks  []app.CheckResult
+		input   string
+		wantErr bool
+	}{
+		{"fail without a fix", []app.CheckResult{{Name: "x", Status: app.SeverityFail}}, "", true},
+		{"declined fail", []app.CheckResult{{Name: "x", Status: app.SeverityFail, Fix: &app.FixAction{Apply: noop}}}, "n\n", true},
+		{"warn without a fix", []app.CheckResult{{Name: "x", Status: app.SeverityWarn}}, "", false},
+		{"declined warn", []app.CheckResult{{Name: "x", Status: app.SeverityWarn, Fix: &app.FixAction{Apply: noop}}}, "n\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := newDoctorCmd()
+			cmd.SetIn(strings.NewReader(tc.input))
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetContext(context.Background())
+			err := runFixLoop(cmd, a, app.DoctorReport{Checks: tc.checks}, false)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
