@@ -168,6 +168,12 @@ func (a *App) buildCheckList(opts DoctorOptions) []func(context.Context) CheckRe
 		func(ctx context.Context) CheckResult { return checkTrustStore(ctx, a, sh, tty) },
 		func(ctx context.Context) CheckResult { return checkStateIntegrity(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkConfigDrift(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkLANIPPresent(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkLANForwarder(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkLANIPDrift(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkLANPath(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkLANDNS(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkLANFirewall(ctx, a, sh, runtime.GOOS) },
 	)
 	if !opts.SkipBackends {
 		checks = append(checks, func(ctx context.Context) CheckResult { return checkBackends(ctx, a) })
