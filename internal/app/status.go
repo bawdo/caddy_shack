@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"net/netip"
 
 	"github.com/bawdo/caddy_shack/internal/docker"
 	"github.com/bawdo/caddy_shack/internal/state"
@@ -28,6 +29,54 @@ type StatusReport struct {
 	// DriftError says why a running, reachable Caddy's config could not be
 	// compared with the registry. Status is unhealthy when it is set.
 	DriftError string `json:"drift_error,omitempty"`
+	// LAN is informational: nil when state.json has no LAN block. It never
+	// affects Healthy or the exit code.
+	LAN *LANStatus `json:"lan,omitempty"`
+}
+
+// LANStatus describes LAN exposure for the status report.
+type LANStatus struct {
+	Enabled        bool   `json:"enabled"`
+	IP             string `json:"ip"`
+	Mode           string `json:"mode"`
+	Suffix         string `json:"suffix"`
+	IPPresent      bool   `json:"ip_present"`
+	ForwarderState string `json:"forwarder_state"`
+	// DiscoveredIP is set only in discovered mode when the interface's
+	// current address differs from IP.
+	DiscoveredIP string `json:"discovered_ip,omitempty"`
+	LANBackends  int    `json:"lan_backends"`
+}
+
+// lanStatus builds the informational LAN block. Resolver or docker failures
+// leave the affected fields empty or false; they never fail status.
+func (a *App) lanStatus(s *state.State) *LANStatus {
+	l := s.LAN
+	ls := &LANStatus{Enabled: l.Enabled, IP: l.IP, Mode: string(l.Mode), Suffix: l.Suffix}
+	for _, b := range s.Backends {
+		if b.LANDomain != "" {
+			ls.LANBackends++
+		}
+	}
+	if !l.Enabled {
+		return ls
+	}
+	if fs, err := a.docker.ContainerState(a.inst.LANContainerName); err != nil {
+		ls.ForwarderState = "unknown"
+	} else {
+		ls.ForwarderState = fs.String()
+	}
+	if ip, err := netip.ParseAddr(l.IP); err == nil {
+		if ok, err := a.lan.Present(ip); err == nil {
+			ls.IPPresent = ok
+		}
+	}
+	if l.Mode == state.LANModeDiscovered {
+		if res, err := a.lan.Discover(); err == nil && res.IP.IsValid() && res.IP.String() != l.IP {
+			ls.DiscoveredIP = res.IP.String()
+		}
+	}
+	return ls
 }
 
 // Status reports container state, admin API reachability, backend count,
@@ -75,6 +124,9 @@ func (a *App) Status(ctx context.Context) (StatusReport, error) {
 		s = nil
 	} else {
 		rep.BackendCount = len(s.Backends)
+		if s.LAN != nil {
+			rep.LAN = a.lanStatus(s)
+		}
 	}
 
 	if priorityErr == nil && a.hostNetwork().Kind == EngineNativeLinux {

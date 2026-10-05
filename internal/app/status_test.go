@@ -171,3 +171,89 @@ func TestStatusReturnsErrDockerUnreachableWhenDaemonDown(t *testing.T) {
 		t.Errorf("ContainerState: got %q want %q", rep.ContainerState, "docker-down")
 	}
 }
+
+// statusLANApp builds an App with a healthy running Caddy whose registry is
+// stateJSON, plus the given LAN resolver and fake docker.
+func statusLANApp(t *testing.T, stateJSON string, r LANResolver, fakeDock *docker.Fake) *App {
+	t.Helper()
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	if err := writeFile(t, statePath, stateJSON); err != nil {
+		t.Fatal(err)
+	}
+	s, err := state.Load(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write(caddyapi.Build(s))
+	}))
+	t.Cleanup(srv.Close)
+	fakeDock.Containers[CaddyContainerName] = docker.StateRunning
+	return NewWithPaths(Paths{StatePath: statePath, LockPath: statePath + ".lock"},
+		caddyapi.NewClient(srv.URL, time.Second), fakeDock).WithLANResolver(r)
+}
+
+const lanStateJSON = `{"schema_version":2,"backends":{
+"a":{"domain":"a.test","upstream":"127.0.0.1:1","lan_domain":"a.arrix.home.lan"},
+"b":{"domain":"b.test","upstream":"127.0.0.1:2"}},
+"lan":{"enabled":true,"ip":"192.168.1.12","mode":"discovered","suffix":"arrix.home.lan"}}`
+
+func TestStatusNoLANBlock(t *testing.T) {
+	fake := docker.NewFake()
+	a := statusLANApp(t, `{"schema_version":2,"backends":{}}`, discovered("192.168.1.12"), fake)
+	rep, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if rep.LAN != nil {
+		t.Errorf("LAN should be nil: %+v", rep.LAN)
+	}
+}
+
+func TestStatusLANHealthy(t *testing.T) {
+	fake := docker.NewFake()
+	fake.Containers[LANContainerName] = docker.StateRunning
+	a := statusLANApp(t, lanStateJSON, discovered("192.168.1.12"), fake)
+	rep, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	want := LANStatus{Enabled: true, IP: "192.168.1.12", Mode: "discovered", Suffix: "arrix.home.lan",
+		IPPresent: true, ForwarderState: "running", LANBackends: 1}
+	if rep.LAN == nil || *rep.LAN != want {
+		t.Errorf("LAN: got %+v want %+v", rep.LAN, want)
+	}
+}
+
+func TestStatusLANDownStillHealthy(t *testing.T) {
+	fake := docker.NewFake()
+	a := statusLANApp(t, lanStateJSON, discoverStub{derr: errors.New("no iface")}, fake)
+	rep, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !rep.Healthy {
+		t.Errorf("Healthy should stay true: %+v", rep)
+	}
+	if rep.LAN == nil || rep.LAN.IPPresent || rep.LAN.ForwarderState != "absent" || rep.LAN.DiscoveredIP != "" {
+		t.Errorf("LAN: %+v", rep.LAN)
+	}
+}
+
+func TestStatusLANDrift(t *testing.T) {
+	fake := docker.NewFake()
+	fake.Containers[LANContainerName] = docker.StateRunning
+	a := statusLANApp(t, lanStateJSON, discovered("192.168.1.99"), fake)
+	rep, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if rep.LAN == nil || rep.LAN.DiscoveredIP != "192.168.1.99" {
+		t.Errorf("LAN: %+v", rep.LAN)
+	}
+	if !rep.Healthy {
+		t.Error("drift must not affect Healthy")
+	}
+}
