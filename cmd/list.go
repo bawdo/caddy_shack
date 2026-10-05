@@ -48,10 +48,10 @@ func renderList(w io.Writer, items []app.Listing, asJSON bool) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "NAME\tDOMAIN\tUPSTREAM\tREGISTERED\tLIVE")
+	_, _ = fmt.Fprintln(tw, "NAME\tDOMAIN\tLAN\tUPSTREAM\tREGISTERED\tLIVE")
 	notLive := 0
 	for _, it := range items {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", it.Name, it.Domain, it.Upstream, it.RegisteredAt, it.Live)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", it.Name, it.Domain, it.LANDomain, it.Upstream, it.RegisteredAt, it.Live)
 		if it.Live == app.LiveNo || it.Live == app.LiveStale {
 			notLive++
 		}

@@ -11,6 +11,8 @@ func newRegisterCmd() *cobra.Command {
 		port      int
 		domain    string
 		container string
+		lan       bool
+		lanDomain string
 	)
 	c := &cobra.Command{
 		Use:   "register <name>",
@@ -42,7 +44,12 @@ Container mode: pass --container <alias> to route to a container reachable on
 the shared "caddy_shack" Docker network instead of the host (same on every
 engine). The app's compose must attach the service to that external network
 with the given alias. --port is still required (the container's listening
-port).`,
+port).
+
+LAN names: with LAN mode enabled ('caddy_shack lan enable'), --lan also
+serves the backend at <name>.<lan suffix> for other devices on the network.
+--lan-domain sets an explicit LAN name instead. The two flags are mutually
+exclusive. Registering again without either flag removes the LAN name.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := app.New()
@@ -54,6 +61,8 @@ port).`,
 				Domain:    domain,
 				Port:      port,
 				Container: container,
+				LAN:       lan,
+				LANDomain: lanDomain,
 			})
 		},
 	}
@@ -62,6 +71,10 @@ port).`,
 	c.Flags().StringVar(&container, "container", "",
 		"Container network alias to route to over the shared caddy_shack network "+
 			"(instead of the host). Requires --port.")
+	c.Flags().BoolVar(&lan, "lan", false,
+		"Also serve the backend at <name>.<lan suffix> (needs LAN mode enabled)")
+	c.Flags().StringVar(&lanDomain, "lan-domain", "",
+		"Also serve the backend at this LAN name (needs LAN mode enabled)")
 	_ = c.MarkFlagRequired("port")
 	return c
 }

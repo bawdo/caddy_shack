@@ -115,3 +115,26 @@ func TestRenderListShowsLivenessAndWarns(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderListShowsLANColumn(t *testing.T) {
+	items := []app.Listing{
+		{Name: "alpha", Domain: "alpha.test", Upstream: "u:1", LANDomain: "alpha.arrix.home.lan"},
+		{Name: "bravo", Domain: "bravo.test", Upstream: "u:2"},
+	}
+	var buf bytes.Buffer
+	if err := renderList(&buf, items, false); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "DOMAIN") || !strings.Contains(out, "LAN") || !strings.Contains(out, "alpha.arrix.home.lan") {
+		t.Errorf("missing LAN column:\n%s", out)
+	}
+	if strings.Index(out, "LAN") > strings.Index(out, "UPSTREAM") {
+		t.Errorf("LAN should precede UPSTREAM:\n%s", out)
+	}
+	var buf2 bytes.Buffer
+	_ = renderList(&buf2, items, true)
+	if !strings.Contains(buf2.String(), `"lan_domain": "alpha.arrix.home.lan"`) || strings.Count(buf2.String(), "lan_domain") != 1 {
+		t.Errorf("json:\n%s", buf2.String())
+	}
+}
