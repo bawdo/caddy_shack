@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -187,4 +188,140 @@ func (a *App) noteLANDown(err error) error {
 		return nil
 	}
 	return err
+}
+
+// LANEnableInput holds the lan enable arguments.
+type LANEnableInput struct {
+	IP      string     // empty means discover
+	Suffix  string     // empty means keep the stored suffix; required if none stored
+	Confirm PromptFunc // nil means proceed without asking (--yes)
+}
+
+// LANEnableResult describes what lan enable bound.
+type LANEnableResult struct {
+	IP     string
+	Mode   state.LANMode
+	Suffix string
+	Note   string
+}
+
+var lanNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
+
+// validLANName checks a LAN suffix: a lowercase DNS name that is not in the
+// .test space, which belongs to the local CA.
+func validLANName(name string) error {
+	if len(name) > 253 || !lanNameRE.MatchString(name) {
+		return fmt.Errorf("%w: %q is not a valid DNS name", ErrInvalidArgs, name)
+	}
+	if name == "test" || strings.HasSuffix(name, ".test") {
+		return fmt.Errorf("%w: %q is in the .test space, which is reserved for local names", ErrInvalidArgs, name)
+	}
+	return nil
+}
+
+// resolveLANIP picks the address to bind: the pinned one if given, else the
+// discovered one.
+func (a *App) resolveLANIP(pin string) (string, state.LANMode, string, error) {
+	if pin == "" {
+		res, err := a.lan.Discover()
+		if err != nil {
+			return "", "", "", fmt.Errorf("%w: %w", ErrInvalidArgs, err)
+		}
+		return res.IP.String(), state.LANModeDiscovered, res.Note, nil
+	}
+	ip, err := netip.ParseAddr(pin)
+	if err != nil || !ip.Is4() || ip.IsLoopback() {
+		return "", "", "", fmt.Errorf("%w: --ip %q must be a non-loopback IPv4 address", ErrInvalidArgs, pin)
+	}
+	ok, err := a.lan.Present(ip)
+	if err != nil {
+		return "", "", "", fmt.Errorf("check LAN IP %s: %w", ip, err)
+	}
+	if !ok {
+		return "", "", "", fmt.Errorf("%w: %s is not assigned to any interface on this machine", ErrInvalidArgs, ip)
+	}
+	return ip.String(), state.LANModePinned, "", nil
+}
+
+// LANEnable switches LAN mode on: settings are saved and pushed to Caddy
+// first, then the forwarder is started. Backends' LANDomain values are left
+// alone, so a re-enable with a new suffix does not rename anything.
+func (a *App) LANEnable(ctx context.Context, in LANEnableInput) (LANEnableResult, error) {
+	if err := a.requireRunning(); err != nil {
+		return LANEnableResult{}, err
+	}
+	if in.Suffix != "" {
+		if err := validLANName(in.Suffix); err != nil {
+			return LANEnableResult{}, err
+		}
+	}
+	peek, err := loadState(a.paths.StatePath)
+	if err != nil {
+		return LANEnableResult{}, err
+	}
+	if in.Suffix == "" && (peek.LAN == nil || peek.LAN.Suffix == "") {
+		return LANEnableResult{}, fmt.Errorf("%w: --suffix is required the first time", ErrInvalidArgs)
+	}
+	ip, mode, note, err := a.resolveLANIP(in.IP)
+	if err != nil {
+		return LANEnableResult{}, err
+	}
+	if in.Confirm != nil && !in.Confirm(fmt.Sprintf("Bind LAN access to %s (%s)? ", ip, mode)) {
+		return LANEnableResult{}, errors.New("cancelled")
+	}
+
+	lock, err := acquireStateLock(a.paths.LockPath)
+	if err != nil {
+		return LANEnableResult{}, err
+	}
+	defer func() { _ = lock.Release() }()
+
+	s, err := loadState(a.paths.StatePath)
+	if err != nil {
+		return LANEnableResult{}, err
+	}
+	suffix := in.Suffix
+	if suffix == "" {
+		if s.LAN == nil || s.LAN.Suffix == "" {
+			return LANEnableResult{}, fmt.Errorf("%w: --suffix is required the first time", ErrInvalidArgs)
+		}
+		suffix = s.LAN.Suffix
+	}
+	updated := s.Clone()
+	updated.LAN = &state.LAN{Enabled: true, IP: ip, Mode: mode, Suffix: suffix}
+	if err := a.commit(ctx, s, updated); err != nil {
+		return LANEnableResult{}, err
+	}
+	if err := a.ensureSharedNetwork(); err != nil {
+		return LANEnableResult{}, fmt.Errorf("ensure shared network: %w", err)
+	}
+	if err := a.ensureLAN(updated); err != nil {
+		return LANEnableResult{}, err
+	}
+	return LANEnableResult{IP: ip, Mode: mode, Suffix: suffix, Note: note}, nil
+}
+
+// LANDisable removes the forwarder first (so nothing is left listening),
+// then pushes the config without LAN servers and records Enabled=false. The
+// stored IP, mode and suffix are kept for the next enable.
+func (a *App) LANDisable(ctx context.Context) error {
+	lock, err := acquireStateLock(a.paths.LockPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Release() }()
+
+	s, err := loadState(a.paths.StatePath)
+	if err != nil {
+		return err
+	}
+	if err := a.removeLAN(); err != nil {
+		return err
+	}
+	if s.LAN == nil || !s.LAN.Enabled {
+		return nil
+	}
+	updated := s.Clone()
+	updated.LAN.Enabled = false
+	return a.commit(ctx, s, updated)
 }
