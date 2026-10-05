@@ -105,7 +105,7 @@ func (a *App) ensureLAN(s *state.State) error {
 		return fmt.Errorf("check LAN IP %s: %w", ip, err)
 	}
 	if !ok {
-		return fmt.Errorf("%s: %w", ip, ErrLANDown)
+		return &lanDownError{IP: ip.String()}
 	}
 	name := a.inst.LANContainerName
 	if err := a.docker.EnsureNetwork(a.inst.NetworkName); err != nil {
@@ -180,14 +180,113 @@ func (a *App) removeLAN() error {
 	return a.docker.Remove(a.inst.LANContainerName)
 }
 
+// lanDownError is ErrLANDown carrying the address that went missing, so the
+// notice can name it. errors.Is(err, ErrLANDown) holds.
+type lanDownError struct{ IP string }
+
+func (e *lanDownError) Error() string { return fmt.Sprintf("%s: %s", e.IP, ErrLANDown) }
+func (e *lanDownError) Unwrap() error { return ErrLANDown }
+
 // noteLANDown turns ErrLANDown into a notice (nil) and passes anything else
 // through, so start, sync and friends carry on without the forwarder.
 func (a *App) noteLANDown(err error) error {
-	if errors.Is(err, ErrLANDown) {
-		a.notef("notice: LAN exposure is paused: %v\n", err)
+	if !errors.Is(err, ErrLANDown) {
+		return err
+	}
+	ip := "the stored LAN IP"
+	var down *lanDownError
+	if errors.As(err, &down) {
+		ip = down.IP
+	}
+	a.notef("notice: LAN access is off: %s is not on any interface. Reconnect to that network and run "+
+		"'caddy_shack restart' (discovered mode rebinds automatically; pinned mode: 'caddy_shack lan enable --ip <new>').\n", ip)
+	return nil
+}
+
+// ensureLANFromState brings the forwarder in line with the saved LAN
+// settings, for use after Caddy's config is in place. With no LAN settings
+// at all Docker is not touched. LAN down is a notice, not an error.
+func (a *App) ensureLANFromState() error {
+	s, err := loadState(a.paths.StatePath)
+	if err != nil {
+		return err
+	}
+	if s.LAN == nil {
 		return nil
 	}
-	return err
+	return a.noteLANDown(a.ensureLAN(s))
+}
+
+// rediscoverLAN re-runs LAN discovery when the saved address was discovered
+// (not pinned), so a restart follows the machine to a new network. A changed
+// address is saved and announced. A failed discovery is a notice: the old
+// address stays and ensureLAN reports it if it is gone.
+func (a *App) rediscoverLAN() error {
+	lock, err := acquireStateLock(a.paths.LockPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Release() }()
+
+	s, err := loadState(a.paths.StatePath)
+	if err != nil {
+		return err
+	}
+	if !s.LANEnabled() || s.LAN.Mode != state.LANModeDiscovered {
+		return nil
+	}
+	res, err := a.lan.Discover()
+	if err != nil {
+		a.notef("notice: could not rediscover the LAN IP, keeping %s: %v\n", s.LAN.IP, err)
+		return nil
+	}
+	newIP := res.IP.String()
+	if newIP == s.LAN.IP {
+		return nil
+	}
+	updated := s.Clone()
+	updated.LAN.IP = newIP
+	if err := state.Save(a.paths.StatePath, updated); err != nil {
+		return err
+	}
+	a.notef("LAN IP changed %s -> %s; update your DNS A record\n", s.LAN.IP, newIP)
+	return nil
+}
+
+// upgradeLAN refreshes the forwarder image. The forwarder is stateless, so a
+// stale one is simply replaced. Does nothing when LAN is not enabled.
+func (a *App) upgradeLAN() error {
+	s, err := loadState(a.paths.StatePath)
+	if err != nil {
+		return err
+	}
+	if !s.LANEnabled() {
+		return nil
+	}
+	if err := a.docker.PullImage(LANImage); err != nil {
+		return err
+	}
+	st, err := a.docker.ContainerState(a.inst.LANContainerName)
+	if err != nil {
+		return fmt.Errorf("inspect LAN forwarder: %w", err)
+	}
+	if st != docker.StateAbsent {
+		newID, err := a.docker.ImageID(LANImage)
+		if err != nil {
+			return fmt.Errorf("image id: %w", err)
+		}
+		curID, err := a.docker.ContainerImageID(a.inst.LANContainerName)
+		if err != nil {
+			return fmt.Errorf("container image id: %w", err)
+		}
+		if newID == curID {
+			return nil
+		}
+		if err := a.removeLAN(); err != nil {
+			return err
+		}
+	}
+	return a.noteLANDown(a.ensureLAN(s))
 }
 
 // LANEnableInput holds the lan enable arguments.

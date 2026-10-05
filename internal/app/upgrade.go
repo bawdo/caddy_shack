@@ -59,10 +59,16 @@ func (a *App) Upgrade(ctx context.Context) (UpgradeReport, error) {
 	}
 	if newID == curID {
 		a.noteStaleCaddy()
+		if err := a.upgradeLAN(); err != nil {
+			return UpgradeReport{}, err
+		}
 		return UpgradeReport{AlreadyCurrent: true, Version: a.caddyVersion(ctx)}, nil
 	}
 
 	if err := a.recreateCaddy(ctx, CaddyImage); err != nil {
+		return UpgradeReport{}, err
+	}
+	if err := a.upgradeLAN(); err != nil {
 		return UpgradeReport{}, err
 	}
 

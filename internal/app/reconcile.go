@@ -211,7 +211,11 @@ func (a *App) Sync(ctx context.Context) (SyncReport, error) {
 	if err := a.requireRunning(); err != nil {
 		return SyncReport{}, err
 	}
-	return a.reconcile(ctx)
+	rep, err := a.reconcile(ctx)
+	if err != nil {
+		return rep, err
+	}
+	return rep, a.ensureLANFromState()
 }
 
 // requireRunning returns ErrCaddyNotRunning unless the Caddy container is
