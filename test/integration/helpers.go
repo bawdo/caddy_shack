@@ -99,3 +99,12 @@ func (fakeRunningDocker) NetworkAttached(string, string) (bool, error) {
 }
 func (fakeRunningDocker) ImageID(string) (string, error)          { return "", nil }
 func (fakeRunningDocker) ContainerImageID(string) (string, error) { return "", nil }
+
+// EngineInfo reports Docker Desktop so the App keeps routing host-mode
+// backends via host.docker.internal: these tests own their Caddy container
+// and never create the native-Linux relay.
+func (fakeRunningDocker) EngineInfo() (docker.EngineInfo, error) { return docker.DesktopEngine, nil }
+func (fakeRunningDocker) BridgeGateway() (string, error)         { return "172.17.0.1", nil }
+func (fakeRunningDocker) InspectContainer(string) (docker.ContainerInfo, error) {
+	return docker.ContainerInfo{NetworkMode: "bridge", Networks: []string{"bridge"}}, nil
+}

@@ -13,14 +13,17 @@ import (
 )
 
 // UpstreamHost is the in-container DNS name that resolves to the host
-// running Docker. All backends route through this; the user only supplies
-// the port their service listens on. host.docker.internal is provided by
-// Docker Desktop on macOS automatically.
+// running Docker. Host-mode backends are stored as UpstreamHost:<port>; the
+// user only supplies the port their service listens on. Docker Desktop and
+// VM runtimes provide the name and forward it to the host's loopback, so
+// Caddy dials it directly there. On native Linux the stored upstream is
+// rendered as a dial through the relay instead (see relay.go), because
+// docker0 can't reach loopback-bound services.
 const UpstreamHost = "host.docker.internal"
 
 // RegisterInput holds the fields the register command accepts. Port is the
-// host-side TCP port the user's service listens on; the upstream Caddy
-// reverse-proxies to is constructed as host.docker.internal:<port>.
+// host-side TCP port the user's service listens on; the upstream is stored
+// as host.docker.internal:<port>.
 type RegisterInput struct {
 	Name   string
 	Domain string // optional; defaults to <Name>.test
@@ -79,6 +82,8 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 		if err := a.ensureSharedNetwork(); err != nil {
 			return fmt.Errorf("ensure shared network: %w", err)
 		}
+	} else {
+		a.noteStaleCaddy()
 	}
 
 	lock, err := state.AcquireLock(a.paths.LockPath, 5*time.Second)
@@ -120,7 +125,7 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 		RegisteredAt: now,
 	}
 
-	cfg := caddyapi.Build(s)
+	cfg := a.buildConfig(s)
 	if err := a.caddy.Load(ctx, cfg); err != nil {
 		if errors.Is(err, caddyapi.ErrUnreachable) {
 			return fmt.Errorf("%w: %v", ErrCaddyNotRunning, err)

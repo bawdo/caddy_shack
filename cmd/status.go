@@ -45,6 +45,9 @@ func renderStatus(w io.Writer, rep app.StatusReport, asJSON bool) {
 	if rep.CaddyVersion != "" {
 		_, _ = fmt.Fprintf(w, "version:         %s\n", rep.CaddyVersion)
 	}
+	if rep.RelayState != "" {
+		_, _ = fmt.Fprintf(w, "relay:           %s\n", rep.RelayState)
+	}
 	_, _ = fmt.Fprintf(w, "admin reachable: %t\n", rep.AdminReachable)
 	_, _ = fmt.Fprintf(w, "backends:        %d\n", rep.BackendCount)
 	_, _ = fmt.Fprintf(w, "healthy:         %t\n", rep.Healthy)

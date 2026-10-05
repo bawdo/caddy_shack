@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/docker"
 	"github.com/bawdo/caddy_shack/internal/state"
 )
@@ -28,7 +27,8 @@ func (a *App) Start(ctx context.Context) error {
 	case docker.StateAbsent:
 		return fmt.Errorf("%w: run 'caddy_shack install' first", ErrNotInstalled)
 	case docker.StateRunning:
-		return nil
+		a.noteStaleCaddy()
+		return a.ensureRelay()
 	case docker.StateStopped:
 		if err := a.docker.Start(CaddyContainerName); err != nil {
 			return err
@@ -36,6 +36,10 @@ func (a *App) Start(ctx context.Context) error {
 		if err := a.ensureSharedNetwork(); err != nil {
 			return fmt.Errorf("attach shared network: %w", err)
 		}
+		if err := a.ensureRelay(); err != nil {
+			return err
+		}
+		a.noteStaleCaddy()
 		return a.restoreBackends(ctx)
 	}
 	return nil
@@ -67,13 +71,14 @@ func (a *App) restoreBackends(ctx context.Context) error {
 		return err
 	}
 
-	if err := a.caddy.Load(ctx, caddyapi.Build(s)); err != nil {
+	if err := a.caddy.Load(ctx, a.buildConfig(s)); err != nil {
 		return fmt.Errorf("failed to restore backends; run 'caddy_shack status': %w", err)
 	}
 	return nil
 }
 
-// Stop stops the CaddyShack container if running. No-op if absent or stopped.
+// Stop stops the CaddyShack container, and the native-Linux relay, if
+// running. No-op if absent or stopped.
 func (a *App) Stop() error {
 	if err := a.docker.DaemonReachable(); err != nil {
 		return fmt.Errorf("%w: %v", ErrDockerUnreachable, err)
@@ -83,9 +88,11 @@ func (a *App) Stop() error {
 		return fmt.Errorf("inspect container: %w", err)
 	}
 	if st == docker.StateRunning {
-		return a.docker.Stop(CaddyContainerName)
+		if err := a.docker.Stop(CaddyContainerName); err != nil {
+			return err
+		}
 	}
-	return nil
+	return a.stopRelay()
 }
 
 // Restart stops then starts. Tolerates absent (returns ErrNotInstalled).

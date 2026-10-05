@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -12,7 +13,7 @@ func TestInstallCreatesVolumesPullsImageAndStartsContainer(t *testing.T) {
 	fake := docker.NewFake()
 	a := NewWithPaths(Paths{}, nil, fake)
 
-	if err := a.Install(); err != nil {
+	if err := a.Install(context.Background()); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 
@@ -51,7 +52,7 @@ func TestInstallIsNoOpWhenAlreadyRunning(t *testing.T) {
 	fake.Containers[CaddyContainerName] = docker.StateRunning
 	a := NewWithPaths(Paths{}, nil, fake)
 
-	if err := a.Install(); err != nil {
+	if err := a.Install(context.Background()); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 	// PullImage and CreateAndStart should not have run.
@@ -65,7 +66,7 @@ func TestInstallStartsStoppedContainer(t *testing.T) {
 	fake.Containers[CaddyContainerName] = docker.StateStopped
 	a := NewWithPaths(Paths{}, nil, fake)
 
-	if err := a.Install(); err != nil {
+	if err := a.Install(context.Background()); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 	state, _ := fake.ContainerState(CaddyContainerName)
@@ -79,7 +80,7 @@ func TestInstallReturnsErrDockerUnreachableWhenDaemonDown(t *testing.T) {
 	fake.DaemonErr = docker.ErrDaemonUnreachable
 	a := NewWithPaths(Paths{}, nil, fake)
 
-	err := a.Install()
+	err := a.Install(context.Background())
 	if !errors.Is(err, ErrDockerUnreachable) {
 		t.Errorf("expected ErrDockerUnreachable, got %v", err)
 	}
@@ -90,7 +91,7 @@ func TestInstallRollsBackHalfCreatedContainerOnFailure(t *testing.T) {
 	fake.CreateAndStartErr = errors.New("docker run: exit status 125: networking failure")
 	a := NewWithPaths(Paths{}, nil, fake)
 
-	if err := a.Install(); err == nil {
+	if err := a.Install(context.Background()); err == nil {
 		t.Fatal("expected error from Install")
 	}
 
@@ -116,7 +117,7 @@ func TestInstallContainerCommandBindsAdminToAllInterfaces(t *testing.T) {
 	fake := docker.NewFake()
 	a := NewWithPaths(Paths{}, nil, fake)
 
-	if err := a.Install(); err != nil {
+	if err := a.Install(context.Background()); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 
@@ -138,7 +139,7 @@ func TestInstallReturnsHelpfulErrorOnPortConflict(t *testing.T) {
 		"docker run: exit status 125: Bind for 127.0.0.1:80 failed: port is already allocated")
 	a := NewWithPaths(Paths{}, nil, fake)
 
-	err := a.Install()
+	err := a.Install(context.Background())
 	if err == nil {
 		t.Fatal("expected error from Install")
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bawdo/caddy_shack/internal/state"
@@ -147,5 +148,84 @@ func assertJSONMatchesGolden(t *testing.T, got []byte, name string) {
 	wantNorm, _ := json.MarshalIndent(wantAny, "", "  ")
 	if string(gotNorm) != string(wantNorm) {
 		t.Errorf("golden mismatch for %s\nwant:\n%s\n\ngot:\n%s", name, wantNorm, gotNorm)
+	}
+}
+
+var testRelay = &HostRelay{
+	Host:       "host.docker.internal",
+	Dial:       "unix//run/caddy_shack/relay.sock",
+	PortHeader: "X-Caddy-Shack-Port",
+}
+
+func TestBuildWithZeroOptionsIsBuild(t *testing.T) {
+	s := &state.State{
+		SchemaVersion: 1,
+		Backends: map[string]state.Backend{
+			"web":  {Domain: "web.test", Upstream: "host.docker.internal:3000"},
+			"app":  {Domain: "app.test", Upstream: "app:80"},
+			"bare": {Domain: "bare.test", Upstream: "127.0.0.1:4000"},
+		},
+	}
+	if string(BuildWith(s, Options{})) != string(Build(s)) {
+		t.Error("BuildWith(s, Options{}) must be byte-identical to Build(s)")
+	}
+	if strings.Contains(string(Build(s)), `"headers"`) {
+		t.Error("Build must not emit a headers block")
+	}
+}
+
+func TestBuildWithHostRelayReroutesOnlyHostMode(t *testing.T) {
+	s := &state.State{
+		SchemaVersion: 1,
+		Backends: map[string]state.Backend{
+			"web": {Domain: "web.test", Upstream: "host.docker.internal:3000"},
+			"app": {Domain: "app.test", Upstream: "app:80"},
+		},
+	}
+	got := BuildWith(s, Options{HostRelay: testRelay})
+	var doc struct {
+		Apps struct {
+			HTTP struct {
+				Servers map[string]struct {
+					Routes []struct {
+						Match  []struct{ Host []string }
+						Handle []struct {
+							Upstreams []struct{ Dial string }
+							Headers   *struct {
+								Request struct {
+									Set map[string][]string
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	routes := doc.Apps.HTTP.Servers["srv0"].Routes
+	if len(routes) != 4 {
+		t.Fatalf("routes: got %d want 4", len(routes))
+	}
+	for _, r := range routes {
+		host := r.Match[0].Host[0]
+		h := r.Handle[0]
+		switch host {
+		case "web.test", "*.web.test":
+			if h.Upstreams[0].Dial != testRelay.Dial {
+				t.Errorf("%s dial: %q", host, h.Upstreams[0].Dial)
+			}
+			if h.Headers == nil || strings.Join(h.Headers.Request.Set["X-Caddy-Shack-Port"], ",") != "3000" {
+				t.Errorf("%s: missing port header: %+v", host, h.Headers)
+			}
+		case "app.test", "*.app.test":
+			if h.Upstreams[0].Dial != "app:80" || h.Headers != nil {
+				t.Errorf("%s: container-mode route changed: %+v", host, h)
+			}
+		default:
+			t.Errorf("unexpected route %s", host)
+		}
 	}
 }

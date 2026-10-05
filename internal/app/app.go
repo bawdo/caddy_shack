@@ -1,6 +1,9 @@
 package app
 
 import (
+	"fmt"
+	"io"
+	"os"
 	"time"
 
 	"github.com/bawdo/caddy_shack/internal/caddyapi"
@@ -30,6 +33,11 @@ type App struct {
 	paths  Paths
 	caddy  *caddyapi.Client
 	docker docker.Client
+	// notices receives advisory messages (engine fallbacks, recreate
+	// announcements, "run install" hints). Defaults to stderr.
+	notices io.Writer
+	// hn caches the engine classification; see hostNetwork.
+	hn *HostNetwork
 }
 
 // New builds an App with default paths, a real Caddy client at the loopback
@@ -51,5 +59,10 @@ func NewWithPaths(p Paths, caddy *caddyapi.Client, dock docker.Client) *App {
 	if dock == nil {
 		dock = docker.NewCLI()
 	}
-	return &App{paths: p, caddy: caddy, docker: dock}
+	return &App{paths: p, caddy: caddy, docker: dock, notices: os.Stderr}
+}
+
+// notef writes one advisory message to the notices writer.
+func (a *App) notef(format string, args ...any) {
+	_, _ = fmt.Fprintf(a.notices, format, args...)
 }

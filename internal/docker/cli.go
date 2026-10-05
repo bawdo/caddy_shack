@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -44,16 +46,19 @@ func (CLI) PullImage(image string) error {
 }
 
 func (CLI) ContainerState(name string) (ContainerState, error) {
-	cmd := exec.Command("docker", "inspect", "--format", "{{.State.Running}}", name)
+	// --type container: without it docker inspects whatever object has the
+	// name, so a volume or network sharing a container's name would be
+	// inspected instead (and has no .State).
+	cmd := exec.Command("docker", "inspect", "--type", "container", "--format", "{{.State.Running}}", name)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		// "no such object" => absent. exec.ExitError reflects docker's exit 1.
-		// Match case-insensitively: docker has used both "No such object" and
-		// "no such object" historically.
+		// Absent => "No such container" (with --type) or "no such object"
+		// (without). exec.ExitError reflects docker's exit 1. Match
+		// case-insensitively: docker has used both capitalisations.
 		var ee *exec.ExitError
-		if errors.As(err, &ee) && strings.Contains(strings.ToLower(stderr.String()), "no such object") {
+		if errors.As(err, &ee) && isNoSuchContainer(stderr.String()) {
 			return StateAbsent, nil
 		}
 		return StateAbsent, fmt.Errorf("docker inspect %s: %w: %s", name, err, stderr.String())
@@ -69,7 +74,25 @@ func (CLI) ContainerState(name string) (ContainerState, error) {
 }
 
 func (CLI) CreateAndStart(spec ContainerSpec) error {
+	cmd := exec.Command("docker", RunArgs(spec)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("docker run: %w: %s", err, out)
+	}
+	return nil
+}
+
+// RunArgs is the `docker run` argv (without the leading "docker") that
+// CreateAndStart executes for spec. Pure, so the exact argv each engine
+// gets can be pinned in tests. Optional flags are only emitted when set,
+// so a spec without NetworkMode/ExtraHosts yields the original argv.
+func RunArgs(spec ContainerSpec) []string {
 	args := []string{"run", "-d", "--name", spec.Name, "--restart", "unless-stopped"}
+	if spec.NetworkMode != "" {
+		args = append(args, "--network", spec.NetworkMode)
+	}
+	for _, h := range spec.ExtraHosts {
+		args = append(args, "--add-host", h)
+	}
 	for _, p := range spec.PortMappings {
 		args = append(args, "-p",
 			fmt.Sprintf("%s:%s:%s", p.HostAddr, strconv.Itoa(p.HostPort), strconv.Itoa(p.ContainerPort)))
@@ -79,11 +102,7 @@ func (CLI) CreateAndStart(spec ContainerSpec) error {
 	}
 	args = append(args, spec.Image)
 	args = append(args, spec.Command...)
-	cmd := exec.Command("docker", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("docker run: %w: %s", err, out)
-	}
-	return nil
+	return args
 }
 
 func (CLI) Start(name string) error {
@@ -101,6 +120,13 @@ func (CLI) Stop(name string) error {
 		return fmt.Errorf("docker stop %s: %w: %s", name, err, out)
 	}
 	return nil
+}
+
+// isNoSuchContainer reports whether docker's stderr says the named
+// container does not exist.
+func isNoSuchContainer(stderr string) bool {
+	low := strings.ToLower(stderr)
+	return strings.Contains(low, "no such object") || strings.Contains(low, "no such container")
 }
 
 func (CLI) Remove(name string) error {
@@ -166,7 +192,7 @@ func (CLI) ImageID(ref string) (string, error) {
 }
 
 func (CLI) ContainerImageID(name string) (string, error) {
-	cmd := exec.Command("docker", "inspect", "--format", "{{.Image}}", name)
+	cmd := exec.Command("docker", "inspect", "--type", "container", "--format", "{{.Image}}", name)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -177,13 +203,13 @@ func (CLI) ContainerImageID(name string) (string, error) {
 }
 
 func (CLI) NetworkAttached(network, container string) (bool, error) {
-	cmd := exec.Command("docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", container)
+	cmd := exec.Command("docker", "inspect", "--type", "container", "--format", "{{json .NetworkSettings.Networks}}", container)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		var ee *exec.ExitError
-		if errors.As(err, &ee) && strings.Contains(strings.ToLower(stderr.String()), "no such object") {
+		if errors.As(err, &ee) && isNoSuchContainer(stderr.String()) {
 			return false, nil
 		}
 		return false, fmt.Errorf("docker inspect %s networks: %w: %s", container, err, stderr.String())
@@ -194,4 +220,93 @@ func (CLI) NetworkAttached(network, container string) (bool, error) {
 	}
 	_, ok := nets[network]
 	return ok, nil
+}
+
+func (CLI) EngineInfo() (EngineInfo, error) {
+	cmd := exec.Command("docker", "info", "--format", "{{json .}}")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return EngineInfo{}, fmt.Errorf("docker info: %w: %s", err, stderr.String())
+	}
+	var info EngineInfo
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &info); err != nil {
+		return EngineInfo{}, fmt.Errorf("docker info: parse: %w", err)
+	}
+	return info, nil
+}
+
+func (CLI) BridgeGateway() (string, error) {
+	cmd := exec.Command("docker", "network", "inspect", "bridge", "--format", "{{json .IPAM.Config}}")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("docker network inspect bridge: %w: %s", err, stderr.String())
+	}
+	return parseBridgeGateway(stdout.Bytes())
+}
+
+// parseBridgeGateway picks the first IPv4 gateway out of the bridge
+// network's IPAM config JSON.
+func parseBridgeGateway(out []byte) (string, error) {
+	var cfgs []struct{ Gateway string }
+	if err := json.Unmarshal(bytes.TrimSpace(out), &cfgs); err != nil {
+		return "", fmt.Errorf("docker network inspect bridge: parse: %w", err)
+	}
+	for _, c := range cfgs {
+		if ip := net.ParseIP(c.Gateway); ip != nil && ip.To4() != nil {
+			return c.Gateway, nil
+		}
+	}
+	return "", fmt.Errorf("docker network inspect bridge: no IPv4 gateway in %s", strings.TrimSpace(string(out)))
+}
+
+func (CLI) InspectContainer(name string) (ContainerInfo, error) {
+	cmd := exec.Command("docker", "inspect", "--type", "container", "--format", "{{json .}}", name)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return ContainerInfo{}, fmt.Errorf("docker inspect %s: %w: %s", name, err, stderr.String())
+	}
+	return parseContainerInfo(stdout.Bytes())
+}
+
+// parseContainerInfo extracts ContainerInfo from `docker inspect` JSON.
+// Only named-volume mounts are reported; bind mounts never appear in a
+// CaddyShack spec.
+func parseContainerInfo(out []byte) (ContainerInfo, error) {
+	var raw struct {
+		HostConfig struct {
+			NetworkMode string
+			ExtraHosts  []string
+		}
+		Mounts []struct {
+			Type        string
+			Name        string
+			Destination string
+		}
+		NetworkSettings struct {
+			Networks map[string]json.RawMessage
+		}
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return ContainerInfo{}, fmt.Errorf("parse docker inspect: %w", err)
+	}
+	info := ContainerInfo{
+		NetworkMode: raw.HostConfig.NetworkMode,
+		ExtraHosts:  raw.HostConfig.ExtraHosts,
+	}
+	for _, m := range raw.Mounts {
+		if m.Type == "volume" {
+			info.Mounts = append(info.Mounts, VolumeMount{VolumeName: m.Name, ContainerPath: m.Destination})
+		}
+	}
+	for n := range raw.NetworkSettings.Networks {
+		info.Networks = append(info.Networks, n)
+	}
+	sort.Strings(info.Networks)
+	return info, nil
 }

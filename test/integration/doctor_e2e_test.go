@@ -108,8 +108,13 @@ func (stoppedDocker) ConnectNetwork(string, string) error { return nil }
 func (stoppedDocker) NetworkAttached(string, string) (bool, error) {
 	return false, nil
 }
-func (stoppedDocker) ImageID(string) (string, error)          { return "", nil }
-func (stoppedDocker) ContainerImageID(string) (string, error) { return "", nil }
+func (stoppedDocker) ImageID(string) (string, error)            { return "", nil }
+func (stoppedDocker) ContainerImageID(string) (string, error)   { return "", nil }
+func (stoppedDocker) EngineInfo() (dockerpkg.EngineInfo, error) { return dockerpkg.DesktopEngine, nil }
+func (stoppedDocker) BridgeGateway() (string, error)            { return "172.17.0.1", nil }
+func (stoppedDocker) InspectContainer(string) (dockerpkg.ContainerInfo, error) {
+	return dockerpkg.ContainerInfo{NetworkMode: "bridge", Networks: []string{"bridge"}}, nil
+}
 
 // execOnlyDocker is a docker.Client that only implements Exec against a
 // real container; the other methods always report "running" for the App's
@@ -137,8 +142,13 @@ func (execOnlyDocker) ConnectNetwork(string, string) error { return nil }
 func (execOnlyDocker) NetworkAttached(string, string) (bool, error) {
 	return true, nil
 }
-func (execOnlyDocker) ImageID(string) (string, error)          { return "", nil }
-func (execOnlyDocker) ContainerImageID(string) (string, error) { return "", nil }
+func (execOnlyDocker) ImageID(string) (string, error)            { return "", nil }
+func (execOnlyDocker) ContainerImageID(string) (string, error)   { return "", nil }
+func (execOnlyDocker) EngineInfo() (dockerpkg.EngineInfo, error) { return dockerpkg.DesktopEngine, nil }
+func (execOnlyDocker) BridgeGateway() (string, error)            { return "172.17.0.1", nil }
+func (execOnlyDocker) InspectContainer(string) (dockerpkg.ContainerInfo, error) {
+	return dockerpkg.ContainerInfo{NetworkMode: "bridge", Networks: []string{"bridge"}}, nil
+}
 
 func TestDoctorBackendsFailWhenUpstreamDead(t *testing.T) {
 	SkipUnlessDocker(t)

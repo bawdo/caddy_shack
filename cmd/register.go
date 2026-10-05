@@ -18,10 +18,19 @@ func newRegisterCmd() *cobra.Command {
 		Long: `Register a backend so Caddy reverse-proxies https://<name>.test to a
 service listening on the given host port.
 
-Caddy itself runs in a container; this command always routes through
-host.docker.internal, so all you supply is the port your service listens on
-locally. Whether your service binds 127.0.0.1, 0.0.0.0, or localhost on the
-host doesn't matter - the port is what we need.
+Caddy itself runs in a container, so all you supply is the port your
+service listens on locally. How Caddy reaches that port depends on the
+Docker engine:
+
+  - Docker Desktop, OrbStack, Colima, Lima, Rancher Desktop: via
+    host.docker.internal, which the engine forwards to the host's loopback.
+  - Native Docker Engine on Linux: via the caddy_shack_relay container,
+    which runs on the host network and dials localhost:<port> over a
+    private unix socket (no extra TCP listener, no firewall rule needed).
+
+Either way, binding 127.0.0.1, 0.0.0.0, or localhost on the host all work.
+On Linux, if 'caddy_shack doctor' reports container-config failing, run
+'caddy_shack install' once to recreate the container with the relay.
 
 Subdomains: registering a backend automatically serves every subdomain of
 its domain from the same upstream, so "register foo --port 2000" makes
@@ -30,9 +39,10 @@ subdomain elsewhere, register it explicitly with a dotted name:
 "register bar.foo --port 3000".
 
 Container mode: pass --container <alias> to route to a container reachable on
-the shared "caddy_shack" Docker network instead of host.docker.internal. The
-app's compose must attach the service to that external network with the given
-alias. --port is still required (the container's listening port).`,
+the shared "caddy_shack" Docker network instead of the host (same on every
+engine). The app's compose must attach the service to that external network
+with the given alias. --port is still required (the container's listening
+port).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := app.New()
@@ -51,7 +61,7 @@ alias. --port is still required (the container's listening port).`,
 	c.Flags().StringVar(&domain, "domain", "", "Optional domain (defaults to <name>.test)")
 	c.Flags().StringVar(&container, "container", "",
 		"Container network alias to route to over the shared caddy_shack network "+
-			"(instead of host.docker.internal). Requires --port.")
+			"(instead of the host). Requires --port.")
 	_ = c.MarkFlagRequired("port")
 	return c
 }
