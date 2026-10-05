@@ -97,3 +97,42 @@ func TestRenderStatusJSON(t *testing.T) {
 		t.Errorf("round-trip mismatch: got %+v want %+v", got, rep)
 	}
 }
+
+func TestRenderStatusHumanShowsDrift(t *testing.T) {
+	rep := app.StatusReport{
+		ContainerState: "running",
+		AdminReachable: true,
+		BackendCount:   2,
+		Drift:          &app.Drift{Missing: []string{"alpha", "bravo"}},
+	}
+	var buf bytes.Buffer
+	renderStatus(&buf, rep, false)
+	out := buf.String()
+	for _, want := range []string{
+		"config in sync:  false",
+		"no http app",
+		"no tls app",
+		"registered but not live: alpha, bravo",
+		"caddy_shack sync",
+		"healthy:         false",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q\nfull:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderStatusJSONIncludesDrift(t *testing.T) {
+	rep := app.StatusReport{ContainerState: "running", AdminReachable: true,
+		Drift: &app.Drift{HTTPApp: true, TLSApp: true, Unknown: []string{"x.test"}}}
+	var buf bytes.Buffer
+	renderStatus(&buf, rep, true)
+	var m map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
+		t.Fatalf("not JSON: %v", err)
+	}
+	d, ok := m["drift"].(map[string]any)
+	if !ok || d["in_sync"] != false || d["unknown"].([]any)[0] != "x.test" {
+		t.Errorf("drift: %v", m["drift"])
+	}
+}

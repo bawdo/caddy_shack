@@ -15,7 +15,7 @@ func newListCmd() *cobra.Command {
 	var asJSON bool
 	c := &cobra.Command{
 		Use:   "list",
-		Short: "List registered backends",
+		Short: "List registered backends and whether Caddy is serving them",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := app.New()
 			if err != nil {
@@ -48,14 +48,21 @@ func renderList(w io.Writer, items []app.Listing, asJSON bool) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "NAME\tDOMAIN\tUPSTREAM\tREGISTERED")
+	_, _ = fmt.Fprintln(tw, "NAME\tDOMAIN\tUPSTREAM\tREGISTERED\tLIVE")
+	notLive := 0
 	for _, it := range items {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", it.Name, it.Domain, it.Upstream, it.RegisteredAt)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", it.Name, it.Domain, it.Upstream, it.RegisteredAt, it.Live)
+		if it.Live == app.LiveNo || it.Live == app.LiveStale {
+			notLive++
+		}
 	}
 	if err := tw.Flush(); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "Each backend also serves *.<domain> unless a more specific override exists.")
+	if notLive > 0 {
+		_, _ = fmt.Fprintf(w, "%d backend(s) registered but not live in Caddy; run 'caddy_shack sync'.\n", notLive)
+	}
 	return nil
 }

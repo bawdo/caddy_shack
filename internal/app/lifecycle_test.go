@@ -54,13 +54,51 @@ func TestStartStartsStoppedContainerAndRestoresBackends(t *testing.T) {
 	}
 }
 
-func TestStartIsNoOpWhenRunning(t *testing.T) {
-	fake := docker.NewFake()
-	fake.Containers[CaddyContainerName] = docker.StateRunning
-	a := NewWithPaths(Paths{}, nil, fake)
+func TestStartOnRunningInSyncCaddyPushesNothing(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	seedState(t, f.statePath, "myapp", "myapp.test", "host.docker.internal:3000")
+	f.syncLive(t)
 
-	if err := a.Start(context.Background()); err != nil {
+	if err := f.app.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
+	}
+	if n := f.loads(); n != 0 {
+		t.Errorf("in-sync Caddy should not be re-pushed; got %d loads", n)
+	}
+}
+
+// TestStartOnRunningCaddyRestoresLostRoutes is the incident: the container
+// was restarted outside caddy_shack (host reboot) and came back with only
+// its admin config. Start finds it running and must still restore routes.
+func TestStartOnRunningCaddyRestoresLostRoutes(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	seedState(t, f.statePath, "myapp", "myapp.test", "host.docker.internal:3000")
+
+	if err := f.app.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !strings.Contains(string(f.lastBody), "myapp.test") {
+		t.Errorf("backends not restored to a running Caddy: %s", f.lastBody)
+	}
+}
+
+// TestStartRestoresRoutesEvenWhenRelayFails: routes go in before the relay
+// is ensured, so a relay failure leaves only host-mode backends down
+// instead of a Caddy with no routes at all.
+func TestStartRestoresRoutesEvenWhenRelayFails(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	d := f.app.docker.(*docker.Fake)
+	useNativeLinux(t, d)
+	d.Containers[CaddyContainerName] = docker.StateStopped
+	d.CreateErrs = map[string]error{RelayContainerName: errors.New("relay boom")}
+	seedState(t, f.statePath, "myapp", "myapp.test", "app:3000")
+
+	err := f.app.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "relay boom") {
+		t.Fatalf("want the relay failure reported, got %v", err)
+	}
+	if !strings.Contains(string(f.lastBody), "myapp.test") {
+		t.Errorf("routes not restored before the relay failed: %s", f.lastBody)
 	}
 }
 

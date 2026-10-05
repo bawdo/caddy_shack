@@ -93,11 +93,28 @@ func TestCheckDockerEngine(t *testing.T) {
 
 func TestCheckContainerConfigDesktopPasses(t *testing.T) {
 	fake := docker.NewFake()
-	fake.Containers[CaddyContainerName] = docker.StateRunning
-	fake.InspectErr = errors.New("desktop must not inspect")
+	seedCurrentDesktopCaddy(fake, docker.StateRunning)
 	r := checkContainerConfig(context.Background(), newDoctorApp(t, fake, "http://127.0.0.1:1"))
 	if r.Status != SeverityPass {
 		t.Errorf("%v %q", r.Status, r.Summary)
+	}
+}
+
+// TestCheckContainerConfigDesktopPreResumeOffersRecreate: a Docker Desktop
+// container whose command predates --resume loses every route whenever it
+// restarts outside caddy_shack, so doctor fails it and offers install.
+func TestCheckContainerConfigDesktopPreResumeOffersRecreate(t *testing.T) {
+	fake := docker.NewFake()
+	seedCurrentDesktopCaddy(fake, docker.StateRunning)
+	info := fake.Infos[CaddyContainerName]
+	info.Command = []string{"sh", "-c", "exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"}
+	fake.Infos[CaddyContainerName] = info
+	r := checkContainerConfig(context.Background(), newDoctorApp(t, fake, "http://127.0.0.1:1"))
+	if r.Status != SeverityFail || r.Fix == nil {
+		t.Fatalf("want FAIL with a fix, got %v %q fix=%v", r.Status, r.Summary, r.Fix)
+	}
+	if !strings.Contains(strings.Join(r.Detail, "\n"), "outdated container command") {
+		t.Errorf("detail should name the command: %v", r.Detail)
 	}
 }
 

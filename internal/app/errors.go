@@ -13,10 +13,11 @@ var (
 	ErrStateCorrupt      = errors.New("state file corrupt")
 	ErrLockContention    = errors.New("state lock held by another process")
 	ErrUnhealthy         = errors.New("caddy_shack is unhealthy")
+	ErrDrift             = errors.New("live caddy config does not match the registry; run 'caddy_shack sync'")
 )
 
 // ExitCode maps an error to the documented exit codes.
-// 0 = nil, 1 = generic failure, 2-8 = specific sentinels.
+// 0 = nil, 1 = generic failure, 2-9 = specific sentinels.
 func ExitCode(err error) int {
 	switch {
 	case err == nil:
@@ -35,6 +36,8 @@ func ExitCode(err error) int {
 		return 7
 	case errors.Is(err, ErrLockContention):
 		return 8
+	case errors.Is(err, ErrDrift):
+		return 9
 	default:
 		return 1
 	}

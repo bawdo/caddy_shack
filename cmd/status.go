@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 
@@ -15,7 +14,14 @@ func newStatusCmd() *cobra.Command {
 	var asJSON bool
 	c := &cobra.Command{
 		Use:   "status",
-		Short: "Report container state, admin API reachability, and backend count",
+		Short: "Report container health and whether Caddy's live config matches the registry",
+		Long: `Report the Caddy container's state, admin API reachability, the number of
+registered backends, and whether Caddy's live config (GET /config/) matches
+what the registry (state.json) renders.
+
+status only reads. It exits 0 when healthy, 9 when everything is up but the
+live config has drifted from the registry (run 'caddy_shack sync'), and 1
+for any other unhealthy state. See 'caddy_shack --help' for every code.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := app.New()
 			if err != nil {
@@ -23,10 +29,7 @@ func newStatusCmd() *cobra.Command {
 			}
 			rep, runErr := a.Status(cmd.Context())
 			renderStatus(cmd.OutOrStdout(), rep, asJSON)
-			if runErr != nil && !errors.Is(runErr, app.ErrUnhealthy) {
-				return runErr
-			}
-			return runErr // ErrUnhealthy -> generic exit 1 via app.ExitCode
+			return runErr // exit code via app.ExitCode: 1 unhealthy, 9 drift
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
@@ -50,5 +53,19 @@ func renderStatus(w io.Writer, rep app.StatusReport, asJSON bool) {
 	}
 	_, _ = fmt.Fprintf(w, "admin reachable: %t\n", rep.AdminReachable)
 	_, _ = fmt.Fprintf(w, "backends:        %d\n", rep.BackendCount)
+	switch {
+	case rep.Drift != nil:
+		_, _ = fmt.Fprintf(w, "config in sync:  %t\n", rep.Drift.InSync)
+		if !rep.Drift.InSync {
+			for _, line := range app.DriftDetail(*rep.Drift) {
+				_, _ = fmt.Fprintf(w, "  %s\n", line)
+			}
+			_, _ = fmt.Fprintln(w, "  run 'caddy_shack sync' to re-push the registry to Caddy")
+		}
+	case rep.DriftError != "":
+		_, _ = fmt.Fprintf(w, "config in sync:  unknown (%s)\n", rep.DriftError)
+	default:
+		_, _ = fmt.Fprintln(w, "config in sync:  unknown")
+	}
 	_, _ = fmt.Fprintf(w, "healthy:         %t\n", rep.Healthy)
 }

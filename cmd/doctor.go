@@ -140,11 +140,17 @@ func runFixLoop(cmd *cobra.Command, a *app.App, rep app.DoctorReport, yes bool) 
 
 	var (
 		applied, skipped, failed int
-		firstErr                 error
+		// unfixed counts FAIL checks no fix was applied to (none offered,
+		// or declined). They still fail, so the command must too.
+		unfixed  int
+		firstErr error
 	)
 	for _, r := range rep.Checks {
 		writeCheckLine(out, r)
 		if r.Fix == nil {
+			if r.Status == app.SeverityFail {
+				unfixed++
+			}
 			continue
 		}
 		if r.Status != app.SeverityFail && r.Status != app.SeverityWarn {
@@ -170,6 +176,9 @@ func runFixLoop(cmd *cobra.Command, a *app.App, rep app.DoctorReport, yes bool) 
 		case app.FixSkipped:
 			_, _ = fmt.Fprintf(out, "[--] %s skipped\n", r.Name)
 			skipped++
+			if r.Status == app.SeverityFail {
+				unfixed++
+			}
 		case app.FixFailed:
 			_, _ = fmt.Fprintf(out, "[FIX-FAILED] %s: %v\n", r.Name, err)
 			failed++
@@ -179,6 +188,9 @@ func runFixLoop(cmd *cobra.Command, a *app.App, rep app.DoctorReport, yes bool) 
 		}
 	}
 	_, _ = fmt.Fprintf(out, "\n%d fixed, %d skipped, %d failed.\n", applied, skipped, failed)
+	if firstErr == nil && unfixed > 0 {
+		return fmt.Errorf("doctor: %d failing check(s) not fixed", unfixed)
+	}
 	return firstErr
 }
 

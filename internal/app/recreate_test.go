@@ -56,9 +56,9 @@ func seedLegacyCaddy(fake *docker.Fake, st docker.ContainerState) {
 // native Linux settings, plus a running relay.
 func seedCurrentCaddy(fake *docker.Fake) {
 	hn := HostNetwork{Kind: EngineNativeLinux, Gateway: testGateway}
-	_ = fake.CreateAndStart(caddyContainerSpec(CaddyImage, hn))
+	_ = fake.CreateAndStart(caddyContainerSpec(DefaultInstance(), CaddyImage, hn))
 	_ = fake.ConnectNetwork(CaddyNetworkName, CaddyContainerName)
-	_ = fake.CreateAndStart(relayContainerSpec(CaddyImage))
+	_ = fake.CreateAndStart(relayContainerSpec(DefaultInstance(), CaddyImage))
 	fake.Removed = nil
 }
 
@@ -164,7 +164,7 @@ func TestInstallNativeReplacesMisconfiguredRelay(t *testing.T) {
 func TestInstallFreshNativeCreatesCaddyAndRelay(t *testing.T) {
 	fake := docker.NewFake()
 	useNativeLinux(t, fake)
-	a := NewWithPaths(Paths{}, nil, fake)
+	a := newFixtureWith(t, http.StatusOK, fake).app
 	if err := a.Install(context.Background()); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
@@ -176,17 +176,15 @@ func TestInstallFreshNativeCreatesCaddyAndRelay(t *testing.T) {
 	}
 }
 
-// TestInstallDesktopNeverInspectsOrRecreates pins the macOS behaviour: a
-// running container is left alone without even being inspected, and no
-// relay is created.
-func TestInstallDesktopNeverInspectsOrRecreates(t *testing.T) {
+// TestInstallDesktopLeavesCurrentContainerAlone: a Docker Desktop container
+// already created by this version is neither recreated nor given a relay.
+func TestInstallDesktopLeavesCurrentContainerAlone(t *testing.T) {
 	fake := docker.NewFake()
-	fake.InspectErr = errors.New("desktop install must not inspect the container")
-	seedLegacyCaddy(fake, docker.StateRunning)
-	a := NewWithPaths(Paths{}, nil, fake)
+	seedCurrentDesktopCaddy(fake, docker.StateRunning)
+	f := newFixtureWith(t, http.StatusOK, fake)
 	var notices bytes.Buffer
-	a.notices = &notices
-	if err := a.Install(context.Background()); err != nil {
+	f.app.notices = &notices
+	if err := f.app.Install(context.Background()); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 	if len(fake.Removed) != 0 || len(fake.Specs) != 0 {
@@ -197,11 +195,46 @@ func TestInstallDesktopNeverInspectsOrRecreates(t *testing.T) {
 	}
 }
 
+// TestInstallDesktopRecreatesPreResumeContainer: a Docker Desktop container
+// whose command predates --resume is recreated (keeping volumes, networks
+// and backends) so it survives restarts outside caddy_shack. No relay.
+func TestInstallDesktopRecreatesPreResumeContainer(t *testing.T) {
+	fake := docker.NewFake()
+	seedLegacyCaddy(fake, docker.StateRunning)
+	info := fake.Infos[CaddyContainerName]
+	info.Command = []string{"sh", "-c", "exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"}
+	fake.Infos[CaddyContainerName] = info
+	f := newFixtureWith(t, http.StatusOK, fake)
+	seedState(t, f.statePath, "myapp", "myapp.test", "host.docker.internal:3000")
+	var notices bytes.Buffer
+	f.app.notices = &notices
+
+	if err := f.app.Install(context.Background()); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if !slices.Contains(fake.Removed, CaddyContainerName) {
+		t.Fatalf("pre-resume container was not recreated; removed=%v", fake.Removed)
+	}
+	if !slices.Contains(fake.Specs[CaddyContainerName].Command, caddyBootScript) {
+		t.Errorf("recreated without the resume boot script: %q", fake.Specs[CaddyContainerName].Command)
+	}
+	if _, ok := fake.Specs[RelayContainerName]; ok {
+		t.Error("desktop must not get a relay")
+	}
+	info, _ = fake.InspectContainer(CaddyContainerName)
+	if got := strings.Join(info.Networks, ","); got != "arrix-gamma,bridge,caddy_shack" {
+		t.Errorf("networks after recreate = %q", got)
+	}
+	if !strings.Contains(string(f.lastBody), "myapp.test") {
+		t.Errorf("backends not restored after recreate: %s", f.lastBody)
+	}
+}
+
 func TestInstallFreshUnknownEngineKeepsDesktopSpecAndSaysSo(t *testing.T) {
 	fake := docker.NewFake()
 	fake.Engine = docker.EngineInfo{OSType: "linux", OperatingSystem: "Ubuntu", Name: "box"}
 	stubInterfaces(t, nil)
-	a := NewWithPaths(Paths{}, nil, fake)
+	a := newFixtureWith(t, http.StatusOK, fake).app
 	var notices bytes.Buffer
 	a.notices = &notices
 	if err := a.Install(context.Background()); err != nil {
@@ -370,6 +403,7 @@ func TestUpgradeReattachesEveryNetwork(t *testing.T) {
 func TestStatusNativeRequiresRelay(t *testing.T) {
 	f, fake, _ := nativeFixture(t, http.StatusOK)
 	seedCurrentCaddy(fake)
+	f.syncLive(t)
 	fake.ExecResponses["caddy_shack:caddy version"] = docker.ExecResponse{Stdout: []byte("v2.8.4")}
 	rep, err := f.app.Status(context.Background())
 	if err != nil || !rep.Healthy || rep.RelayState != "running" {

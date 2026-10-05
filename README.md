@@ -11,8 +11,10 @@ This is a helpful wrapper around the Caddy API that helps do things like:
 
 - Register a backend web service (`caddy_shack register myapp --port 3000`)
 - Deregister it on shutdown (`caddy_shack deregister myapp`)
-- List the currently-registered backends (`caddy_shack list`)
-- Report container and admin-API health (`caddy_shack status`)
+- List the currently-registered backends and whether Caddy is serving them
+  (`caddy_shack list`)
+- Report container health and whether Caddy's live config matches the
+  registry (`caddy_shack status`), and put it right (`caddy_shack sync`)
 
 CaddyShack also simplifies installing Caddy (via Docker), keeping it running,
 upgrading it without losing configuration, and checking on its status.
@@ -243,8 +245,38 @@ caddy_shack start      # idempotent; errors if not installed
 caddy_shack stop       # no-op when already stopped
 caddy_shack restart
 caddy_shack upgrade    # re-pull caddy:2; recreate only if the image changed
-caddy_shack status     # --json for scripts; exit 0 healthy, exit 1 unhealthy
+caddy_shack status     # --json for scripts; exit 0 healthy, 9 drift, 1 unhealthy
+caddy_shack sync       # re-push the registry to Caddy if they differ
 ```
+
+### Restarts and drift
+
+The registry (`state.json`) is the source of truth; Caddy's config is derived
+from it. Caddy autosaves every config caddy_shack pushes to the
+`caddy_shack_config` volume and resumes it on boot, so the routes survive a
+restart caddy_shack doesn't drive (`docker restart`, a Docker daemon restart,
+a host reboot) without any command being run. An autosave Caddy can't load is
+skipped rather than left to crash-loop the container.
+
+caddy_shack also checks the live config itself. `start`, `restart`,
+`install`, `register` and `deregister` compare Caddy's live config with the
+registry and re-push the registry if they differ, so an identical `register`
+on project startup also restores lost routes. `status` only reads. It compares
+the live config (`GET /config/`) with the registry and exits **9** when Caddy is
+up but has drifted, listing the backends that are registered but not live,
+any live routes the registry doesn't know about, and whether the http/tls apps
+are missing. `list` shows a `LIVE` column (`yes`, `no`, `stale`, or
+`unknown` when Caddy can't be reached). `sync` makes Caddy match the registry
+and changes nothing else:
+
+```
+caddy_shack status || { [ $? -eq 9 ] && caddy_shack sync; }
+```
+
+Containers created before this behaviour existed boot without resuming
+their config. `caddy_shack doctor` reports them (`container-config`) and
+`caddy_shack install` recreates them once, keeping the volumes, the local CA,
+networks and backends.
 
 `upgrade` re-pulls the `caddy:2` image and, if the digest changed, recreates
 the container against it. Both named volumes are preserved, so certificates
@@ -273,8 +305,9 @@ Optional `--domain` overrides the default `<name>.test`:
 caddy_shack register api --port 4000 --domain api.internal.test
 ```
 
-Register is idempotent: same name + same fields is a no-op (no Caddy hit);
-same name + different fields updates the existing route.
+Register is idempotent: same name + same fields writes nothing, and only
+pushes to Caddy if its live config has drifted from the registry; same
+name + different fields updates the existing route.
 
 ### Subdomains
 
@@ -295,7 +328,7 @@ The explicit subdomain always wins over the parent's wildcard.
 ### Listing and deregistering
 
 ```
-caddy_shack list           # tabular; --json for scripts
+caddy_shack list           # tabular with a LIVE column; --json for scripts
 caddy_shack deregister myapp            # removes myapp and its *.myapp.test wildcard
 caddy_shack deregister myapp --cascade  # also removes subdomain overrides (e.g. bar.myapp)
 ```
@@ -341,6 +374,7 @@ Stable contract, documented under `caddy_shack --help`:
 6  caddy not installed
 7  state file corrupt
 8  state lock held by another caddy_shack process
+9  status only: Caddy is up but its live config does not match the registry
 ```
 
 ### Quick smoke test

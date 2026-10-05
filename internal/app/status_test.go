@@ -11,6 +11,7 @@ import (
 
 	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/docker"
+	"github.com/bawdo/caddy_shack/internal/state"
 )
 
 func TestStatusHealthyWhenRunningAndReachable(t *testing.T) {
@@ -111,7 +112,9 @@ func TestStatusReportsBackendCount(t *testing.T) {
 	if err := writeFile(t, statePath, `{"schema_version":1,"backends":{"a":{"domain":"a.test","upstream":"127.0.0.1:1"}}}`); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("{}")) }))
+	s, _ := state.Load(statePath)
+	live := caddyapi.Build(s)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200); _, _ = w.Write(live) }))
 	defer srv.Close()
 	fakeDock := docker.NewFake()
 	fakeDock.Containers[CaddyContainerName] = docker.StateRunning

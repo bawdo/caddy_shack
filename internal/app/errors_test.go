@@ -21,6 +21,7 @@ func TestExitCodeMapping(t *testing.T) {
 		{"not installed", fmt.Errorf("wrap: %w", ErrNotInstalled), 6},
 		{"state corrupt", fmt.Errorf("wrap: %w", ErrStateCorrupt), 7},
 		{"lock contention", fmt.Errorf("wrap: %w", ErrLockContention), 8},
+		{"drift", fmt.Errorf("wrap: %w", ErrDrift), 9},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

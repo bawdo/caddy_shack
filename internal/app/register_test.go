@@ -19,36 +19,59 @@ import (
 )
 
 // fixture wires an App against a temp dir + httptest Caddy stub + Fake docker.
+//
+// The stub models the parts of Caddy's admin API CaddyShack uses: POST /load
+// answers caddyStatus and, on 2xx, becomes the live config; GET /config/
+// returns the live config. It starts as the bare admin-only config Caddy
+// boots with, so setLive(bareCaddyConfig) models an out-of-band restart.
+// caddyHits and lastBody count and capture POST /load only.
 type fixture struct {
 	app       *App
 	statePath string
 	caddyHits int
 	lastBody  []byte
+	live      []byte
 	mu        sync.Mutex
 	caddySrv  *httptest.Server
 }
 
+// bareCaddyConfig is what GET /config/ returns from a Caddy that booted
+// from the admin-only Caddyfile: no http app, no tls app, no routes.
+const bareCaddyConfig = `{"admin":{"listen":"0.0.0.0:2019"}}`
+
 func newFixture(t *testing.T, caddyStatus int) *fixture {
+	t.Helper()
+	fakeDock := docker.NewFake()
+	fakeDock.Containers[CaddyContainerName] = docker.StateRunning
+	return newFixtureWith(t, caddyStatus, fakeDock)
+}
+
+// newFixtureWith is newFixture around a caller-prepared Fake docker.
+func newFixtureWith(t *testing.T, caddyStatus int, fakeDock *docker.Fake) *fixture {
 	t.Helper()
 	dir := t.TempDir()
 	f := &fixture{
 		statePath: filepath.Join(dir, "state.json"),
+		live:      []byte(bareCaddyConfig),
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
+		defer f.mu.Unlock()
+		if r.Method == http.MethodGet {
+			_, _ = w.Write(f.live)
+			return
+		}
 		f.caddyHits++
 		f.lastBody, _ = io.ReadAll(r.Body)
-		f.mu.Unlock()
 		w.WriteHeader(caddyStatus)
 		if caddyStatus >= 400 {
 			_, _ = w.Write([]byte(`{"error":"stub rejection"}`))
+			return
 		}
+		f.live = f.lastBody
 	}))
 	f.caddySrv = srv
 	t.Cleanup(srv.Close)
-
-	fakeDock := docker.NewFake()
-	fakeDock.Containers[CaddyContainerName] = docker.StateRunning
 
 	f.app = NewWithPaths(
 		Paths{
@@ -59,6 +82,32 @@ func newFixture(t *testing.T, caddyStatus int) *fixture {
 		fakeDock,
 	)
 	return f
+}
+
+// setLive replaces the stub's live config, e.g. with bareCaddyConfig to
+// model Caddy restarting outside caddy_shack.
+func (f *fixture) setLive(cfg string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.live = []byte(cfg)
+}
+
+// syncLive makes the stub's live config exactly what the registry on disk
+// renders, i.e. a Caddy that is in sync.
+func (f *fixture) syncLive(t *testing.T) {
+	t.Helper()
+	s, err := state.Load(f.statePath)
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	f.setLive(string(f.app.buildConfig(s)))
+}
+
+// loads returns how many POST /load requests the stub has received.
+func (f *fixture) loads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.caddyHits
 }
 
 func TestRegisterNewBackendPersistsAndPushesConfig(t *testing.T) {

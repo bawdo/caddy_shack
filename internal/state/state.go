@@ -25,6 +25,16 @@ type State struct {
 	Backends      map[string]Backend `json:"backends"`
 }
 
+// Clone returns a deep copy of s, so a caller can build an updated registry
+// while keeping the one it loaded.
+func (s *State) Clone() *State {
+	c := &State{SchemaVersion: s.SchemaVersion, Backends: make(map[string]Backend, len(s.Backends))}
+	for k, v := range s.Backends {
+		c.Backends[k] = v
+	}
+	return c
+}
+
 // ErrCorrupt classifies a load failure as "the file is unreadable or has an
 // unknown schema; require manual remediation".
 type ErrCorrupt struct {

@@ -3,15 +3,24 @@ package app
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/bawdo/caddy_shack/internal/docker"
 )
 
+// seedCurrentDesktopCaddy models a Caddy container created by this version on
+// Docker Desktop, in the given state.
+func seedCurrentDesktopCaddy(fake *docker.Fake, st docker.ContainerState) {
+	_ = fake.CreateAndStart(caddyContainerSpec(DefaultInstance(), CaddyImage, HostNetwork{Kind: EngineLoopbackForwarded}))
+	fake.Containers[CaddyContainerName] = st
+	fake.Specs = map[string]docker.ContainerSpec{}
+}
+
 func TestInstallCreatesVolumesPullsImageAndStartsContainer(t *testing.T) {
 	fake := docker.NewFake()
-	a := NewWithPaths(Paths{}, nil, fake)
+	a := newFixtureWith(t, http.StatusOK, fake).app
 
 	if err := a.Install(context.Background()); err != nil {
 		t.Fatalf("Install: %v", err)
@@ -49,8 +58,8 @@ func TestInstallCreatesVolumesPullsImageAndStartsContainer(t *testing.T) {
 
 func TestInstallIsNoOpWhenAlreadyRunning(t *testing.T) {
 	fake := docker.NewFake()
-	fake.Containers[CaddyContainerName] = docker.StateRunning
-	a := NewWithPaths(Paths{}, nil, fake)
+	seedCurrentDesktopCaddy(fake, docker.StateRunning)
+	a := newFixtureWith(t, http.StatusOK, fake).app
 
 	if err := a.Install(context.Background()); err != nil {
 		t.Fatalf("Install: %v", err)
@@ -63,8 +72,8 @@ func TestInstallIsNoOpWhenAlreadyRunning(t *testing.T) {
 
 func TestInstallStartsStoppedContainer(t *testing.T) {
 	fake := docker.NewFake()
-	fake.Containers[CaddyContainerName] = docker.StateStopped
-	a := NewWithPaths(Paths{}, nil, fake)
+	seedCurrentDesktopCaddy(fake, docker.StateStopped)
+	a := newFixtureWith(t, http.StatusOK, fake).app
 
 	if err := a.Install(context.Background()); err != nil {
 		t.Fatalf("Install: %v", err)
@@ -115,7 +124,7 @@ func TestInstallRollsBackHalfCreatedContainerOnFailure(t *testing.T) {
 
 func TestInstallContainerCommandBindsAdminToAllInterfaces(t *testing.T) {
 	fake := docker.NewFake()
-	a := NewWithPaths(Paths{}, nil, fake)
+	a := newFixtureWith(t, http.StatusOK, fake).app
 
 	if err := a.Install(context.Background()); err != nil {
 		t.Fatalf("Install: %v", err)

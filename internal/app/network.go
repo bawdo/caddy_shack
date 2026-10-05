@@ -5,8 +5,8 @@ package app
 // reached by their network alias. Idempotent; safe to call repeatedly. The
 // caller is responsible for ensuring the caddy container is running first.
 func (a *App) ensureSharedNetwork() error {
-	if err := a.docker.EnsureNetwork(CaddyNetworkName); err != nil {
+	if err := a.docker.EnsureNetwork(a.inst.NetworkName); err != nil {
 		return err
 	}
-	return a.docker.ConnectNetwork(CaddyNetworkName, CaddyContainerName)
+	return a.docker.ConnectNetwork(a.inst.NetworkName, a.inst.ContainerName)
 }
