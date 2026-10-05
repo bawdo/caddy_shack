@@ -2,21 +2,59 @@ package caddyapi
 
 import (
 	"encoding/json"
+	"net"
 	"sort"
 
 	"github.com/bawdo/caddy_shack/internal/state"
 )
 
+// Options adjusts how Build renders upstreams. The zero value renders every
+// upstream exactly as stored in state (the Docker Desktop behaviour).
+type Options struct {
+	// HostRelay, when non-nil, reroutes host-mode backends (upstreams whose
+	// host is HostRelay.Host) through a relay instead of dialling them
+	// directly. Container-mode upstreams are never touched.
+	HostRelay *HostRelay
+}
+
+// HostRelay describes the native-Linux relay: a Caddy in the host's network
+// namespace listening on a unix socket shared with the main container, which
+// forwards each request to 127.0.0.1:<value of PortHeader>.
+type HostRelay struct {
+	// Host is the upstream host that marks a backend as host-mode
+	// (host.docker.internal).
+	Host string
+	// Dial is the relay's address, e.g. "unix//run/caddy_shack/relay.sock".
+	Dial string
+	// PortHeader carries the backend's host port to the relay. It is set
+	// (not appended), so a client-supplied value can never choose the port.
+	PortHeader string
+}
+
 // Build renders the full Caddy admin-API JSON config for the given State.
 // Routes are sorted by domain for deterministic output (important for
 // golden-file tests and predictable Caddy /load behaviour).
 func Build(s *state.State) []byte {
+	return BuildWith(s, Options{})
+}
+
+// BuildWith is Build with Options applied. BuildWith(s, Options{}) is
+// byte-for-byte Build(s).
+func BuildWith(s *state.State, opts Options) []byte {
 	type upstream struct {
 		Dial string `json:"dial"`
+	}
+	type headerOps struct {
+		Set map[string][]string `json:"set"`
+	}
+	type headers struct {
+		Request headerOps `json:"request"`
 	}
 	type handler struct {
 		Handler   string     `json:"handler"`
 		Upstreams []upstream `json:"upstreams"`
+		// Headers is only emitted for relayed host-mode upstreams.
+		Headers *headers `json:"headers,omitempty"`
 	}
 	type match struct {
 		Host []string `json:"host"`
@@ -79,24 +117,31 @@ func Build(s *state.State) []byte {
 	// bar.foo.test matches both the exact bar.foo.test route and the
 	// *.foo.test wildcard. reverse_proxy is terminal, so ordering every
 	// exact ahead of every wildcard guarantees an explicit override wins.
+	proxy := func(b state.Backend) handler {
+		h := handler{
+			Handler:   "reverse_proxy",
+			Upstreams: []upstream{{Dial: b.Upstream}},
+		}
+		if r := opts.HostRelay; r != nil {
+			if host, port, err := net.SplitHostPort(b.Upstream); err == nil && host == r.Host {
+				h.Upstreams = []upstream{{Dial: r.Dial}}
+				h.Headers = &headers{Request: headerOps{Set: map[string][]string{r.PortHeader: {port}}}}
+			}
+		}
+		return h
+	}
 	exactRoutes := make([]route, 0, len(domains))
 	wildcardRoutes := make([]route, 0, len(domains))
 	for _, d := range domains {
 		b := byDomain[d]
 		wildcard := "*." + d
 		exactRoutes = append(exactRoutes, route{
-			Match: []match{{Host: []string{d}}},
-			Handle: []handler{{
-				Handler:   "reverse_proxy",
-				Upstreams: []upstream{{Dial: b.Upstream}},
-			}},
+			Match:  []match{{Host: []string{d}}},
+			Handle: []handler{proxy(b)},
 		})
 		wildcardRoutes = append(wildcardRoutes, route{
-			Match: []match{{Host: []string{wildcard}}},
-			Handle: []handler{{
-				Handler:   "reverse_proxy",
-				Upstreams: []upstream{{Dial: b.Upstream}},
-			}},
+			Match:  []match{{Host: []string{wildcard}}},
+			Handle: []handler{proxy(b)},
 		})
 	}
 	routes := append(exactRoutes[:len(exactRoutes):len(exactRoutes)], wildcardRoutes...)

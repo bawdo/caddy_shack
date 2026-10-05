@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -8,10 +9,13 @@ import (
 )
 
 // caddyContainerSpec returns the ContainerSpec for the managed Caddy
-// container running the given image. Shared by install and upgrade so the
-// two cannot drift.
-func caddyContainerSpec(image string) docker.ContainerSpec {
-	return docker.ContainerSpec{
+// container running the given image on the given engine. Shared by install
+// and upgrade so the two cannot drift. Docker Desktop, VM runtimes, and
+// unclassified engines get exactly the original spec; native Linux adds the
+// host.docker.internal entry Desktop provides for free and the relay socket
+// volume host-mode backends are routed through.
+func caddyContainerSpec(image string, hn HostNetwork) docker.ContainerSpec {
+	spec := docker.ContainerSpec{
 		Name:  CaddyContainerName,
 		Image: image,
 		PortMappings: []docker.PortMapping{
@@ -35,24 +39,45 @@ func caddyContainerSpec(image string) docker.ContainerSpec {
 				"exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile",
 		},
 	}
+	if hn.Kind == EngineNativeLinux {
+		spec.ExtraHosts = []string{HostGatewayEntry}
+		spec.Volumes = append(spec.Volumes, docker.VolumeMount{VolumeName: RelayVolume, ContainerPath: RelaySocketDir})
+	}
+	return spec
 }
 
 // Install ensures Caddy is installed and running. Idempotent: a no-op if
-// the container is already running; starts it if stopped; creates from
-// scratch if absent.
-func (a *App) Install() error {
+// the container is already running with the settings this engine needs;
+// starts it if stopped; creates from scratch if absent. An existing
+// container created without this engine's settings (e.g. before native
+// Linux support) is recreated, keeping its volumes, networks, and backends.
+func (a *App) Install(ctx context.Context) error {
 	if err := a.docker.DaemonReachable(); err != nil {
 		return fmt.Errorf("%w: %v", ErrDockerUnreachable, err)
 	}
+	hn := a.hostNetwork()
+	a.noteUnknownEngine(hn)
 
 	state, err := a.docker.ContainerState(CaddyContainerName)
 	if err != nil {
 		return fmt.Errorf("inspect container: %w", err)
 	}
 
+	if state != docker.StateAbsent {
+		drift, err := a.caddyDrift()
+		if err != nil {
+			return err
+		}
+		if len(drift) > 0 {
+			a.notef("recreating %s for the %s engine (%s); volumes, the local CA, networks and registered backends are kept\n",
+				CaddyContainerName, hn.Kind, strings.Join(drift, "; "))
+			return a.recreateCaddy(ctx, CaddyImage)
+		}
+	}
+
 	switch state {
 	case docker.StateRunning:
-		return nil
+		return a.ensureRelay()
 	case docker.StateStopped:
 		if err := a.docker.Start(CaddyContainerName); err != nil {
 			return err
@@ -60,21 +85,18 @@ func (a *App) Install() error {
 		if err := a.ensureSharedNetwork(); err != nil {
 			return fmt.Errorf("attach shared network: %w", err)
 		}
-		return nil
+		return a.ensureRelay()
 	case docker.StateAbsent:
 		// fall through
 	}
 
-	if err := a.docker.EnsureVolume(CaddyDataVolume); err != nil {
-		return err
-	}
-	if err := a.docker.EnsureVolume(CaddyConfigVolume); err != nil {
+	if err := a.ensureCaddyVolumes(); err != nil {
 		return err
 	}
 	if err := a.docker.PullImage(CaddyImage); err != nil {
 		return err
 	}
-	spec := caddyContainerSpec(CaddyImage)
+	spec := caddyContainerSpec(CaddyImage, hn)
 	if err := a.docker.CreateAndStart(spec); err != nil {
 		// Roll back the half-created container so a retry has a clean slate.
 		// Ignoring the Remove error: the user already has a more useful error
@@ -91,7 +113,7 @@ func (a *App) Install() error {
 	if err := a.ensureSharedNetwork(); err != nil {
 		return fmt.Errorf("attach shared network: %w", err)
 	}
-	return nil
+	return a.ensureRelay()
 }
 
 // isPortAllocatedErr returns true when the docker error indicates a host

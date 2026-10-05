@@ -151,14 +151,24 @@ func (a *App) buildCheckList(opts DoctorOptions) []func(context.Context) CheckRe
 	}
 	checks := []func(context.Context) CheckResult{
 		func(ctx context.Context) CheckResult { return checkDockerDaemon(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkDockerEngine(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkPortAvailability(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkContainerHealth(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkContainerConfig(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkSharedNetwork(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkHostGateway(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkDNS(ctx, a, sh, tty) },
+	}
+	if runtime.GOOS == "linux" {
+		// Host DNS, not engine: the resolved<->dnsmasq loop comes from the
+		// Linux .test setup, whatever engine is in use.
+		checks = append(checks, func(ctx context.Context) CheckResult { return checkDNSNegativeLinux(ctx, a, sh, tty) })
+	}
+	checks = append(checks,
 		func(ctx context.Context) CheckResult { return checkTrustStore(ctx, a, sh, tty) },
 		func(ctx context.Context) CheckResult { return checkStateIntegrity(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkConfigDrift(ctx, a) },
-	}
+	)
 	if !opts.SkipBackends {
 		checks = append(checks, func(ctx context.Context) CheckResult { return checkBackends(ctx, a) })
 	} else {

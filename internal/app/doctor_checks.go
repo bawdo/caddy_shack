@@ -19,7 +19,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/docker"
 	"github.com/bawdo/caddy_shack/internal/state"
 )
@@ -91,7 +90,7 @@ func checkContainerHealth(ctx context.Context, a *App) CheckResult {
 			Summary: "caddy_shack container not installed",
 			Fix: &FixAction{
 				Label: "install Caddy container ('caddy_shack install')",
-				Apply: func(_ context.Context) error { return a.Install() },
+				Apply: func(ctx context.Context) error { return a.Install(ctx) },
 			},
 		}
 	case docker.StateStopped:
@@ -381,7 +380,7 @@ func checkDNSLinux(ctx context.Context, _ *App, sh shellExecutor, tty shellExecu
 	detail = append(detail,
 		"to fix manually (systemd-resolved, e.g. Omarchy - see README's Omarchy section for other DNS stacks):",
 		"  sudo mkdir -p /etc/dnsmasq.d",
-		"  echo 'address=/.test/127.0.0.1' | sudo tee "+linuxDNSMasqCaddyConfPath,
+		"  "+dnsmasqConfManualCmd(),
 		"  sudo sed -i -e 's/^#conf-dir=\\/etc\\/dnsmasq.d\\/,\\*\\.conf$/conf-dir=\\/etc\\/dnsmasq.d\\/,*.conf/' -e 's/^#bind-interfaces$/bind-interfaces/' /etc/dnsmasq.conf",
 		"  sudo systemctl reset-failed dnsmasq; sudo systemctl enable --now dnsmasq",
 		"  printf '[Resolve]\\nDNS=127.0.0.1\\nDomains=~test\\n' | sudo tee "+linuxResolvedDropinPath,
@@ -412,7 +411,7 @@ func applyDNSFixLinux(ctx context.Context, sh, tty shellExecutor) error {
 	}
 	script := "set -e\n" +
 		"mkdir -p /etc/dnsmasq.d\n" +
-		"echo 'address=/.test/127.0.0.1' > " + linuxDNSMasqCaddyConfPath + "\n" +
+		dnsmasqConfWriteCmd() + "\n" +
 		`sed -i -e 's/^#conf-dir=\/etc\/dnsmasq.d\/,\*\.conf$/conf-dir=\/etc\/dnsmasq.d\/,*.conf/' -e 's/^#bind-interfaces$/bind-interfaces/' /etc/dnsmasq.conf` + "\n" +
 		"systemctl reset-failed dnsmasq || true\n" +
 		"systemctl enable --now dnsmasq\n" +
@@ -676,6 +675,9 @@ func checkBackends(ctx context.Context, a *App) CheckResult {
 			Summary: "no backends registered",
 		}
 	}
+	// On native Linux host-mode backends are reached through the relay, so
+	// that is where they are probed from.
+	relayed := a.hostNetwork().Kind == EngineNativeLinux
 	var failed []string
 	names := make([]string, 0, len(st.Backends))
 	for n := range st.Backends {
@@ -687,6 +689,16 @@ func checkBackends(ctx context.Context, a *App) CheckResult {
 		host, port, err := net.SplitHostPort(b.Upstream)
 		if err != nil {
 			failed = append(failed, fmt.Sprintf("%s (%s): malformed upstream: %v", n, b.Upstream, err))
+			continue
+		}
+		if relayed && host == UpstreamHost {
+			// Probe the hop the relay makes: the host's own loopback, on
+			// either family, as the relay's localhost dial does.
+			if probeBackendFrom(ctx, a, RelayContainerName, "127.0.0.1", port) ||
+				probeBackendFrom(ctx, a, RelayContainerName, "::1", port) {
+				continue
+			}
+			failed = append(failed, fmt.Sprintf("%s -> localhost:%s (via %s): unreachable", n, port, RelayContainerName))
 			continue
 		}
 		if probeBackend(ctx, a, host, port) {
@@ -710,14 +722,21 @@ func checkBackends(ctx context.Context, a *App) CheckResult {
 }
 
 // probeBackend returns true if the upstream is reachable from inside the
-// container. Tries `nc -z` first; on any error, falls back to wget --spider.
+// Caddy container. Tries `nc -z` first; on any error, falls back to wget
+// --spider.
 func probeBackend(ctx context.Context, a *App, host, port string) bool {
-	if _, err := a.docker.Exec(ctx, CaddyContainerName,
+	return probeBackendFrom(ctx, a, CaddyContainerName, host, port)
+}
+
+// probeBackendFrom is probeBackend from an arbitrary container (the relay,
+// on native Linux).
+func probeBackendFrom(ctx context.Context, a *App, container, host, port string) bool {
+	if _, err := a.docker.Exec(ctx, container,
 		[]string{"nc", "-z", "-w", "3", host, port}); err == nil {
 		return true
 	}
 	url := "http://" + net.JoinHostPort(host, port) + "/"
-	_, err := a.docker.Exec(ctx, CaddyContainerName,
+	_, err := a.docker.Exec(ctx, container,
 		[]string{"wget", "-q", "--spider", "--tries", "1", "--timeout", "3", url})
 	return err == nil
 }
@@ -829,7 +848,7 @@ func checkConfigDrift(ctx context.Context, a *App) CheckResult {
 			Summary: "state unreadable; covered by state-integrity",
 		}
 	}
-	desired := caddyapi.Build(st)
+	desired := a.buildConfig(st)
 	liveRoutes := extractRoutes(live)
 	desiredRoutes := extractRoutes(desired)
 
@@ -868,7 +887,7 @@ func applyDriftFix(ctx context.Context, a *App) error {
 	if err != nil {
 		return err
 	}
-	cfg := caddyapi.Build(st)
+	cfg := a.buildConfig(st)
 	if err := a.caddy.Load(ctx, cfg); err != nil {
 		return err
 	}

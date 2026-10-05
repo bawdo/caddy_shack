@@ -17,6 +17,9 @@ type StatusReport struct {
 	// CaddyVersion is the running Caddy version (e.g. "v2.8.4"). Empty when
 	// the container is not running or the probe was unavailable.
 	CaddyVersion string `json:"caddy_version,omitempty"`
+	// RelayState is the host-mode relay container's state on native Linux;
+	// empty on every other engine, which has no relay.
+	RelayState string `json:"relay_state,omitempty"`
 }
 
 // Status reports container state, admin API reachability, and backend
@@ -60,7 +63,16 @@ func (a *App) Status(ctx context.Context) (StatusReport, error) {
 		rep.BackendCount = len(s.Backends)
 	}
 
-	rep.Healthy = rep.ContainerState == docker.StateRunning.String() && rep.AdminReachable
+	if priorityErr == nil && a.hostNetwork().Kind == EngineNativeLinux {
+		if rs, err := a.docker.ContainerState(RelayContainerName); err != nil {
+			rep.RelayState = "unknown"
+		} else {
+			rep.RelayState = rs.String()
+		}
+	}
+
+	rep.Healthy = rep.ContainerState == docker.StateRunning.String() && rep.AdminReachable &&
+		(rep.RelayState == "" || rep.RelayState == docker.StateRunning.String())
 
 	if priorityErr != nil {
 		return rep, priorityErr

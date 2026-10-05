@@ -15,7 +15,7 @@ func newInstallCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return a.Install()
+			return a.Install(cmd.Context())
 		},
 	}
 }

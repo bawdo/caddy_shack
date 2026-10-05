@@ -79,7 +79,12 @@ still need a real nameserver answering them, which is what dnsmasq is for.
 
    ```
    sudo mkdir -p /etc/dnsmasq.d
-   echo 'address=/.test/127.0.0.1' | sudo tee /etc/dnsmasq.d/caddy_shack.conf
+   sudo tee /etc/dnsmasq.d/caddy_shack.conf <<'EOF'
+   # caddy_shack: answer .test only; never forward (avoids a resolved<->dnsmasq loop)
+   address=/.test/127.0.0.1
+   no-resolv
+   local=/#/
+   EOF
 
    sudo sed -i \
      -e 's/^#conf-dir=\/etc\/dnsmasq.d\/,\*\.conf$/conf-dir=\/etc\/dnsmasq.d\/,*.conf/' \
@@ -89,6 +94,20 @@ still need a real nameserver answering them, which is what dnsmasq is for.
    sudo systemctl reset-failed dnsmasq   # clears any earlier port-53 failures
    sudo systemctl enable --now dnsmasq
    ```
+
+   `no-resolv` and `local=/#/` matter. `systemd-resolved` sends *every*
+   query to its global DNS server (step 2's `DNS=127.0.0.1`), not just
+   `.test`, and dnsmasq by default forwards anything it can't answer to
+   `/etc/resolv.conf` - which is resolved's own `127.0.0.53` stub. The two
+   then bounce non-`.test` queries between each other. Real names still work
+   (your router answers first), but every lookup for a name that doesn't
+   exist hangs for up to ~100s instead of failing - on the host and inside
+   every container. With these two lines dnsmasq answers `.test` and
+   immediately returns NXDOMAIN for everything else, and resolved keeps the
+   real answer from your normal DNS. This makes dnsmasq dedicated to `.test`;
+   if you use it for anything else, give it an explicit `server=` upstream
+   that isn't `127.0.0.53` instead. `caddy_shack doctor` detects the hang
+   (`dns-negative-lookups`) and `doctor --fix` rewrites the file.
 
 2. Route only `.test` queries to dnsmasq, leaving every other domain on your
    normal upstream DNS. This is the Omarchy-native equivalent of macOS's
@@ -114,6 +133,8 @@ still need a real nameserver answering them, which is what dnsmasq is for.
    # expect: anything.test: 127.0.0.1
    getent ahosts anything.test
    # expect: 127.0.0.1 ...
+   time getent ahosts does-not-exist.example
+   # expect: no output, exit 2, well under a second
    ```
 
    Use `getent ahosts`, not `getent hosts` - the latter has a known hang
@@ -143,14 +164,50 @@ Linux way (`getent`/`resolvectl` and a system CA bundle scan instead of
 supports `systemd-resolved` setups (Omarchy and most modern distros); on
 other DNS stacks it declines and points back at this section.
 
-Known gap on Linux, not fixed by the above:
+### Host-mode backends on native Linux
 
-- `host.docker.internal` (what `caddy_shack register` uses by default to
-  reach services on the host) is a Docker Desktop feature and isn't provided
-  by native Docker Engine on Linux, so host-mode backends won't be reachable
-  from the caddy container out of the box. Use `caddy_shack register <name>
-  --port <port> --container <alias>` and attach your service to the shared
-  `caddy_shack` Docker network instead.
+On Docker Desktop (and OrbStack, Colima, Lima, Rancher Desktop) Caddy reaches
+host-mode backends at `host.docker.internal:<port>`, which the engine
+forwards to the host's loopback. Native Docker Engine on Linux does neither:
+it has no `host.docker.internal` by default, its replacement (the docker0
+gateway, e.g. `172.17.0.1`) can't reach services bound to `127.0.0.1`, and a
+host firewall such as ufw drops container-to-host traffic anyway.
+
+So on native Linux, `caddy_shack install` also runs a small relay:
+
+- `caddy_shack_relay` - a second `caddy:2` container on the **host** network
+  whose only listener is a unix socket in the `caddy_shack_relay_socket` volume
+  (no TCP port, nothing on `0.0.0.0` or the LAN; its admin API is off). It
+  forwards each request to `localhost:<port>` (both `127.0.0.1` and `::1`).
+- `caddy_shack` itself is unchanged apart from mounting that volume and
+  `--add-host host.docker.internal:host-gateway`. It stays on the default
+  bridge and the `caddy_shack` network, so `--container` backends work
+  exactly as on macOS.
+- Host-mode routes dial the socket, naming the backend's port in a header
+  Caddy sets (a client can't override it). `state.json` still records
+  `host.docker.internal:<port>`, so it means the same thing on every engine.
+
+Because the relay talks to the host's loopback from inside the host's own
+network namespace, backends bound to `127.0.0.1` work, and **no firewall
+rule is needed**: no traffic crosses from a container to a host IP.
+
+The engine is classified from `docker info`: Docker Desktop / OrbStack /
+Colima / Lima / Rancher Desktop keep the behaviour above; it is treated as
+native Linux only when the default bridge's gateway is an address on one of
+this machine's interfaces. If it can't tell, it keeps the Docker Desktop
+behaviour and says so. `caddy_shack doctor` reports the classification
+(`docker-engine`), whether the containers match it (`container-config`),
+whether `host.docker.internal` resolves inside Caddy (`host-gateway`), and
+probes each host-mode backend from the relay (`backends`).
+
+Upgrading from an older caddy_shack: `docker run` fixes mounts and extra
+hosts at creation, so the existing `caddy_shack` container has to be
+recreated. Run `caddy_shack install` (or accept the `container-config` fix in
+`doctor --fix`). It reuses the `caddy_shack_data` and `caddy_shack_config`
+volumes - so the local root CA your browser and OS already trust, and the
+issued certificates, are kept - reattaches every Docker network the old
+container was on, and re-pushes every registered backend. `start` and
+`register` never recreate; they print this hint instead.
 
 ## Usage
 
@@ -165,7 +222,9 @@ caddy_shack install
 Pulls `caddy:2`, creates two named volumes (`caddy_shack_data`,
 `caddy_shack_config`), and starts a single container called `caddy_shack`
 listening on `127.0.0.1:80`, `:443`, and `:2019` (admin API, loopback-only).
-Idempotent: re-running on an existing install is a no-op.
+Idempotent: re-running on an existing install is a no-op. On native Linux it
+also starts the `caddy_shack_relay` container (see
+[Host-mode backends on native Linux](#host-mode-backends-on-native-linux)).
 
 To get HTTPS without browser warnings, trust Caddy's internal root CA once:
 
@@ -189,8 +248,9 @@ caddy_shack status     # --json for scripts; exit 0 healthy, exit 1 unhealthy
 
 `upgrade` re-pulls the `caddy:2` image and, if the digest changed, recreates
 the container against it. Both named volumes are preserved, so certificates
-and ACME state survive, and registered backends are restored from state so
-every `.test` URL keeps working. It is a no-op when already current.
+and ACME state survive, every Docker network the container was attached to
+is reattached, and registered backends are restored from state so every
+`.test` URL keeps working. It is a no-op when already current.
 
 ### Registering a backend
 
@@ -202,9 +262,10 @@ caddy_shack register myapp --port 3000
 ```
 
 You only supply the port your service listens on locally. Caddy runs in a
-container and always reaches the host via `host.docker.internal`, so it
-doesn't matter whether your service binds `127.0.0.1`, `0.0.0.0`, or
-`localhost` on the host - the port is the only thing we need.
+container and reaches it on the host's loopback - via `host.docker.internal`
+on Docker Desktop / OrbStack / Colima, and via the `caddy_shack_relay`
+container on native Linux - so binding `127.0.0.1`, `0.0.0.0`, or `localhost`
+all work, with no firewall changes.
 
 Optional `--domain` overrides the default `<name>.test`:
 

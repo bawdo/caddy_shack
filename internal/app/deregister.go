@@ -109,7 +109,7 @@ func (a *App) Deregister(ctx context.Context, name string, cascade bool) (Deregi
 		}
 	}
 
-	cfg := caddyapi.Build(&updated)
+	cfg := a.buildConfig(&updated)
 	if err := a.caddy.Load(ctx, cfg); err != nil {
 		if errors.Is(err, caddyapi.ErrUnreachable) {
 			return res, fmt.Errorf("%w: %v", ErrCaddyNotRunning, err)

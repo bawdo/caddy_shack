@@ -21,7 +21,7 @@ func TestInstallAttachesSharedNetwork(t *testing.T) {
 	fake := docker.NewFake() // container absent -> create path
 	a := newNetFixtureApp(t, fake)
 
-	if err := a.Install(); err != nil {
+	if err := a.Install(context.Background()); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 	if !fake.Networks[CaddyNetworkName] {

@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -61,5 +62,64 @@ func TestFakeContainerImageIDReturnsConfiguredValue(t *testing.T) {
 	}
 	if id != "sha256:def" {
 		t.Errorf("ContainerImageID: got %q want %q", id, "sha256:def")
+	}
+}
+
+func TestFakeInspectTracksCreateConnectRemove(t *testing.T) {
+	f := NewFake()
+	if _, err := f.InspectContainer("c"); err == nil {
+		t.Fatal("absent container should not inspect")
+	}
+	_ = f.CreateAndStart(ContainerSpec{
+		Name:       "c",
+		ExtraHosts: []string{"h:host-gateway"},
+		Volumes:    []VolumeMount{{VolumeName: "v", ContainerPath: "/v"}},
+	})
+	_ = f.ConnectNetwork("net", "c")
+	info, err := f.InspectContainer("c")
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if info.NetworkMode != "bridge" || len(info.ExtraHosts) != 1 || len(info.Mounts) != 1 {
+		t.Errorf("info: %+v", info)
+	}
+	if strings.Join(info.Networks, ",") != "bridge,net" {
+		t.Errorf("networks: %v", info.Networks)
+	}
+	_ = f.Remove("c")
+	if _, err := f.InspectContainer("c"); err == nil {
+		t.Error("removed container should not inspect")
+	}
+	if attached, _ := f.NetworkAttached("net", "c"); attached {
+		t.Error("removed container should not stay attached")
+	}
+}
+
+func TestFakeInspectSynthesisesBridgeForSeededContainer(t *testing.T) {
+	f := NewFake()
+	f.Containers["c"] = StateRunning
+	_ = f.ConnectNetwork("net", "c")
+	info, err := f.InspectContainer("c")
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if info.NetworkMode != "bridge" || strings.Join(info.Networks, ",") != "bridge,net" {
+		t.Errorf("info: %+v", info)
+	}
+}
+
+func TestFakeDefaultsToDockerDesktop(t *testing.T) {
+	f := NewFake()
+	info, err := f.EngineInfo()
+	if err != nil || info.OperatingSystem != "Docker Desktop" {
+		t.Errorf("EngineInfo: %+v, %v", info, err)
+	}
+	f.EngineInfoErr = errors.New("x")
+	if _, err := f.EngineInfo(); err == nil {
+		t.Error("EngineInfoErr not honoured")
+	}
+	f.GatewayErr = errors.New("y")
+	if _, err := f.BridgeGateway(); err == nil {
+		t.Error("GatewayErr not honoured")
 	}
 }

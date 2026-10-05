@@ -1,5 +1,5 @@
-// Package docker is a thin abstraction over the docker CLI for the single
-// container CaddyShack manages. The interface keeps app-layer tests off
+// Package docker is a thin abstraction over the docker CLI for the
+// containers CaddyShack manages. The interface keeps app-layer tests off
 // real docker; the concrete impl in cli.go shells out for production use.
 package docker
 
@@ -77,12 +77,47 @@ type Client interface {
 	// ContainerImageID returns the image ID the named container was created
 	// from. Works against stopped containers.
 	ContainerImageID(name string) (string, error)
+	// EngineInfo returns the `docker info` fields used to classify the
+	// engine (Docker Desktop, a VM runtime, or native Linux).
+	EngineInfo() (EngineInfo, error)
+	// BridgeGateway returns the IPv4 gateway of the default `bridge`
+	// network (the docker0 address on native Linux).
+	BridgeGateway() (string, error)
+	// InspectContainer returns the creation-time settings of an existing
+	// container that `docker run` fixes for its lifetime (network mode,
+	// extra hosts, volume mounts) plus the networks it is attached to.
+	// Works against stopped containers; errors if the container is absent.
+	InspectContainer(name string) (ContainerInfo, error)
 }
 
-// ContainerSpec describes the CaddyShack container CreateAndStart should run.
+// EngineInfo is the subset of `docker info` used to classify the engine.
+type EngineInfo struct {
+	OperatingSystem string
+	OSType          string
+	Name            string
+	Labels          []string
+}
+
+// ContainerInfo is the subset of `docker inspect` that decides whether an
+// existing container still matches the spec it should have been created
+// from. Networks is sorted.
+type ContainerInfo struct {
+	NetworkMode string
+	ExtraHosts  []string
+	Mounts      []VolumeMount
+	Networks    []string
+}
+
+// ContainerSpec describes a container CreateAndStart should run.
 type ContainerSpec struct {
-	Name         string
-	Image        string
+	Name  string
+	Image string
+	// NetworkMode is passed as --network when non-empty; empty keeps
+	// docker's default bridge.
+	NetworkMode string
+	// ExtraHosts are passed as --add-host (e.g.
+	// "host.docker.internal:host-gateway").
+	ExtraHosts   []string
 	PortMappings []PortMapping
 	Volumes      []VolumeMount
 	Command      []string
