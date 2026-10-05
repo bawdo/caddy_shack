@@ -401,3 +401,29 @@ func TestLANDisableKeepsSettings(t *testing.T) {
 		t.Error("config still has LAN servers")
 	}
 }
+
+func TestLANDisableCaddyDown(t *testing.T) {
+	f := lanFixture(t, discovered("192.168.1.12"))
+	fake := f.app.docker.(*docker.Fake)
+	fake.Containers[CaddyContainerName] = docker.StateStopped
+	fake.Containers[LANContainerName] = docker.StateRunning
+	seed := lanState("192.168.1.12")
+	seed.Backends = map[string]state.Backend{"gamma": {Domain: "gamma.test", Upstream: "host.docker.internal:3000", LANDomain: "gamma.lan"}}
+	_ = state.Save(f.statePath, seed)
+	if err := f.app.LANDisable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fake.Containers[LANContainerName]; ok {
+		t.Error("forwarder not removed")
+	}
+	if f.loads() != 0 {
+		t.Errorf("caddy was pushed to: %d loads", f.loads())
+	}
+	s, _ := state.Load(f.statePath)
+	if s.LAN == nil || s.LAN.Enabled || s.LAN.IP != "192.168.1.12" || s.LAN.Suffix != "lan" || s.LAN.Mode != state.LANModePinned {
+		t.Errorf("LAN: %+v", s.LAN)
+	}
+	if s.Backends["gamma"].LANDomain != "gamma.lan" {
+		t.Error("LANDomain touched")
+	}
+}

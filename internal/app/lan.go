@@ -323,5 +323,14 @@ func (a *App) LANDisable(ctx context.Context) error {
 	}
 	updated := s.Clone()
 	updated.LAN.Enabled = false
-	return a.commit(ctx, s, updated)
+	// With Caddy down there is nothing to push: record the change and let the
+	// next start or sync render the config from state.
+	err = a.requireRunning()
+	if err == nil {
+		err = a.commit(ctx, s, updated)
+	}
+	if errors.Is(err, ErrCaddyNotRunning) {
+		return state.Save(a.paths.StatePath, updated)
+	}
+	return err
 }
