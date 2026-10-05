@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -227,5 +228,160 @@ func TestBuildWithHostRelayReroutesOnlyHostMode(t *testing.T) {
 		default:
 			t.Errorf("unexpected route %s", host)
 		}
+	}
+}
+
+func lanState() *state.State {
+	return &state.State{
+		SchemaVersion: 2,
+		Backends: map[string]state.Backend{
+			"gamma": {Domain: "gamma.arrix.test", Upstream: "gamma:3000", LANDomain: "gamma.arrix.home.lan"},
+			"web":   {Domain: "web.test", Upstream: "host.docker.internal:4000"},
+		},
+		LAN: &state.LAN{Enabled: true, IP: "192.168.1.20", Mode: state.LANModeDiscovered, Suffix: "arrix.home.lan"},
+	}
+}
+
+func TestBuildLANEnabledGolden(t *testing.T) {
+	assertJSONMatchesGolden(t, Build(lanState()), "lan_enabled.json")
+}
+
+func TestBuildLANEnabledNoNamesGolden(t *testing.T) {
+	s := lanState()
+	g := s.Backends["gamma"]
+	g.LANDomain = ""
+	s.Backends["gamma"] = g
+	assertJSONMatchesGolden(t, Build(s), "lan_enabled_no_lan_names.json")
+}
+
+func TestBuildLANDisabledIgnoresLANDomain(t *testing.T) {
+	disabled := lanState()
+	disabled.LAN = &state.LAN{Enabled: false}
+
+	plain := lanState()
+	plain.LAN = nil
+	g := plain.Backends["gamma"]
+	g.LANDomain = ""
+	plain.Backends["gamma"] = g
+
+	for _, opts := range []Options{{}, {HostRelay: testRelay}} {
+		if string(BuildWith(disabled, opts)) != string(BuildWith(plain, opts)) {
+			t.Errorf("LAN disabled must render as if LANDomain were unset (opts %+v)", opts)
+		}
+	}
+}
+
+// lanDoc decodes just enough of a rendered config to inspect the LAN servers.
+type lanDoc struct {
+	Apps struct {
+		HTTP struct {
+			Servers map[string]struct {
+				Listen           []string `json:"listen"`
+				ListenerWrappers []struct {
+					Wrapper string `json:"wrapper"`
+				} `json:"listener_wrappers"`
+				Routes []struct {
+					Match []struct {
+						Host []string `json:"host"`
+					} `json:"match"`
+					Handle []struct {
+						Handler   string `json:"handler"`
+						Upstreams []struct {
+							Dial string `json:"dial"`
+						} `json:"upstreams"`
+					} `json:"handle"`
+				} `json:"routes"`
+				TLSConnectionPolicies []struct {
+					Match struct {
+						SNI []string `json:"sni"`
+					} `json:"match"`
+				} `json:"tls_connection_policies"`
+			} `json:"servers"`
+		} `json:"http"`
+	} `json:"apps"`
+}
+
+func decodeLAN(t *testing.T, got []byte) lanDoc {
+	t.Helper()
+	var doc lanDoc
+	if err := json.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, name := range []string{"srv-lan", "lan-http"} {
+		if _, ok := doc.Apps.HTTP.Servers[name]; !ok {
+			t.Fatalf("server %s missing", name)
+		}
+	}
+	return doc
+}
+
+func TestSrvLanNeverRoutesTestNames(t *testing.T) {
+	doc := decodeLAN(t, Build(lanState()))
+	for _, name := range []string{"srv-lan", "lan-http"} {
+		srv := doc.Apps.HTTP.Servers[name]
+		for _, r := range srv.Routes {
+			for _, m := range r.Match {
+				for _, h := range m.Host {
+					if h == "test" || strings.HasSuffix(h, ".test") {
+						t.Errorf("%s routes .test host %q", name, h)
+					}
+				}
+			}
+		}
+		for _, p := range srv.TLSConnectionPolicies {
+			for _, sni := range p.Match.SNI {
+				if strings.HasSuffix(sni, ".test") {
+					t.Errorf("%s TLS policy matches .test SNI %q", name, sni)
+				}
+			}
+		}
+	}
+}
+
+func TestListenerWrapperOrder(t *testing.T) {
+	doc := decodeLAN(t, Build(lanState()))
+	var got []string
+	for _, w := range doc.Apps.HTTP.Servers["srv-lan"].ListenerWrappers {
+		got = append(got, w.Wrapper)
+	}
+	if strings.Join(got, ",") != "proxy_protocol,tls" {
+		t.Errorf("srv-lan wrappers: got %v want [proxy_protocol tls]", got)
+	}
+}
+
+func TestBuildLANListenPorts(t *testing.T) {
+	doc := decodeLAN(t, Build(lanState()))
+	if got := doc.Apps.HTTP.Servers["srv-lan"].Listen; strings.Join(got, ",") != ":"+strconv.Itoa(LANHTTPSListenPort) {
+		t.Errorf("srv-lan listen: %v", got)
+	}
+	if got := doc.Apps.HTTP.Servers["lan-http"].Listen; strings.Join(got, ",") != ":"+strconv.Itoa(LANHTTPListenPort) {
+		t.Errorf("lan-http listen: %v", got)
+	}
+}
+
+// TestSrvLanUsesHostRelay pins that srv-lan routes share srv0's proxy
+// handler, so a host-mode backend exposed on the LAN is relayed on native
+// Linux exactly as it is on loopback.
+func TestSrvLanUsesHostRelay(t *testing.T) {
+	s := lanState()
+	w := s.Backends["web"]
+	w.LANDomain = "web.arrix.home.lan"
+	s.Backends["web"] = w
+	doc := decodeLAN(t, BuildWith(s, Options{HostRelay: testRelay}))
+	seen := false
+	for _, r := range doc.Apps.HTTP.Servers["srv-lan"].Routes {
+		if len(r.Match) == 0 {
+			continue
+		}
+		host := r.Match[0].Host[0]
+		if host == "web.arrix.home.lan" || host == "*.web.arrix.home.lan" {
+			seen = true
+			if d := r.Handle[0].Upstreams[0].Dial; d != testRelay.Dial {
+				t.Errorf("%s dial: got %q want relay", host, d)
+			}
+		}
+	}
+	if !seen {
+		t.Fatal("no srv-lan route for web.arrix.home.lan")
 	}
 }
