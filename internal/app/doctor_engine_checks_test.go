@@ -231,7 +231,7 @@ func TestCheckDNSNegativeLinuxFailsAndFixesWhenLookupHangs(t *testing.T) {
 		t.Fatalf("want fail with sudo fix: %+v", r)
 	}
 	joined := strings.Join(r.Detail, "\n")
-	for _, want := range []string{"no 'no-resolv' line", "no-resolv", "| sudo tee " + linuxDNSMasqCaddyConfPath, "systemctl restart dnsmasq"} {
+	for _, want := range []string{"no 'no-resolv' line", "no-resolv", "| sudo tee " + linuxDNSMasqCaddyConfPath, "sudo systemctl restart dnsmasq && sudo resolvectl flush-caches"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("detail missing %q:\n%s", want, joined)
 		}

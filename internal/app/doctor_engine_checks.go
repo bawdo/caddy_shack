@@ -249,7 +249,7 @@ func checkDNSNegativeLinux(ctx context.Context, _ *App, sh shellExecutor, tty sh
 	detail = append(detail,
 		"to fix manually:",
 		"  "+dnsmasqConfManualCmd(),
-		"  sudo systemctl restart dnsmasq && resolvectl flush-caches",
+		"  sudo systemctl restart dnsmasq && sudo resolvectl flush-caches",
 	)
 	return CheckResult{
 		Name:    "dns-negative-lookups",
