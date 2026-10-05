@@ -155,13 +155,16 @@ func (f *Fake) CreateAndStart(spec ContainerSpec) error {
 	if mode == "" {
 		mode = "bridge"
 	}
-	f.Infos[spec.Name] = ContainerInfo{
+	info := ContainerInfo{
 		NetworkMode: mode,
 		ExtraHosts:  append([]string(nil), spec.ExtraHosts...),
 		Mounts:      append([]VolumeMount(nil), spec.Volumes...),
 		Networks:    []string{mode},
 		Command:     append([]string(nil), spec.Command...),
+		Ports:       append([]PortMapping(nil), spec.PortMappings...),
 	}
+	SortPortMappings(info.Ports)
+	f.Infos[spec.Name] = info
 	return nil
 }
 

@@ -119,3 +119,26 @@ func TestParseBridgeGateway(t *testing.T) {
 		}
 	}
 }
+
+func TestParseContainerInfoPorts(t *testing.T) {
+	out := `{
+  "Config": {"Cmd": null},
+  "HostConfig": {"NetworkMode": "bridge", "PortBindings": {
+    "8443/tcp": [{"HostIp": "192.168.1.12", "HostPort": "443"}],
+    "80/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8080"}]
+  }},
+  "Mounts": [],
+  "NetworkSettings": {"Networks": {}}
+}`
+	got, err := parseContainerInfo([]byte(out))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := []PortMapping{
+		{HostAddr: "127.0.0.1", HostPort: 8080, ContainerPort: 80},
+		{HostAddr: "192.168.1.12", HostPort: 443, ContainerPort: 8443},
+	}
+	if !reflect.DeepEqual(got.Ports, want) {
+		t.Errorf("\n got  %+v\n want %+v", got.Ports, want)
+	}
+}

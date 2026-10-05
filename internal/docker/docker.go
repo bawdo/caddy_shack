@@ -6,6 +6,7 @@ package docker
 import (
 	"context"
 	"errors"
+	"sort"
 )
 
 // ContainerState is the lifecycle phase of CaddyShack's Caddy container.
@@ -109,6 +110,9 @@ type ContainerInfo struct {
 	// Command is the container's Config.Cmd: the command it was created
 	// with (the images CaddyShack runs have no entrypoint).
 	Command []string
+	// Ports are the published port bindings (HostConfig.PortBindings),
+	// sorted by HostAddr, HostPort, ContainerPort.
+	Ports []PortMapping
 }
 
 // ContainerSpec describes a container CreateAndStart should run.
@@ -137,4 +141,19 @@ type PortMapping struct {
 type VolumeMount struct {
 	VolumeName    string
 	ContainerPath string
+}
+
+// SortPortMappings orders ports by HostAddr, HostPort, then ContainerPort,
+// in place, so two sets can be compared with slices.Equal.
+func SortPortMappings(ports []PortMapping) {
+	sort.Slice(ports, func(i, j int) bool {
+		a, b := ports[i], ports[j]
+		if a.HostAddr != b.HostAddr {
+			return a.HostAddr < b.HostAddr
+		}
+		if a.HostPort != b.HostPort {
+			return a.HostPort < b.HostPort
+		}
+		return a.ContainerPort < b.ContainerPort
+	})
 }

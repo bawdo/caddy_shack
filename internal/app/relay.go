@@ -170,7 +170,8 @@ func (a *App) stopRelay() error {
 // container (info) lacks. Only settings `docker run` fixes for a
 // container's lifetime that CaddyShack has changed between releases are
 // compared: network mode, extra hosts, volume mounts, and the command
-// (e.g. a Caddy container that predates --resume). Empty means up to date.
+// (e.g. a Caddy container that predates --resume), and published port
+// bindings when the spec has any. Empty means up to date.
 func specDrift(spec docker.ContainerSpec, info docker.ContainerInfo) []string {
 	var drift []string
 	want := spec.NetworkMode
@@ -196,6 +197,15 @@ func specDrift(spec docker.ContainerSpec, info docker.ContainerInfo) []string {
 	}
 	if len(spec.Command) > 0 && !slices.Equal(spec.Command, info.Command) {
 		drift = append(drift, "outdated container command")
+	}
+	if len(spec.PortMappings) > 0 {
+		want := slices.Clone(spec.PortMappings)
+		docker.SortPortMappings(want)
+		got := slices.Clone(info.Ports)
+		docker.SortPortMappings(got)
+		if !slices.Equal(got, want) {
+			drift = append(drift, fmt.Sprintf("port bindings differ: got %v, want %v", got, want))
+		}
 	}
 	return drift
 }
