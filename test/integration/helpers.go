@@ -9,8 +9,11 @@ package integration
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,3 +102,87 @@ func (fakeRunningDocker) NetworkAttached(string, string) (bool, error) {
 }
 func (fakeRunningDocker) ImageID(string) (string, error)          { return "", nil }
 func (fakeRunningDocker) ContainerImageID(string) (string, error) { return "", nil }
+
+// EngineInfo reports Docker Desktop so the App keeps routing host-mode
+// backends via host.docker.internal: these tests own their Caddy container
+// and never create the native-Linux relay.
+func (fakeRunningDocker) EngineInfo() (docker.EngineInfo, error) { return docker.DesktopEngine, nil }
+func (fakeRunningDocker) BridgeGateway() (string, error)         { return "172.17.0.1", nil }
+func (fakeRunningDocker) InspectContainer(string) (docker.ContainerInfo, error) {
+	return docker.ContainerInfo{NetworkMode: "bridge", Networks: []string{"bridge"}}, nil
+}
+
+// lanTestSuffix marks every Docker object a LAN integration test creates.
+const lanTestSuffix = "_it_lan"
+
+// lanTestInstance is a complete CaddyShack install, LAN forwarder included,
+// that shares no container, network, volume or port with the default one:
+// every name is the default with _it_lan appended, and every port is a high
+// port free on all interfaces (the forwarder binds a LAN address, not
+// loopback). Pair it with cleanupLANInstance.
+func lanTestInstance() app.Instance {
+	def := app.DefaultInstance()
+	ports := highPorts(5)
+	return app.Instance{
+		ContainerName:      def.ContainerName + lanTestSuffix,
+		RelayContainerName: def.RelayContainerName + lanTestSuffix,
+		NetworkName:        def.NetworkName + lanTestSuffix,
+		DataVolume:         def.DataVolume + lanTestSuffix,
+		ConfigVolume:       def.ConfigVolume + lanTestSuffix,
+		RelayVolume:        def.RelayVolume + lanTestSuffix,
+		LANContainerName:   def.LANContainerName + lanTestSuffix,
+		HTTPPort:           ports[0],
+		HTTPSPort:          ports[1],
+		AdminPort:          ports[2],
+		LANHTTPPort:        ports[3],
+		LANHTTPSPort:       ports[4],
+	}
+}
+
+// highPorts returns n distinct ports that are free on every interface. The
+// listeners stay open until all n are picked so no port repeats.
+func highPorts(n int) []int {
+	out := make([]int, 0, n)
+	var ls []net.Listener
+	defer func() {
+		for _, l := range ls {
+			_ = l.Close()
+		}
+	}()
+	for len(out) < n {
+		l, err := net.Listen("tcp", ":0")
+		if err != nil {
+			panic(fmt.Sprintf("pick a free port: %v", err))
+		}
+		ls = append(ls, l)
+		out = append(out, l.Addr().(*net.TCPAddr).Port)
+	}
+	return out
+}
+
+// cleanupLANInstance refuses an instance that overlaps the real install,
+// then removes its containers, volumes and network before the test and
+// again when it ends.
+func cleanupLANInstance(t *testing.T, inst app.Instance) {
+	t.Helper()
+	def := app.DefaultInstance()
+	names := []string{inst.ContainerName, inst.RelayContainerName, inst.NetworkName, inst.DataVolume,
+		inst.ConfigVolume, inst.RelayVolume, inst.LANContainerName}
+	for _, n := range names {
+		if !strings.HasSuffix(n, lanTestSuffix) {
+			t.Fatalf("LAN test instance name %q lacks the %s suffix", n, lanTestSuffix)
+		}
+	}
+	for _, p := range []int{inst.HTTPPort, inst.HTTPSPort, inst.AdminPort, inst.LANHTTPPort, inst.LANHTTPSPort} {
+		if p < 1024 || p == def.HTTPPort || p == def.HTTPSPort || p == def.AdminPort {
+			t.Fatalf("LAN test instance port %d is not a high port: %+v", p, inst)
+		}
+	}
+	rm := func() {
+		_ = exec.Command("docker", "rm", "-f", inst.LANContainerName, inst.ContainerName, inst.RelayContainerName).Run()
+		_ = exec.Command("docker", "volume", "rm", inst.DataVolume, inst.ConfigVolume, inst.RelayVolume).Run()
+		_ = exec.Command("docker", "network", "rm", inst.NetworkName).Run()
+	}
+	rm()
+	t.Cleanup(rm)
+}

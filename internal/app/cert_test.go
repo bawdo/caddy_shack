@@ -164,10 +164,10 @@ func TestCertRequestWrapsIssuerFailureAsCertIssuance(t *testing.T) {
 
 	err := a.CertRequest(t.Context(), CertRequestInput{Domain: "alpha.arrix.dev", Email: "k@example.com"}, &noopPrompter{})
 	if !errors.Is(err, ErrCertIssuance) {
-		t.Errorf("err = %v, want ErrCertIssuance (exit 9)", err)
+		t.Errorf("err = %v, want ErrCertIssuance (exit 11)", err)
 	}
-	if ExitCode(err) != 9 {
-		t.Errorf("exit code = %d, want 9", ExitCode(err))
+	if ExitCode(err) != 11 {
+		t.Errorf("exit code = %d, want 11", ExitCode(err))
 	}
 	// A failed order must not leave half-written material behind.
 	if a.certs.Has("alpha.arrix.dev") {
@@ -549,11 +549,10 @@ func TestCertRenewStateSaveFailureRollsBackConfigAndMaterial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load state: %v", err)
 	}
-	certsBefore, err := a.loadedCerts(sBefore)
+	wantRollbackCfg, err := a.buildConfig(sBefore)
 	if err != nil {
-		t.Fatalf("loadedCerts: %v", err)
+		t.Fatalf("buildConfig: %v", err)
 	}
-	wantRollbackCfg := caddyapi.Build(sBefore, certsBefore)
 
 	// Swap in a recording server so the rollback push can be inspected, then
 	// make the renewed order return different material so a wrongly-kept

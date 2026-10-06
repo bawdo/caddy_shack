@@ -2,14 +2,11 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/docker"
-	"github.com/bawdo/caddy_shack/internal/state"
 )
 
 // adminReadyTimeout and adminReadyInterval bound the wait for the Caddy
@@ -31,8 +28,8 @@ type UpgradeReport struct {
 }
 
 // Upgrade re-pulls the pinned Caddy image and, if it differs from the image
-// the current container runs, recreates the container against it (preserving
-// both named volumes), then re-pushes the registered backends from state so
+// the current container runs, recreates the container against it (see
+// recreateCaddy: volumes, networks, and backends are all preserved) so
 // every .test URL keeps working. If the pulled image matches what is already
 // running, it reports AlreadyCurrent and leaves the container untouched.
 func (a *App) Upgrade(ctx context.Context) (UpgradeReport, error) {
@@ -40,7 +37,7 @@ func (a *App) Upgrade(ctx context.Context) (UpgradeReport, error) {
 		return UpgradeReport{}, fmt.Errorf("%w: %v", ErrDockerUnreachable, err)
 	}
 
-	st, err := a.docker.ContainerState(CaddyContainerName)
+	st, err := a.docker.ContainerState(a.inst.ContainerName)
 	if err != nil {
 		return UpgradeReport{}, fmt.Errorf("inspect container: %w", err)
 	}
@@ -56,58 +53,23 @@ func (a *App) Upgrade(ctx context.Context) (UpgradeReport, error) {
 	if err != nil {
 		return UpgradeReport{}, fmt.Errorf("image id: %w", err)
 	}
-	curID, err := a.docker.ContainerImageID(CaddyContainerName)
+	curID, err := a.docker.ContainerImageID(a.inst.ContainerName)
 	if err != nil {
 		return UpgradeReport{}, fmt.Errorf("container image id: %w", err)
 	}
 	if newID == curID {
+		a.noteStaleCaddy()
+		if err := a.upgradeLAN(); err != nil {
+			return UpgradeReport{}, err
+		}
 		return UpgradeReport{AlreadyCurrent: true, Version: a.caddyVersion(ctx)}, nil
 	}
 
-	lock, err := state.AcquireLock(a.paths.LockPath, 5*time.Second)
-	if err != nil {
-		if errors.Is(err, state.ErrLockTimeout) {
-			return UpgradeReport{}, fmt.Errorf("%w: %v", ErrLockContention, err)
-		}
+	if err := a.recreateCaddy(ctx, CaddyImage); err != nil {
 		return UpgradeReport{}, err
 	}
-	defer func() { _ = lock.Release() }()
-
-	// Load backends before touching the container so a corrupt state aborts
-	// without any container mutation.
-	s, err := state.Load(a.paths.StatePath)
-	if err != nil {
-		if state.IsCorrupt(err) {
-			return UpgradeReport{}, fmt.Errorf("%w: %v", ErrStateCorrupt, err)
-		}
+	if err := a.upgradeLAN(); err != nil {
 		return UpgradeReport{}, err
-	}
-
-	if err := a.docker.Remove(CaddyContainerName); err != nil {
-		return UpgradeReport{}, err
-	}
-	if err := a.docker.EnsureVolume(CaddyDataVolume); err != nil {
-		return UpgradeReport{}, err
-	}
-	if err := a.docker.EnsureVolume(CaddyConfigVolume); err != nil {
-		return UpgradeReport{}, err
-	}
-	if err := a.docker.CreateAndStart(caddyContainerSpec(CaddyImage)); err != nil {
-		return UpgradeReport{}, err
-	}
-	if err := a.ensureSharedNetwork(); err != nil {
-		return UpgradeReport{}, fmt.Errorf("attach shared network: %w", err)
-	}
-
-	if err := a.waitForAdmin(ctx); err != nil {
-		return UpgradeReport{}, fmt.Errorf("recreated container but the caddy admin API did not come up; run 'caddy_shack status': %w", err)
-	}
-	certs, err := a.loadedCerts(s)
-	if err != nil {
-		return UpgradeReport{}, fmt.Errorf("recreated container but failed to load certificates; run 'caddy_shack status': %w", err)
-	}
-	if err := a.caddy.Load(ctx, caddyapi.Build(s, certs)); err != nil {
-		return UpgradeReport{}, fmt.Errorf("recreated container but failed to restore backends; run 'caddy_shack status': %w", err)
 	}
 
 	return UpgradeReport{AlreadyCurrent: false, Version: a.caddyVersion(ctx)}, nil
@@ -136,7 +98,7 @@ func (a *App) waitForAdmin(ctx context.Context) error {
 // the container. Best-effort: returns "" when the exec fails or output is
 // empty.
 func (a *App) caddyVersion(ctx context.Context) string {
-	out, err := a.docker.Exec(ctx, CaddyContainerName, []string{"caddy", "version"})
+	out, err := a.docker.Exec(ctx, a.inst.ContainerName, []string{"caddy", "version"})
 	if err != nil {
 		return ""
 	}

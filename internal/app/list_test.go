@@ -103,3 +103,25 @@ func writeFile(t *testing.T, path, content string) error {
 	t.Helper()
 	return os.WriteFile(path, []byte(content), 0o600)
 }
+
+func TestListShowsLANDomain(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	s := &state.State{
+		SchemaVersion: 2,
+		Backends: map[string]state.Backend{
+			"gamma": {Domain: "gamma.test", Upstream: "127.0.0.1:3000", LANDomain: "gamma.arrix.home.lan"},
+		},
+	}
+	if err := state.Save(statePath, s); err != nil {
+		t.Fatal(err)
+	}
+	a := NewWithPaths(Paths{StatePath: statePath, LockPath: statePath + ".lock"}, nil, nil)
+	got, err := a.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].LANDomain != "gamma.arrix.home.lan" {
+		t.Errorf("got %+v", got)
+	}
+}

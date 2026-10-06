@@ -11,12 +11,12 @@ import (
 )
 
 // loadedCerts turns the certificate metadata in state into the material
-// caddyapi.Build needs, reading the PEM from the on-host store.
+// caddyapi.BuildWith needs, reading the PEM from the on-host store.
 //
-// Every caddyapi.Build call site must pass the result of this. A config
-// pushed without it would drop the loaded certificates out of the running
-// Caddy, and the next request for a covered domain would fall back to the
-// internal CA or fail outright.
+// buildConfig calls this, and every config push must go through buildConfig.
+// A config pushed without it would drop the loaded certificates out of the
+// running Caddy, and the next request for a covered domain would fall back to
+// the internal CA or fail outright.
 //
 // A state entry whose material has gone missing from disk (certstore.ErrNotFound)
 // is skipped rather than treated as an error: a hand-deleted file should

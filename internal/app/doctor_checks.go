@@ -5,21 +5,17 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/docker"
 	"github.com/bawdo/caddy_shack/internal/state"
 )
@@ -74,7 +70,7 @@ func checkContainerHealth(ctx context.Context, a *App) CheckResult {
 			Summary: "docker daemon unreachable",
 		}
 	}
-	state, err := a.docker.ContainerState(CaddyContainerName)
+	state, err := a.docker.ContainerState(a.inst.ContainerName)
 	if err != nil {
 		return CheckResult{
 			Name:    "container-health",
@@ -91,7 +87,7 @@ func checkContainerHealth(ctx context.Context, a *App) CheckResult {
 			Summary: "caddy_shack container not installed",
 			Fix: &FixAction{
 				Label: "install Caddy container ('caddy_shack install')",
-				Apply: func(_ context.Context) error { return a.Install() },
+				Apply: func(ctx context.Context) error { return a.Install(ctx) },
 			},
 		}
 	case docker.StateStopped:
@@ -101,7 +97,7 @@ func checkContainerHealth(ctx context.Context, a *App) CheckResult {
 			Summary: "caddy_shack container stopped",
 			Fix: &FixAction{
 				Label: "start Caddy container ('caddy_shack start')",
-				Apply: func(_ context.Context) error { return a.Start() },
+				Apply: func(ctx context.Context) error { return a.Start(ctx) },
 			},
 		}
 	}
@@ -113,7 +109,7 @@ func checkContainerHealth(ctx context.Context, a *App) CheckResult {
 			Detail:  []string{"check 'docker logs caddy_shack' for Caddy startup errors"},
 			Fix: &FixAction{
 				Label: "restart container ('caddy_shack restart')",
-				Apply: func(_ context.Context) error { return a.Restart() },
+				Apply: func(ctx context.Context) error { return a.Restart(ctx) },
 			},
 		}
 	}
@@ -147,7 +143,7 @@ func dnsmasqConfPaths(ctx context.Context, sh shellExecutor) []string {
 	return []string{"/opt/homebrew/etc/dnsmasq.d", "/usr/local/etc/dnsmasq.d"}
 }
 
-func checkDNS(ctx context.Context, _ *App, sh shellExecutor, tty shellExecutor) CheckResult {
+func checkDNSDarwin(ctx context.Context, _ *App, sh shellExecutor, tty shellExecutor) CheckResult {
 	host := randomTestSubdomain()
 	out, _ := sh(ctx, "dscacheutil", "-q", "host", "-a", "name", host)
 	if strings.Contains(string(out), "127.0.0.1") {
@@ -191,7 +187,7 @@ func checkDNS(ctx context.Context, _ *App, sh shellExecutor, tty shellExecutor) 
 		Label:        "install dnsmasq and write resolver entry for .test",
 		RequiresSudo: true,
 		Apply: func(ctx context.Context) error {
-			return applyDNSFix(ctx, sh, tty)
+			return applyDNSFixDarwin(ctx, sh, tty)
 		},
 	}
 	return CheckResult{
@@ -203,11 +199,11 @@ func checkDNS(ctx context.Context, _ *App, sh shellExecutor, tty shellExecutor) 
 	}
 }
 
-// applyDNSFix runs the brew + sudo commands documented in the README's
-// "local DNS for .test" section. Returns on the first error.
+// applyDNSFixDarwin runs the brew + sudo commands documented in the
+// README's "local DNS for .test" section. Returns on the first error.
 // Non-sudo steps use sh; sudo steps use tty so the password prompt reaches
 // the user's terminal.
-func applyDNSFix(ctx context.Context, sh, tty shellExecutor) error {
+func applyDNSFixDarwin(ctx context.Context, sh, tty shellExecutor) error {
 	type step struct {
 		cmd  []string
 		sudo bool
@@ -232,8 +228,8 @@ func applyDNSFix(ctx context.Context, sh, tty shellExecutor) error {
 	return nil
 }
 
-func checkTrustStore(ctx context.Context, a *App, sh shellExecutor, tty shellExecutor) CheckResult {
-	state, _ := a.docker.ContainerState(CaddyContainerName)
+func checkTrustStoreDarwin(ctx context.Context, a *App, sh shellExecutor, tty shellExecutor) CheckResult {
+	state, _ := a.docker.ContainerState(a.inst.ContainerName)
 	if state != docker.StateRunning {
 		return CheckResult{
 			Name:    "trust-store",
@@ -241,7 +237,7 @@ func checkTrustStore(ctx context.Context, a *App, sh shellExecutor, tty shellExe
 			Summary: "container not running",
 		}
 	}
-	cert, err := a.docker.Exec(ctx, CaddyContainerName, []string{"cat", "/data/caddy/pki/authorities/local/root.crt"})
+	cert, err := a.docker.Exec(ctx, a.inst.ContainerName, []string{"cat", "/data/caddy/pki/authorities/local/root.crt"})
 	if err != nil {
 		return CheckResult{
 			Name:    "trust-store",
@@ -278,9 +274,9 @@ func checkTrustStore(ctx context.Context, a *App, sh shellExecutor, tty shellExe
 	}
 	detail = append(detail,
 		"expected SHA-256 (DER): "+wantSHA,
-		"cert source: "+CaddyContainerName+":/data/caddy/pki/authorities/local/root.crt",
+		"cert source: "+a.inst.ContainerName+":/data/caddy/pki/authorities/local/root.crt",
 		"to fix manually:",
-		"  docker exec "+CaddyContainerName+" cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt",
+		"  docker exec "+a.inst.ContainerName+" cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt",
 		"  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/caddy_shack_root.crt",
 	)
 	return CheckResult{
@@ -292,13 +288,13 @@ func checkTrustStore(ctx context.Context, a *App, sh shellExecutor, tty shellExe
 			Label:        "trust Caddy root CA in System keychain",
 			RequiresSudo: true,
 			Apply: func(ctx context.Context) error {
-				return applyTrustStoreFix(ctx, tty, cert)
+				return applyTrustStoreFixDarwin(ctx, tty, cert)
 			},
 		},
 	}
 }
 
-func applyTrustStoreFix(ctx context.Context, tty shellExecutor, cert []byte) error {
+func applyTrustStoreFixDarwin(ctx context.Context, tty shellExecutor, cert []byte) error {
 	// Write cert to a temp file the user's sudo can read.
 	tmp, err := os.CreateTemp("", "caddy_shack_root_*.crt")
 	if err != nil {
@@ -322,11 +318,247 @@ func applyTrustStoreFix(ctx context.Context, tty shellExecutor, cert []byte) err
 	return nil
 }
 
+// Linux paths for the dns-test-tld and trust-store checks. Kept as package
+// vars (not consts) so tests can point them at a scratch directory instead
+// of the real /etc.
+var (
+	linuxDNSMasqCaddyConfPath = "/etc/dnsmasq.d/caddy_shack.conf"
+	linuxResolvedDropinDir    = "/etc/systemd/resolved.conf.d"
+	linuxResolvedDropinPath   = "/etc/systemd/resolved.conf.d/30-caddy-shack-test-tld.conf"
+)
+
+// linuxCABundlePaths are the well-known locations Linux distros write their
+// extracted system CA bundle to. Checked in order; the first that exists is
+// used. Covers Arch/Omarchy and Debian/Ubuntu (ca-certificates.crt) and
+// Fedora/RHEL (ca-bundle.crt / tls-ca-bundle.pem).
+var linuxCABundlePaths = []string{
+	"/etc/ssl/certs/ca-certificates.crt",
+	"/etc/pki/tls/certs/ca-bundle.crt",
+	"/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+	"/etc/ssl/ca-bundle.pem",
+}
+
+// checkDNSLinux is the Linux counterpart of checkDNSDarwin. Linux DNS
+// stacks vary a lot more than macOS's (systemd-resolved, NetworkManager +
+// dnsmasq, plain resolv.conf), so the resolution probe itself goes through
+// getent (the same NSS/getaddrinfo(3) path curl, browsers, and most
+// language runtimes use) rather than a stack-specific tool. The diagnostic
+// sub-probes and the automatic fix are systemd-resolved-specific (Omarchy
+// and most modern distros default to it); on other stacks the fix declines
+// and points at the README's manual steps instead of guessing.
+func checkDNSLinux(ctx context.Context, _ *App, sh shellExecutor, tty shellExecutor) CheckResult {
+	host := randomTestSubdomain()
+	out, _ := sh(ctx, "getent", "ahosts", host)
+	if strings.Contains(string(out), "127.0.0.1") {
+		return CheckResult{
+			Name:    "dns-test-tld",
+			Status:  SeverityPass,
+			Summary: ".test resolves to 127.0.0.1",
+		}
+	}
+
+	var detail []string
+	if _, err := sh(ctx, "sh", "-c", "command -v dnsmasq"); err != nil {
+		detail = append(detail, "dnsmasq: not installed")
+	} else {
+		detail = append(detail, "dnsmasq: installed")
+		if out, err := sh(ctx, "systemctl", "is-active", "dnsmasq"); err != nil || !strings.Contains(string(out), "active") {
+			detail = append(detail, "dnsmasq.service: not active")
+		} else {
+			detail = append(detail, "dnsmasq.service: active")
+		}
+	}
+	if _, err := sh(ctx, "test", "-f", linuxDNSMasqCaddyConfPath); err != nil {
+		detail = append(detail, linuxDNSMasqCaddyConfPath+": missing")
+	}
+	if _, err := sh(ctx, "sh", "-c", "grep -rl 'Domains=.*test' "+linuxResolvedDropinDir+" 2>/dev/null"); err != nil {
+		detail = append(detail, linuxResolvedDropinDir+": no *.test routing domain found")
+	}
+	detail = append(detail,
+		"to fix manually (systemd-resolved, e.g. Omarchy - see README's Omarchy section for other DNS stacks):",
+		"  sudo mkdir -p /etc/dnsmasq.d",
+		"  "+dnsmasqConfManualCmd(),
+		"  sudo sed -i -e 's/^#conf-dir=\\/etc\\/dnsmasq.d\\/,\\*\\.conf$/conf-dir=\\/etc\\/dnsmasq.d\\/,*.conf/' -e 's/^#bind-interfaces$/bind-interfaces/' /etc/dnsmasq.conf",
+		"  sudo systemctl reset-failed dnsmasq; sudo systemctl enable --now dnsmasq",
+		"  printf '[Resolve]\\nDNS=127.0.0.1\\nDomains=~test\\n' | sudo tee "+linuxResolvedDropinPath,
+		"  sudo systemctl restart systemd-resolved",
+	)
+
+	return CheckResult{
+		Name:    "dns-test-tld",
+		Status:  SeverityFail,
+		Summary: ".test does not resolve to 127.0.0.1",
+		Detail:  detail,
+		Fix: &FixAction{
+			Label:        "install dnsmasq and route .test via systemd-resolved",
+			RequiresSudo: true,
+			Apply: func(ctx context.Context) error {
+				return applyDNSFixLinux(ctx, sh, tty)
+			},
+		},
+	}
+}
+
+// applyDNSFixLinux mirrors the steps in the README's Omarchy section. It
+// only supports systemd-resolved setups; it refuses rather than guessing at
+// NetworkManager/nmcli commands for other DNS stacks.
+func applyDNSFixLinux(ctx context.Context, sh, tty shellExecutor) error {
+	if _, err := sh(ctx, "systemctl", "is-active", "systemd-resolved"); err != nil {
+		return fmt.Errorf("systemd-resolved not active: this automatic fix only supports systemd-resolved setups (e.g. Omarchy); see README's Omarchy section for manual steps on other DNS stacks: %w", err)
+	}
+	script := "set -e\n" +
+		"mkdir -p /etc/dnsmasq.d\n" +
+		dnsmasqConfWriteCmd() + "\n" +
+		`sed -i -e 's/^#conf-dir=\/etc\/dnsmasq.d\/,\*\.conf$/conf-dir=\/etc\/dnsmasq.d\/,*.conf/' -e 's/^#bind-interfaces$/bind-interfaces/' /etc/dnsmasq.conf` + "\n" +
+		"systemctl reset-failed dnsmasq || true\n" +
+		"systemctl enable --now dnsmasq\n" +
+		"mkdir -p " + linuxResolvedDropinDir + "\n" +
+		`printf '[Resolve]\nDNS=127.0.0.1\nDomains=~test\n' > ` + linuxResolvedDropinPath + "\n" +
+		"systemctl restart systemd-resolved\n"
+	out, err := tty(ctx, "sudo", "sh", "-c", script)
+	if err != nil {
+		return fmt.Errorf("dns fix: %w: %s", err, out)
+	}
+	return nil
+}
+
+// checkTrustStoreLinux is the Linux counterpart of checkTrustStoreDarwin.
+// There is no single "system keychain" on Linux; instead distros extract
+// trusted anchors into a flat PEM bundle at one of a few well-known paths
+// (linuxCABundlePaths). The check reads whichever bundle exists and looks
+// for a certificate block whose SHA-256(DER) matches the CA fetched from
+// the running container.
+func checkTrustStoreLinux(ctx context.Context, a *App, sh shellExecutor, tty shellExecutor) CheckResult {
+	state, _ := a.docker.ContainerState(a.inst.ContainerName)
+	if state != docker.StateRunning {
+		return CheckResult{
+			Name:    "trust-store",
+			Status:  SeveritySkip,
+			Summary: "container not running",
+		}
+	}
+	cert, err := a.docker.Exec(ctx, a.inst.ContainerName, []string{"cat", "/data/caddy/pki/authorities/local/root.crt"})
+	if err != nil {
+		return CheckResult{
+			Name:    "trust-store",
+			Status:  SeverityWarn,
+			Summary: "no root CA yet (register a backend to trigger provisioning)",
+			Detail:  []string{err.Error()},
+		}
+	}
+	derBytes := cert
+	if block, _ := pem.Decode(cert); block != nil {
+		derBytes = block.Bytes
+	}
+	sum := sha256.Sum256(derBytes)
+	wantSHA := strings.ToUpper(hex.EncodeToString(sum[:]))
+
+	var checkedPaths []string
+	for _, path := range linuxCABundlePaths {
+		if _, err := sh(ctx, "test", "-f", path); err != nil {
+			continue
+		}
+		checkedPaths = append(checkedPaths, path)
+		bundle, err := sh(ctx, "cat", path)
+		if err != nil {
+			continue
+		}
+		if bundleContainsSHA256(bundle, wantSHA) {
+			return CheckResult{
+				Name:    "trust-store",
+				Status:  SeverityPass,
+				Summary: "Caddy root CA trusted in system CA bundle (" + path + ")",
+			}
+		}
+	}
+
+	detail := []string{
+		"expected SHA-256 (DER): " + wantSHA,
+		"cert source: " + a.inst.ContainerName + ":/data/caddy/pki/authorities/local/root.crt",
+		"checked bundles: " + strings.Join(checkedPaths, ", "),
+		"to fix manually (Arch/Omarchy/Fedora - p11-kit):",
+		"  docker exec " + a.inst.ContainerName + " cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt",
+		"  sudo trust anchor /tmp/caddy_shack_root.crt",
+		"to fix manually (Debian/Ubuntu):",
+		"  docker exec " + a.inst.ContainerName + " cat /data/caddy/pki/authorities/local/root.crt | sudo tee /usr/local/share/ca-certificates/caddy_shack.crt",
+		"  sudo update-ca-certificates",
+	}
+	return CheckResult{
+		Name:    "trust-store",
+		Status:  SeverityFail,
+		Summary: "Caddy root CA not found in system CA bundle",
+		Detail:  detail,
+		Fix: &FixAction{
+			Label:        "trust Caddy root CA in the system CA store",
+			RequiresSudo: true,
+			Apply: func(ctx context.Context) error {
+				return applyTrustStoreFixLinux(ctx, sh, tty, cert)
+			},
+		},
+	}
+}
+
+// bundleContainsSHA256 reports whether any CERTIFICATE PEM block in bundle
+// hashes (SHA-256 over its DER bytes) to want (uppercase hex).
+func bundleContainsSHA256(bundle []byte, want string) bool {
+	rest := bundle
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			return false
+		}
+		if block.Type == "CERTIFICATE" {
+			sum := sha256.Sum256(block.Bytes)
+			if strings.ToUpper(hex.EncodeToString(sum[:])) == want {
+				return true
+			}
+		}
+	}
+}
+
+// applyTrustStoreFixLinux prefers p11-kit's trust (Arch/Omarchy/Fedora),
+// falling back to update-ca-certificates (Debian/Ubuntu). Refuses if
+// neither is present rather than guessing at a third mechanism.
+func applyTrustStoreFixLinux(ctx context.Context, sh, tty shellExecutor, cert []byte) error {
+	tmp, err := os.CreateTemp("", "caddy_shack_root_*.crt")
+	if err != nil {
+		return fmt.Errorf("temp file: %w", err)
+	}
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+	}()
+	if _, err := tmp.Write(cert); err != nil {
+		return fmt.Errorf("write cert: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close tmp: %w", err)
+	}
+
+	if _, err := sh(ctx, "sh", "-c", "command -v trust"); err == nil {
+		out, err := tty(ctx, "sudo", "trust", "anchor", tmp.Name())
+		if err != nil {
+			return fmt.Errorf("trust anchor: %w: %s", err, out)
+		}
+		return nil
+	}
+	if _, err := sh(ctx, "sh", "-c", "command -v update-ca-certificates"); err == nil {
+		out, err := tty(ctx, "sudo", "sh", "-c",
+			"cp "+tmp.Name()+" /usr/local/share/ca-certificates/caddy_shack.crt && update-ca-certificates")
+		if err != nil {
+			return fmt.Errorf("update-ca-certificates: %w: %s", err, out)
+		}
+		return nil
+	}
+	return fmt.Errorf("neither 'trust' (p11-kit) nor 'update-ca-certificates' found; see README's Omarchy section for manual steps")
+}
+
 func checkSharedNetwork(_ context.Context, a *App) CheckResult {
 	if err := a.docker.DaemonReachable(); err != nil {
 		return CheckResult{Name: "shared-network", Status: SeveritySkip, Summary: "docker daemon unreachable"}
 	}
-	cstate, _ := a.docker.ContainerState(CaddyContainerName)
+	cstate, _ := a.docker.ContainerState(a.inst.ContainerName)
 	if cstate != docker.StateRunning {
 		return CheckResult{Name: "shared-network", Status: SeveritySkip, Summary: "container not running"}
 	}
@@ -348,7 +580,7 @@ func checkSharedNetwork(_ context.Context, a *App) CheckResult {
 			Summary: "no container-mode backends; shared network not required",
 		}
 	}
-	attached, err := a.docker.NetworkAttached(CaddyNetworkName, CaddyContainerName)
+	attached, err := a.docker.NetworkAttached(a.inst.NetworkName, a.inst.ContainerName)
 	if err != nil {
 		return CheckResult{
 			Name:    "shared-network",
@@ -361,16 +593,16 @@ func checkSharedNetwork(_ context.Context, a *App) CheckResult {
 		return CheckResult{
 			Name:    "shared-network",
 			Status:  SeverityPass,
-			Summary: fmt.Sprintf("caddy attached to %q (%d container-mode backend(s))", CaddyNetworkName, containerBackends),
+			Summary: fmt.Sprintf("caddy attached to %q (%d container-mode backend(s))", a.inst.NetworkName, containerBackends),
 		}
 	}
 	return CheckResult{
 		Name:    "shared-network",
 		Status:  SeverityFail,
-		Summary: fmt.Sprintf("caddy not attached to %q but %d container-mode backend(s) need it", CaddyNetworkName, containerBackends),
+		Summary: fmt.Sprintf("caddy not attached to %q but %d container-mode backend(s) need it", a.inst.NetworkName, containerBackends),
 		Detail:  []string{"container-mode (--container) registrations are unreachable until caddy joins this network"},
 		Fix: &FixAction{
-			Label: "create and attach shared network ('docker network connect " + CaddyNetworkName + " " + CaddyContainerName + "')",
+			Label: "create and attach shared network ('docker network connect " + a.inst.NetworkName + " " + a.inst.ContainerName + "')",
 			Apply: func(_ context.Context) error { return a.ensureSharedNetwork() },
 		},
 	}
@@ -417,7 +649,7 @@ func checkStateIntegrity(_ context.Context, a *App) CheckResult {
 }
 
 func checkBackends(ctx context.Context, a *App) CheckResult {
-	cstate, _ := a.docker.ContainerState(CaddyContainerName)
+	cstate, _ := a.docker.ContainerState(a.inst.ContainerName)
 	if cstate != docker.StateRunning {
 		return CheckResult{
 			Name:    "backends",
@@ -440,6 +672,9 @@ func checkBackends(ctx context.Context, a *App) CheckResult {
 			Summary: "no backends registered",
 		}
 	}
+	// On native Linux host-mode backends are reached through the relay, so
+	// that is where they are probed from.
+	relayed := a.hostNetwork().Kind == EngineNativeLinux
 	var failed []string
 	names := make([]string, 0, len(st.Backends))
 	for n := range st.Backends {
@@ -451,6 +686,16 @@ func checkBackends(ctx context.Context, a *App) CheckResult {
 		host, port, err := net.SplitHostPort(b.Upstream)
 		if err != nil {
 			failed = append(failed, fmt.Sprintf("%s (%s): malformed upstream: %v", n, b.Upstream, err))
+			continue
+		}
+		if relayed && host == UpstreamHost {
+			// Probe the hop the relay makes: the host's own loopback, on
+			// either family, as the relay's localhost dial does.
+			if probeBackendFrom(ctx, a, a.inst.RelayContainerName, "127.0.0.1", port) ||
+				probeBackendFrom(ctx, a, a.inst.RelayContainerName, "::1", port) {
+				continue
+			}
+			failed = append(failed, fmt.Sprintf("%s -> localhost:%s (via %s): unreachable", n, port, a.inst.RelayContainerName))
 			continue
 		}
 		if probeBackend(ctx, a, host, port) {
@@ -474,30 +719,48 @@ func checkBackends(ctx context.Context, a *App) CheckResult {
 }
 
 // probeBackend returns true if the upstream is reachable from inside the
-// container. Tries `nc -z` first; on any error, falls back to wget --spider.
+// Caddy container. Tries `nc -z` first; on any error, falls back to wget
+// --spider.
 func probeBackend(ctx context.Context, a *App, host, port string) bool {
-	if _, err := a.docker.Exec(ctx, CaddyContainerName,
+	return probeBackendFrom(ctx, a, a.inst.ContainerName, host, port)
+}
+
+// probeBackendFrom is probeBackend from an arbitrary container (the relay,
+// on native Linux).
+func probeBackendFrom(ctx context.Context, a *App, container, host, port string) bool {
+	if _, err := a.docker.Exec(ctx, container,
 		[]string{"nc", "-z", "-w", "3", host, port}); err == nil {
 		return true
 	}
 	url := "http://" + net.JoinHostPort(host, port) + "/"
-	_, err := a.docker.Exec(ctx, CaddyContainerName,
+	_, err := a.docker.Exec(ctx, container,
 		[]string{"wget", "-q", "--spider", "--tries", "1", "--timeout", "3", url})
 	return err == nil
 }
 
-// doctorPorts is the list of loopback ports CaddyShack publishes from the
-// container. Kept package-private so the check has a single source of truth.
-var doctorPorts = []int{80, 443, 2019}
+// publishedPorts is the list of loopback ports this instance publishes from
+// the container.
+func (i Instance) publishedPorts() []int {
+	return []int{i.HTTPPort, i.HTTPSPort, i.AdminPort}
+}
 
 func checkPortAvailability(ctx context.Context, a *App) CheckResult {
-	return checkPortAvailabilityOn(ctx, a, doctorPorts)
+	return checkPortAvailabilityOn(ctx, a, a.inst.publishedPorts())
 }
 
 // checkPortAvailabilityOn is the test seam. Tests call it with a free
 // ephemeral port so they don't need root for 80/443.
 // Uses DialTimeout rather than net.Listen to avoid EACCES on ports 80/443
 // when running as a non-root user.
+// joinPorts renders ports as "80, 443, 2019".
+func joinPorts(ports []int) string {
+	s := make([]string, len(ports))
+	for i, p := range ports {
+		s[i] = strconv.Itoa(p)
+	}
+	return strings.Join(s, ", ")
+}
+
 func checkPortAvailabilityOn(_ context.Context, a *App, ports []int) CheckResult {
 	var taken []string
 	for _, p := range ports {
@@ -513,12 +776,12 @@ func checkPortAvailabilityOn(_ context.Context, a *App, ports []int) CheckResult
 		return CheckResult{
 			Name:    "port-availability",
 			Status:  SeverityPass,
-			Summary: "80, 443, 2019 free or held by caddy_shack",
+			Summary: fmt.Sprintf("%s free or held by caddy_shack", joinPorts(ports)),
 		}
 	}
 	// If our container is running, assume it holds the ports (the spec's
 	// "free or already held by caddy_shack" wording). PASS with a note.
-	state, _ := a.docker.ContainerState(CaddyContainerName)
+	state, _ := a.docker.ContainerState(a.inst.ContainerName)
 	if state == docker.StateRunning {
 		return CheckResult{
 			Name:    "port-availability",
@@ -534,107 +797,13 @@ func checkPortAvailabilityOn(_ context.Context, a *App, ports []int) CheckResult
 	}
 }
 
-// extractRoutes pulls apps.http.servers.srv0.routes out of a Caddy config
-// blob. Returns []any{} (never nil) so that an empty routes array from a
-// live config (Caddy normalises null→[]) compares equal to a nil slice
-// produced by caddyapi.Build when there are no backends.
-func extractRoutes(cfg []byte) any {
-	var m map[string]any
-	if err := json.Unmarshal(cfg, &m); err != nil {
-		return []any{}
-	}
-	step := func(parent any, key string) any {
-		mp, ok := parent.(map[string]any)
-		if !ok {
-			return nil
-		}
-		return mp[key]
-	}
-	apps := step(m, "apps")
-	http := step(apps, "http")
-	servers := step(http, "servers")
-	srv0 := step(servers, "srv0")
-	if mp, ok := srv0.(map[string]any); ok {
-		routes := mp["routes"]
-		if routes == nil {
-			return []any{}
-		}
-		if arr, ok := routes.([]any); ok && len(arr) == 0 {
-			return []any{}
-		}
-		return routes
-	}
-	return []any{}
-}
-
-// extractCertHashes pulls apps.tls.certificates.load_pem out of a Caddy
-// config blob and returns the SET of entries as SHA-256 hashes of each
-// entry's JSON encoding. Comparing hashes lets the drift check tell whether
-// the certificate picture matches without diffing PEM bytes directly and
-// without ever holding or printing the key material itself.
-func extractCertHashes(cfg []byte) map[string]bool {
-	var m map[string]any
-	if err := json.Unmarshal(cfg, &m); err != nil {
-		return map[string]bool{}
-	}
-	step := func(parent any, key string) any {
-		mp, ok := parent.(map[string]any)
-		if !ok {
-			return nil
-		}
-		return mp[key]
-	}
-	apps := step(m, "apps")
-	tlsApp := step(apps, "tls")
-	certificates := step(tlsApp, "certificates")
-	loadPEM := step(certificates, "load_pem")
-
-	out := map[string]bool{}
-	arr, ok := loadPEM.([]any)
-	if !ok {
-		return out
-	}
-	for _, entry := range arr {
-		b, err := json.Marshal(entry)
-		if err != nil {
-			continue
-		}
-		sum := sha256.Sum256(b)
-		out[hex.EncodeToString(sum[:])] = true
-	}
-	return out
-}
-
-// certSetsEqual reports whether two SHA-256 hash sets produced by
-// extractCertHashes contain the same entries.
-func certSetsEqual(a, b map[string]bool) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k := range a {
-		if !b[k] {
-			return false
-		}
-	}
-	return true
-}
-
 func checkConfigDrift(ctx context.Context, a *App) CheckResult {
-	cstate, _ := a.docker.ContainerState(CaddyContainerName)
+	cstate, _ := a.docker.ContainerState(a.inst.ContainerName)
 	if cstate != docker.StateRunning {
 		return CheckResult{
 			Name:    "config-drift",
 			Status:  SeveritySkip,
 			Summary: "container not running",
-		}
-	}
-	live, err := a.caddy.GetConfig(ctx)
-	if err != nil {
-		return CheckResult{
-			Name:    "config-drift",
-			Status:  SeverityFail,
-			Summary: "cannot fetch live config",
-			Detail:  []string{err.Error()},
 		}
 	}
 	st, err := state.Load(a.paths.StatePath)
@@ -645,76 +814,61 @@ func checkConfigDrift(ctx context.Context, a *App) CheckResult {
 			Summary: "state unreadable; covered by state-integrity",
 		}
 	}
-	certs, err := a.loadedCerts(st)
+	d, err := a.liveDrift(ctx, st)
 	if err != nil {
 		return CheckResult{
 			Name:    "config-drift",
 			Status:  SeverityFail,
-			Summary: "cannot load certificate material",
+			Summary: "cannot fetch live config",
 			Detail:  []string{err.Error()},
 		}
 	}
-	desired := caddyapi.Build(st, certs)
-	liveRoutes := extractRoutes(live)
-	desiredRoutes := extractRoutes(desired)
-	routesDiffer := !reflect.DeepEqual(liveRoutes, desiredRoutes)
-
-	liveCerts := extractCertHashes(live)
-	desiredCerts := extractCertHashes(desired)
-	certsDiffer := !certSetsEqual(liveCerts, desiredCerts)
-
-	if !routesDiffer && !certsDiffer {
+	if d.InSync {
 		return CheckResult{
 			Name:    "config-drift",
 			Status:  SeverityPass,
-			Summary: "live Caddy routes and certificates match state.json",
+			Summary: "live Caddy config matches state.json",
 		}
-	}
-
-	var summary string
-	switch {
-	case routesDiffer && certsDiffer:
-		summary = "live Caddy routes and certificates differ from state.json"
-	case routesDiffer:
-		summary = "live Caddy routes differ from state.json"
-	default:
-		summary = "live Caddy certificates differ from state.json"
 	}
 	return CheckResult{
 		Name:    "config-drift",
-		Status:  SeverityWarn,
-		Summary: summary,
-		Detail:  []string{"re-POST /load from state will overwrite live config"},
+		Status:  SeverityFail,
+		Summary: "live Caddy config differs from state.json",
+		Detail:  append(DriftDetail(d), "'caddy_shack sync' re-pushes state.json to Caddy"),
 		Fix: &FixAction{
-			Label: "re-POST /load from state.json (takes the state lock)",
+			Label: "re-push state.json to Caddy ('caddy_shack sync')",
 			Apply: func(ctx context.Context) error {
-				return applyDriftFix(ctx, a)
+				_, err := a.reconcile(ctx)
+				return err
 			},
 		},
 	}
 }
 
-func applyDriftFix(ctx context.Context, a *App) error {
-	lock, err := state.AcquireLock(a.paths.LockPath, 5*time.Second)
-	if err != nil {
-		if errors.Is(err, state.ErrLockTimeout) {
-			return fmt.Errorf("%w: %v", ErrLockContention, err)
-		}
-		return err
+// DriftDetail renders d as human-readable lines, shared by doctor and
+// status.
+func DriftDetail(d Drift) []string {
+	var out []string
+	if !d.HTTPApp {
+		out = append(out, "no http app: Caddy serves nothing on 80/443")
 	}
-	defer func() { _ = lock.Release() }()
-
-	st, err := state.Load(a.paths.StatePath)
-	if err != nil {
-		return err
+	if !d.TLSApp {
+		out = append(out, "no tls app: Caddy issues no certificates")
 	}
-	certs, err := a.loadedCerts(st)
-	if err != nil {
-		return fmt.Errorf("load certificate material: %w", err)
+	if len(d.Missing) > 0 {
+		out = append(out, "registered but not live: "+strings.Join(d.Missing, ", "))
 	}
-	cfg := caddyapi.Build(st, certs)
-	if err := a.caddy.Load(ctx, cfg); err != nil {
-		return err
+	if len(d.Changed) > 0 {
+		out = append(out, "live route differs from registry: "+strings.Join(d.Changed, ", "))
 	}
-	return nil
+	if len(d.Unknown) > 0 {
+		out = append(out, "live but not registered: "+strings.Join(d.Unknown, ", "))
+	}
+	if d.CertsDiffer {
+		out = append(out, "loaded certificates differ from the certificate store")
+	}
+	if len(out) == 0 {
+		out = append(out, "live config differs from what the registry renders")
+	}
+	return out
 }

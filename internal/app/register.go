@@ -13,14 +13,17 @@ import (
 )
 
 // UpstreamHost is the in-container DNS name that resolves to the host
-// running Docker. All backends route through this; the user only supplies
-// the port their service listens on. host.docker.internal is provided by
-// Docker Desktop on macOS automatically.
+// running Docker. Host-mode backends are stored as UpstreamHost:<port>; the
+// user only supplies the port their service listens on. Docker Desktop and
+// VM runtimes provide the name and forward it to the host's loopback, so
+// Caddy dials it directly there. On native Linux the stored upstream is
+// rendered as a dial through the relay instead (see relay.go), because
+// docker0 can't reach loopback-bound services.
 const UpstreamHost = "host.docker.internal"
 
 // RegisterInput holds the fields the register command accepts. Port is the
-// host-side TCP port the user's service listens on; the upstream Caddy
-// reverse-proxies to is constructed as host.docker.internal:<port>.
+// host-side TCP port the user's service listens on; the upstream is stored
+// as host.docker.internal:<port>.
 type RegisterInput struct {
 	Name   string
 	Domain string // optional; defaults to <Name>.test
@@ -30,6 +33,12 @@ type RegisterInput struct {
 	// instead of host.docker.internal:<Port>. Requires the caddy container
 	// to be attached to CaddyNetworkName (ensured here).
 	Container string
+	// LAN gives the backend the LAN name <Name>.<LAN suffix>. Mutually
+	// exclusive with LANDomain. Needs LAN mode enabled.
+	LAN bool
+	// LANDomain gives the backend an explicit LAN name. Mutually exclusive
+	// with LAN. Needs LAN mode enabled.
+	LANDomain string
 }
 
 // nameRE accepts one or more dot-separated DNS labels. A single label (foo)
@@ -42,13 +51,17 @@ var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}(\.[a-z0-9][a-z0-9-]{0,
 var containerRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 // Register adds or updates a backend. Idempotent: identical re-registration
-// is a no-op (no Caddy push, no state write).
+// writes no state and only pushes to Caddy if its live config has drifted
+// from the registry.
 func (a *App) Register(ctx context.Context, in RegisterInput) error {
 	if !nameRE.MatchString(in.Name) {
 		return fmt.Errorf("%w: name must match ^[a-z0-9][a-z0-9-]{0,30}(\\.[a-z0-9][a-z0-9-]{0,30})*$ (got %q)", ErrInvalidArgs, in.Name)
 	}
 	if in.Port < 1 || in.Port > 65535 {
 		return fmt.Errorf("%w: port out of range (got %d, must be 1-65535)", ErrInvalidArgs, in.Port)
+	}
+	if in.LAN && in.LANDomain != "" {
+		return fmt.Errorf("%w: --lan and --lan-domain are mutually exclusive", ErrInvalidArgs)
 	}
 	if in.Domain == "" {
 		in.Domain = in.Name + ".test"
@@ -64,7 +77,7 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 	}
 
 	// Caddy must be running before we attempt any state change.
-	st, err := a.docker.ContainerState(CaddyContainerName)
+	st, err := a.docker.ContainerState(a.inst.ContainerName)
 	if err != nil {
 		return fmt.Errorf("inspect container: %w", err)
 	}
@@ -79,61 +92,107 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 		if err := a.ensureSharedNetwork(); err != nil {
 			return fmt.Errorf("ensure shared network: %w", err)
 		}
+	} else {
+		a.noteStaleCaddy()
 	}
 
-	lock, err := state.AcquireLock(a.paths.LockPath, 5*time.Second)
+	lock, err := acquireStateLock(a.paths.LockPath)
 	if err != nil {
-		if errors.Is(err, state.ErrLockTimeout) {
-			return fmt.Errorf("%w: %v", ErrLockContention, err)
-		}
 		return err
 	}
 	defer func() {
 		_ = lock.Release()
 	}()
 
-	s, err := state.Load(a.paths.StatePath)
+	s, err := loadState(a.paths.StatePath)
 	if err != nil {
-		if state.IsCorrupt(err) {
-			return fmt.Errorf("%w: %v", ErrStateCorrupt, err)
-		}
 		return err
 	}
 
-	// Domain-conflict check (skipping the same name's own row).
+	// Resolve the LAN name. Neither flag means no LAN name: Register is a
+	// full upsert, so re-registering without a flag clears an earlier one.
+	var lanDomain string
+	if in.LAN || in.LANDomain != "" {
+		if !s.LANEnabled() {
+			return fmt.Errorf("%w", ErrLANDisabled)
+		}
+		lanDomain = in.LANDomain
+		if in.LAN {
+			lanDomain = in.Name + "." + s.LAN.Suffix
+		}
+		if err := validLANName(lanDomain); err != nil {
+			return err
+		}
+	}
+
+	// Domain-conflict check (skipping the same name's own row). Names from
+	// the .test and LAN spaces share one namespace, so every pairing counts,
+	// including a backend's own Domain against its own LAN name.
+	if lanDomain != "" && lanDomain == in.Domain {
+		return fmt.Errorf("%w: %s is both the domain and the LAN name", ErrDomainConflict, lanDomain)
+	}
 	for name, b := range s.Backends {
-		if name != in.Name && b.Domain == in.Domain {
-			return fmt.Errorf("%w: %s already owned by backend %q", ErrDomainConflict, in.Domain, name)
+		if name == in.Name {
+			continue
+		}
+		for _, mine := range []string{in.Domain, lanDomain} {
+			if mine != "" && (b.Domain == mine || b.LANDomain == mine) {
+				return fmt.Errorf("%w: %s already owned by backend %q", ErrDomainConflict, mine, name)
+			}
 		}
 	}
 
 	existing, present := s.Backends[in.Name]
-	if present && existing.Domain == in.Domain && existing.Upstream == upstream {
-		// Identical re-registration. No-op.
-		return nil
+	if present && existing.Domain == in.Domain && existing.Upstream == upstream && existing.LANDomain == lanDomain {
+		// Identical re-registration: no state write. Caddy is still made
+		// to match the registry, so a caller that re-registers on startup
+		// gets its routes back after Caddy lost them.
+		_, err := a.reconcileLocked(ctx, s)
+		return err
 	}
 
-	now := time.Now().Format(time.RFC3339)
-	s.Backends[in.Name] = state.Backend{
+	updated := s.Clone()
+	updated.Backends[in.Name] = state.Backend{
 		Domain:       in.Domain,
+		LANDomain:    lanDomain,
 		Upstream:     upstream,
-		RegisteredAt: now,
+		RegisteredAt: time.Now().Format(time.RFC3339),
 	}
+	return a.commit(ctx, s, updated)
+}
 
-	certs, err := a.loadedCerts(s)
+// commit pushes updated to Caddy and then writes it as the registry. The
+// caller holds the state lock and prev is the registry as loaded under it.
+// Caddy goes first so a rejected config never reaches state.json. If the
+// state write then fails, Caddy is rolled back to prev so the two don't
+// diverge; if that rollback fails too, the error says so.
+func (a *App) commit(ctx context.Context, prev, updated *state.State) error {
+	cfg, err := a.buildConfig(updated)
 	if err != nil {
 		return err
 	}
-	cfg := caddyapi.Build(s, certs)
 	if err := a.caddy.Load(ctx, cfg); err != nil {
 		if errors.Is(err, caddyapi.ErrUnreachable) {
 			return fmt.Errorf("%w: %v", ErrCaddyNotRunning, err)
 		}
 		return err
 	}
-
-	if err := state.Save(a.paths.StatePath, s); err != nil {
-		return fmt.Errorf("save state: %w", err)
+	if err := state.Save(a.paths.StatePath, updated); err != nil {
+		rbErr := a.loadPrev(ctx, prev)
+		if rbErr != nil {
+			return fmt.Errorf("save state: %w; caddy now serves the change but the registry does not have it, "+
+				"and rolling caddy back failed (%v); fix the state file, then run 'caddy_shack sync'", err, rbErr)
+		}
+		return fmt.Errorf("save state: %w (caddy rolled back to the registry)", err)
 	}
 	return nil
+}
+
+// loadPrev pushes the config for prev, for rolling Caddy back.
+func (a *App) loadPrev(ctx context.Context, prev *state.State) error {
+	cfg, err := a.buildConfig(prev)
+	if err != nil {
+		return err
+	}
+	return a.caddy.Load(ctx, cfg)
 }

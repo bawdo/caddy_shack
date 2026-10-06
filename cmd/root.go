@@ -45,7 +45,10 @@ Exit codes (stable, script-friendly):
   6  caddy not installed (no container exists)
   7  state file corrupt - manual remediation required
   8  state lock held by another caddy_shack process
-  9  certificate issuance failed (ACME order, DNS validation, or rate limit)
+  9  status only: Caddy is up but its live config does not match the
+     registry (e.g. it restarted and lost its routes); run 'caddy_shack sync'
+  10  LAN mode not enabled
+  11  certificate issuance failed (ACME order, DNS validation, or rate limit)
 
 See docs/superpowers/specs/2026-05-27-mvp-vertical-slice-design.md for the
 full design.`,
@@ -62,8 +65,10 @@ full design.`,
 	root.AddCommand(newDeregisterCmd())
 	root.AddCommand(newListCmd())
 	root.AddCommand(newStatusCmd())
+	root.AddCommand(newSyncCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newCACmd())
+	root.AddCommand(newLANCmd())
 	root.AddCommand(newCertCmd())
 	applyHelpBareword(root)
 	return root

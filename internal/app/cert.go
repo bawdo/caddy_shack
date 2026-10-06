@@ -78,7 +78,7 @@ func (a *App) CertRequest(ctx context.Context, in CertRequestInput, prompt acme.
 		return fmt.Errorf("%w: --email is required; Let's Encrypt needs an account contact", ErrInvalidArgs)
 	}
 
-	st, err := a.docker.ContainerState(CaddyContainerName)
+	st, err := a.docker.ContainerState(a.inst.ContainerName)
 	if err != nil {
 		return fmt.Errorf("inspect container: %w", err)
 	}
@@ -156,11 +156,10 @@ func (a *App) issueAndInstall(ctx context.Context, domain, email, env string, pr
 		NotAfter: res.NotAfter.Format(time.RFC3339),
 	}
 
-	certs, err := a.loadedCerts(s)
+	cfg, err := a.buildConfig(s)
 	if err != nil {
 		return a.restoreMaterial(domain, hadPrior, prior, err)
 	}
-	cfg := caddyapi.Build(s, certs)
 	if err := a.caddy.Load(ctx, cfg); err != nil {
 		pushErr := err
 		if errors.Is(err, caddyapi.ErrUnreachable) {
@@ -180,14 +179,10 @@ func (a *App) issueAndInstall(ctx context.Context, domain, email, env string, pr
 		// rollback itself succeeded.
 		saveErr := fmt.Errorf("save state: %w", err)
 
-		preChangeState := &state.State{
-			SchemaVersion: s.SchemaVersion,
-			Backends:      s.Backends,
-			Certs:         make(map[string]state.Cert, len(s.Certs)),
-		}
-		for k, v := range s.Certs {
-			preChangeState.Certs[k] = v
-		}
+		// Clone, not a hand-built State, so everything else the registry
+		// holds (the LAN settings included) survives into the rollback
+		// config.
+		preChangeState := s.Clone()
 		if hadPriorCertEntry {
 			preChangeState.Certs[domain] = priorCertEntry
 		} else {
@@ -202,11 +197,10 @@ func (a *App) issueAndInstall(ctx context.Context, domain, email, env string, pr
 		materialErr := a.restoreMaterialOnly(domain, hadPrior, prior)
 
 		var rollbackErr error
-		rollbackCerts, certsErr := a.loadedCerts(preChangeState)
+		rollbackCfg, certsErr := a.buildConfig(preChangeState)
 		if certsErr != nil {
 			rollbackErr = fmt.Errorf("rebuild pre-change certificates: %w", certsErr)
 		} else {
-			rollbackCfg := caddyapi.Build(preChangeState, rollbackCerts)
 			if loadErr := a.caddy.Load(ctx, rollbackCfg); loadErr != nil {
 				rollbackErr = fmt.Errorf("re-push pre-change config: %w", loadErr)
 			}
@@ -343,12 +337,11 @@ func (a *App) CertRemove(ctx context.Context, domain string) (bool, error) {
 
 	// Push only when Caddy is up. Removing while it is stopped still updates
 	// state; the next start rebuilds the config from state anyway.
-	if st, err := a.docker.ContainerState(CaddyContainerName); err == nil && st == docker.StateRunning {
-		certs, err := a.loadedCerts(s)
+	if st, err := a.docker.ContainerState(a.inst.ContainerName); err == nil && st == docker.StateRunning {
+		cfg, err := a.buildConfig(s)
 		if err != nil {
 			return false, err
 		}
-		cfg := caddyapi.Build(s, certs)
 		if err := a.caddy.Load(ctx, cfg); err != nil && !errors.Is(err, caddyapi.ErrUnreachable) {
 			return false, err
 		}
@@ -394,7 +387,7 @@ func (a *App) CertRenew(ctx context.Context, domain string, force bool, prompt a
 		}
 	}
 
-	st, err := a.docker.ContainerState(CaddyContainerName)
+	st, err := a.docker.ContainerState(a.inst.ContainerName)
 	if err != nil {
 		return false, fmt.Errorf("inspect container: %w", err)
 	}

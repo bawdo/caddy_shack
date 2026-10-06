@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/bawdo/caddy_shack/internal/state"
@@ -11,7 +14,7 @@ import (
 
 func TestBuildConfigEmptyState(t *testing.T) {
 	s := &state.State{SchemaVersion: 1, Backends: map[string]state.Backend{}}
-	got := Build(s, nil)
+	got := Build(s)
 	assertJSONMatchesGolden(t, got, "empty.json")
 }
 
@@ -22,7 +25,7 @@ func TestBuildConfigOneBackend(t *testing.T) {
 			"myapp": {Domain: "myapp.test", Upstream: "127.0.0.1:3000"},
 		},
 	}
-	got := Build(s, nil)
+	got := Build(s)
 	assertJSONMatchesGolden(t, got, "one_backend.json")
 }
 
@@ -31,7 +34,7 @@ func TestBuildConfigOneBackend(t *testing.T) {
 // caddy's default localhost:2019 and the next register/deregister can't
 // reach the container's admin API from the host. Discovered by smoke test.
 func TestBuildPreservesAdminBinding(t *testing.T) {
-	got := Build(&state.State{SchemaVersion: 1, Backends: map[string]state.Backend{}}, nil)
+	got := Build(&state.State{SchemaVersion: 1, Backends: map[string]state.Backend{}})
 	var doc struct {
 		Admin struct {
 			Listen string `json:"listen"`
@@ -53,7 +56,7 @@ func TestBuildConfigTwoBackendsSortedByDomain(t *testing.T) {
 			"api": {Domain: "api.test", Upstream: "127.0.0.1:4000"},
 		},
 	}
-	got := Build(s, nil)
+	got := Build(s)
 	assertJSONMatchesGolden(t, got, "two_backends.json")
 }
 
@@ -65,7 +68,7 @@ func TestBuildConfigOverrideExactBeatsWildcard(t *testing.T) {
 			"bar.foo": {Domain: "bar.foo.test", Upstream: "127.0.0.1:3000"},
 		},
 	}
-	got := Build(s, nil)
+	got := Build(s)
 	assertJSONMatchesGolden(t, got, "override.json")
 }
 
@@ -81,7 +84,7 @@ func TestBuildOrdersExactRoutesBeforeWildcards(t *testing.T) {
 			"bar.foo": {Domain: "bar.foo.test", Upstream: "127.0.0.1:3000"},
 		},
 	}
-	got := Build(s, nil)
+	got := Build(s)
 
 	var doc struct {
 		Apps struct {
@@ -126,7 +129,7 @@ func TestBuildConfigContainerUpstream(t *testing.T) {
 			"app": {Domain: "app.test", Upstream: "app:3000"},
 		},
 	}
-	got := Build(s, nil)
+	got := Build(s)
 	assertJSONMatchesGolden(t, got, "one_container_backend.json")
 }
 
@@ -158,7 +161,7 @@ func TestBuildWithNoCertsIsUnchanged(t *testing.T) {
 		},
 		Certs: map[string]state.Cert{},
 	}
-	got := Build(s, nil)
+	got := Build(s)
 
 	var cfg map[string]any
 	if err := json.Unmarshal(got, &cfg); err != nil {
@@ -184,7 +187,7 @@ func TestBuildLoadsCertPEMAndExcludesItsSubjects(t *testing.T) {
 		CertPEM:  "-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----\n",
 		KeyPEM:   "-----BEGIN EC PRIVATE KEY-----\nKEY\n-----END EC PRIVATE KEY-----\n",
 	}}
-	got := Build(s, certs)
+	got := BuildWith(s, Options{Certs: certs})
 
 	var cfg map[string]any
 	if err := json.Unmarshal(got, &cfg); err != nil {
@@ -237,7 +240,7 @@ func TestBuildKeepsRoutesForCertCoveredDomains(t *testing.T) {
 		Subjects: []string{"alpha.arrix.dev", "*.alpha.arrix.dev"},
 		CertPEM:  "cert", KeyPEM: "key",
 	}}
-	got := Build(s, certs)
+	got := BuildWith(s, Options{Certs: certs})
 
 	var cfg map[string]any
 	if err := json.Unmarshal(got, &cfg); err != nil {
@@ -261,7 +264,7 @@ func TestBuildOmitsAutomationPolicyWhenEveryDomainHasACert(t *testing.T) {
 		Subjects: []string{"alpha.arrix.dev", "*.alpha.arrix.dev"},
 		CertPEM:  "cert", KeyPEM: "key",
 	}}
-	got := Build(s, certs)
+	got := BuildWith(s, Options{Certs: certs})
 
 	var cfg map[string]any
 	if err := json.Unmarshal(got, &cfg); err != nil {
@@ -273,6 +276,85 @@ func TestBuildOmitsAutomationPolicyWhenEveryDomainHasACert(t *testing.T) {
 		policies := automation.(map[string]any)["policies"]
 		if policies != nil && len(policies.([]any)) != 0 {
 			t.Errorf("a policy with no subjects would make Caddy manage every hostname; got %v", policies)
+		}
+	}
+}
+
+var testRelay = &HostRelay{
+	Host:       "host.docker.internal",
+	Dial:       "unix//run/caddy_shack/relay.sock",
+	PortHeader: "X-Caddy-Shack-Port",
+}
+
+func TestBuildWithZeroOptionsIsBuild(t *testing.T) {
+	s := &state.State{
+		SchemaVersion: 1,
+		Backends: map[string]state.Backend{
+			"web":  {Domain: "web.test", Upstream: "host.docker.internal:3000"},
+			"app":  {Domain: "app.test", Upstream: "app:80"},
+			"bare": {Domain: "bare.test", Upstream: "127.0.0.1:4000"},
+		},
+	}
+	if string(BuildWith(s, Options{})) != string(Build(s)) {
+		t.Error("BuildWith(s, Options{}) must be byte-identical to Build(s)")
+	}
+	if strings.Contains(string(Build(s)), `"headers"`) {
+		t.Error("Build must not emit a headers block")
+	}
+}
+
+func TestBuildWithHostRelayReroutesOnlyHostMode(t *testing.T) {
+	s := &state.State{
+		SchemaVersion: 1,
+		Backends: map[string]state.Backend{
+			"web": {Domain: "web.test", Upstream: "host.docker.internal:3000"},
+			"app": {Domain: "app.test", Upstream: "app:80"},
+		},
+	}
+	got := BuildWith(s, Options{HostRelay: testRelay})
+	var doc struct {
+		Apps struct {
+			HTTP struct {
+				Servers map[string]struct {
+					Routes []struct {
+						Match  []struct{ Host []string }
+						Handle []struct {
+							Upstreams []struct{ Dial string }
+							Headers   *struct {
+								Request struct {
+									Set map[string][]string
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	routes := doc.Apps.HTTP.Servers["srv0"].Routes
+	if len(routes) != 4 {
+		t.Fatalf("routes: got %d want 4", len(routes))
+	}
+	for _, r := range routes {
+		host := r.Match[0].Host[0]
+		h := r.Handle[0]
+		switch host {
+		case "web.test", "*.web.test":
+			if h.Upstreams[0].Dial != testRelay.Dial {
+				t.Errorf("%s dial: %q", host, h.Upstreams[0].Dial)
+			}
+			if h.Headers == nil || strings.Join(h.Headers.Request.Set["X-Caddy-Shack-Port"], ",") != "3000" {
+				t.Errorf("%s: missing port header: %+v", host, h.Headers)
+			}
+		case "app.test", "*.app.test":
+			if h.Upstreams[0].Dial != "app:80" || h.Headers != nil {
+				t.Errorf("%s: container-mode route changed: %+v", host, h)
+			}
+		default:
+			t.Errorf("unexpected route %s", host)
 		}
 	}
 }
@@ -333,7 +415,7 @@ func TestBuildParentWildcardCoversSubdomainButNotItsOwnWildcard(t *testing.T) {
 		Subjects: []string{"alpha.arrix.dev", "*.alpha.arrix.dev"},
 		CertPEM:  "cert", KeyPEM: "key",
 	}}
-	got := Build(s, certs)
+	got := BuildWith(s, Options{Certs: certs})
 
 	subjects := internalPolicySubjects(t, got)
 
@@ -366,7 +448,7 @@ func TestBuildParentWildcardDoesNotCoverTwoLevelsDown(t *testing.T) {
 		Subjects: []string{"alpha.arrix.dev", "*.alpha.arrix.dev"},
 		CertPEM:  "cert", KeyPEM: "key",
 	}}
-	got := Build(s, certs)
+	got := BuildWith(s, Options{Certs: certs})
 
 	subjects := internalPolicySubjects(t, got)
 
@@ -375,5 +457,234 @@ func TestBuildParentWildcardDoesNotCoverTwoLevelsDown(t *testing.T) {
 	}
 	if !containsSubject(subjects, "hello.test") {
 		t.Errorf("internal policy lost the unrelated hello.test backend; got %v", subjects)
+	}
+}
+
+func lanState() *state.State {
+	return &state.State{
+		SchemaVersion: 2,
+		Backends: map[string]state.Backend{
+			"gamma": {Domain: "gamma.arrix.test", Upstream: "gamma:3000", LANDomain: "gamma.arrix.home.lan"},
+			"web":   {Domain: "web.test", Upstream: "host.docker.internal:4000"},
+		},
+		LAN: &state.LAN{Enabled: true, IP: "192.168.1.20", Mode: state.LANModeDiscovered, Suffix: "arrix.home.lan"},
+	}
+}
+
+func TestBuildLANEnabledGolden(t *testing.T) {
+	assertJSONMatchesGolden(t, Build(lanState()), "lan_enabled.json")
+}
+
+func TestBuildLANEnabledNoNamesGolden(t *testing.T) {
+	s := lanState()
+	g := s.Backends["gamma"]
+	g.LANDomain = ""
+	s.Backends["gamma"] = g
+	assertJSONMatchesGolden(t, Build(s), "lan_enabled_no_lan_names.json")
+}
+
+func TestBuildLANDisabledIgnoresLANDomain(t *testing.T) {
+	disabled := lanState()
+	disabled.LAN = &state.LAN{Enabled: false}
+
+	plain := lanState()
+	plain.LAN = nil
+	g := plain.Backends["gamma"]
+	g.LANDomain = ""
+	plain.Backends["gamma"] = g
+
+	for _, opts := range []Options{{}, {HostRelay: testRelay}} {
+		if string(BuildWith(disabled, opts)) != string(BuildWith(plain, opts)) {
+			t.Errorf("LAN disabled must render as if LANDomain were unset (opts %+v)", opts)
+		}
+	}
+}
+
+// lanDoc decodes just enough of a rendered config to inspect the LAN servers.
+type lanDoc struct {
+	Apps struct {
+		HTTP struct {
+			Servers map[string]struct {
+				Listen           []string `json:"listen"`
+				ListenerWrappers []struct {
+					Wrapper string `json:"wrapper"`
+				} `json:"listener_wrappers"`
+				Routes []struct {
+					Match []struct {
+						Host []string `json:"host"`
+					} `json:"match"`
+					Handle []struct {
+						Handler   string `json:"handler"`
+						Upstreams []struct {
+							Dial string `json:"dial"`
+						} `json:"upstreams"`
+					} `json:"handle"`
+				} `json:"routes"`
+				TLSConnectionPolicies []struct {
+					Match struct {
+						SNI []string `json:"sni"`
+					} `json:"match"`
+				} `json:"tls_connection_policies"`
+			} `json:"servers"`
+		} `json:"http"`
+	} `json:"apps"`
+}
+
+func decodeLAN(t *testing.T, got []byte) lanDoc {
+	t.Helper()
+	var doc lanDoc
+	if err := json.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, name := range []string{"srv-lan", "lan-http"} {
+		if _, ok := doc.Apps.HTTP.Servers[name]; !ok {
+			t.Fatalf("server %s missing", name)
+		}
+	}
+	return doc
+}
+
+func TestSrvLanNeverRoutesTestNames(t *testing.T) {
+	doc := decodeLAN(t, Build(lanState()))
+	for _, name := range []string{"srv-lan", "lan-http"} {
+		srv := doc.Apps.HTTP.Servers[name]
+		for _, r := range srv.Routes {
+			for _, m := range r.Match {
+				for _, h := range m.Host {
+					if h == "test" || strings.HasSuffix(h, ".test") {
+						t.Errorf("%s routes .test host %q", name, h)
+					}
+				}
+			}
+		}
+		for _, p := range srv.TLSConnectionPolicies {
+			for _, sni := range p.Match.SNI {
+				if strings.HasSuffix(sni, ".test") {
+					t.Errorf("%s TLS policy matches .test SNI %q", name, sni)
+				}
+			}
+		}
+	}
+}
+
+func TestListenerWrapperOrder(t *testing.T) {
+	doc := decodeLAN(t, Build(lanState()))
+	var got []string
+	for _, w := range doc.Apps.HTTP.Servers["srv-lan"].ListenerWrappers {
+		got = append(got, w.Wrapper)
+	}
+	if strings.Join(got, ",") != "proxy_protocol,tls" {
+		t.Errorf("srv-lan wrappers: got %v want [proxy_protocol tls]", got)
+	}
+}
+
+func TestBuildLANListenPorts(t *testing.T) {
+	doc := decodeLAN(t, Build(lanState()))
+	if got := doc.Apps.HTTP.Servers["srv-lan"].Listen; strings.Join(got, ",") != ":"+strconv.Itoa(LANHTTPSListenPort) {
+		t.Errorf("srv-lan listen: %v", got)
+	}
+	if got := doc.Apps.HTTP.Servers["lan-http"].Listen; strings.Join(got, ",") != ":"+strconv.Itoa(LANHTTPListenPort) {
+		t.Errorf("lan-http listen: %v", got)
+	}
+}
+
+// TestSrvLanUsesHostRelay pins that srv-lan routes share srv0's proxy
+// handler, so a host-mode backend exposed on the LAN is relayed on native
+// Linux exactly as it is on loopback.
+func TestSrvLanUsesHostRelay(t *testing.T) {
+	s := lanState()
+	w := s.Backends["web"]
+	w.LANDomain = "web.arrix.home.lan"
+	s.Backends["web"] = w
+	doc := decodeLAN(t, BuildWith(s, Options{HostRelay: testRelay}))
+	seen := false
+	for _, r := range doc.Apps.HTTP.Servers["srv-lan"].Routes {
+		if len(r.Match) == 0 {
+			continue
+		}
+		host := r.Match[0].Host[0]
+		if host == "web.arrix.home.lan" || host == "*.web.arrix.home.lan" {
+			seen = true
+			if d := r.Handle[0].Upstreams[0].Dial; d != testRelay.Dial {
+				t.Errorf("%s dial: got %q want relay", host, d)
+			}
+		}
+	}
+	if !seen {
+		t.Fatal("no srv-lan route for web.arrix.home.lan")
+	}
+}
+
+// The LAN forwarder carries TCP only, so the LAN servers must not advertise
+// HTTP/3 on a UDP port nobody publishes. srv0 keeps Caddy's defaults.
+func TestBuildLANServersDisableHTTP3(t *testing.T) {
+	var doc struct {
+		Apps struct {
+			HTTP struct {
+				Servers map[string]map[string]any `json:"servers"`
+			} `json:"http"`
+		} `json:"apps"`
+	}
+	if err := json.Unmarshal(Build(lanState()), &doc); err != nil {
+		t.Fatal(err)
+	}
+	servers := doc.Apps.HTTP.Servers
+	for name, want := range map[string][]any{"srv-lan": {"h1", "h2"}, "lan-http": {"h1"}} {
+		if got := servers[name]["protocols"]; !reflect.DeepEqual(got, want) {
+			t.Errorf("%s protocols = %v, want %v", name, got, want)
+		}
+	}
+	if _, ok := servers["srv0"]["protocols"]; ok {
+		t.Error("srv0 must not set protocols")
+	}
+}
+
+func TestBuildWithCertsKeepsLANServersIntact(t *testing.T) {
+	certs := []LoadedCert{{
+		Subjects: []string{"alpha.arrix.dev", "*.alpha.arrix.dev"},
+		CertPEM:  "CERT",
+		KeyPEM:   "KEY",
+	}}
+	plain := decodeLAN(t, Build(lanState()))
+	withCerts := decodeLAN(t, BuildWith(lanState(), Options{Certs: certs}))
+	if !reflect.DeepEqual(plain, withCerts) {
+		t.Errorf("loading a certificate for an unrelated domain changed the LAN servers\nwithout: %+v\nwith:    %+v", plain, withCerts)
+	}
+}
+
+func TestBuildWithheldLANNamesCoveredByCert(t *testing.T) {
+	certs := []LoadedCert{{
+		Subjects: []string{"arrix.home.lan", "*.arrix.home.lan"},
+		CertPEM:  "CERT",
+		KeyPEM:   "KEY",
+	}}
+	subjects := internalPolicySubjects(t, BuildWith(lanState(), Options{Certs: certs}))
+
+	if containsSubject(subjects, "gamma.arrix.home.lan") {
+		t.Errorf("a LAN name covered by a loaded wildcard must not go to the internal issuer; got %v", subjects)
+	}
+	if !containsSubject(subjects, "*.gamma.arrix.home.lan") {
+		t.Errorf("*.gamma.arrix.home.lan is two labels below the cert's wildcard and still needs the internal issuer; got %v", subjects)
+	}
+	if !containsSubject(subjects, "gamma.arrix.test") {
+		t.Errorf("internal policy lost the .test name; got %v", subjects)
+	}
+}
+
+func TestBuildOmitsPolicyWhenOnlyLANNamesAllCovered(t *testing.T) {
+	s := &state.State{
+		SchemaVersion: state.SchemaVersion,
+		Backends:      map[string]state.Backend{},
+		LAN:           &state.LAN{Enabled: true, IP: "192.168.1.20", Mode: state.LANModeDiscovered, Suffix: "arrix.dev"},
+	}
+	// An empty subjects list means "every hostname" to Caddy, so with every
+	// name covered there must be no internal policy at all.
+	s.Backends["gamma"] = state.Backend{Domain: "gamma.arrix.dev", Upstream: "gamma:3000", LANDomain: "lan.arrix.dev"}
+	certs := []LoadedCert{
+		{Subjects: []string{"gamma.arrix.dev", "*.gamma.arrix.dev"}, CertPEM: "A", KeyPEM: "A"},
+		{Subjects: []string{"lan.arrix.dev", "*.lan.arrix.dev"}, CertPEM: "B", KeyPEM: "B"},
+	}
+	if subjects := internalPolicySubjects(t, BuildWith(s, Options{Certs: certs})); len(subjects) != 0 {
+		t.Errorf("every name is covered, so no internal policy should exist; got %v", subjects)
 	}
 }

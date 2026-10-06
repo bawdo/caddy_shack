@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"net/http"
 	"testing"
 
 	"github.com/bawdo/caddy_shack/internal/docker"
@@ -8,18 +10,14 @@ import (
 
 func newNetFixtureApp(t *testing.T, fake *docker.Fake) *App {
 	t.Helper()
-	dir := t.TempDir()
-	return NewWithPaths(Paths{
-		StatePath: dir + "/state.json",
-		LockPath:  dir + "/state.json.lock",
-	}, nil, fake)
+	return newFixtureWith(t, http.StatusOK, fake).app
 }
 
 func TestInstallAttachesSharedNetwork(t *testing.T) {
 	fake := docker.NewFake() // container absent -> create path
 	a := newNetFixtureApp(t, fake)
 
-	if err := a.Install(); err != nil {
+	if err := a.Install(context.Background()); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 	if !fake.Networks[CaddyNetworkName] {
@@ -32,14 +30,14 @@ func TestInstallAttachesSharedNetwork(t *testing.T) {
 }
 
 func TestStartAttachesSharedNetwork(t *testing.T) {
-	fake := docker.NewFake()
-	fake.Containers[CaddyContainerName] = docker.StateStopped
-	a := newNetFixtureApp(t, fake)
+	f := newFixture(t, http.StatusOK)
+	d := f.app.docker.(*docker.Fake)
+	d.Containers[CaddyContainerName] = docker.StateStopped
 
-	if err := a.Start(); err != nil {
+	if err := f.app.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	attached, _ := fake.NetworkAttached(CaddyNetworkName, CaddyContainerName)
+	attached, _ := d.NetworkAttached(CaddyNetworkName, CaddyContainerName)
 	if !attached {
 		t.Errorf("caddy not attached to %q on start", CaddyNetworkName)
 	}

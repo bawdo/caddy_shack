@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 )
 
 // Severity is the verdict of one check.
@@ -142,16 +143,38 @@ func (a *App) Doctor(ctx context.Context, opts DoctorOptions) (DoctorReport, err
 func (a *App) buildCheckList(opts DoctorOptions) []func(context.Context) CheckResult {
 	sh := defaultShell
 	tty := defaultTTYShell
+	checkDNS := checkDNSDarwin
+	checkTrustStore := checkTrustStoreDarwin
+	if runtime.GOOS == "linux" {
+		checkDNS = checkDNSLinux
+		checkTrustStore = checkTrustStoreLinux
+	}
 	checks := []func(context.Context) CheckResult{
 		func(ctx context.Context) CheckResult { return checkDockerDaemon(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkDockerEngine(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkPortAvailability(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkContainerHealth(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkContainerConfig(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkSharedNetwork(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkHostGateway(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkDNS(ctx, a, sh, tty) },
+	}
+	if runtime.GOOS == "linux" {
+		// Host DNS, not engine: the resolved<->dnsmasq loop comes from the
+		// Linux .test setup, whatever engine is in use.
+		checks = append(checks, func(ctx context.Context) CheckResult { return checkDNSNegativeLinux(ctx, a, sh, tty) })
+	}
+	checks = append(checks,
 		func(ctx context.Context) CheckResult { return checkTrustStore(ctx, a, sh, tty) },
 		func(ctx context.Context) CheckResult { return checkStateIntegrity(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkConfigDrift(ctx, a) },
-	}
+		func(ctx context.Context) CheckResult { return checkLANIPPresent(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkLANForwarder(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkLANIPDrift(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkLANPath(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkLANDNS(ctx, a) },
+		func(ctx context.Context) CheckResult { return checkLANFirewall(ctx, a, sh, runtime.GOOS) },
+	)
 	if !opts.SkipBackends {
 		checks = append(checks, func(ctx context.Context) CheckResult { return checkBackends(ctx, a) })
 	} else {

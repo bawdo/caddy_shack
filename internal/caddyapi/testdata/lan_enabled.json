@@ -1,0 +1,246 @@
+{
+  "admin": {
+    "listen": "0.0.0.0:2019"
+  },
+  "apps": {
+    "http": {
+      "servers": {
+        "lan-http": {
+          "listen": [
+            ":8080"
+          ],
+          "listener_wrappers": [
+            {
+              "wrapper": "proxy_protocol",
+              "fallback_policy": "require"
+            }
+          ],
+          "protocols": [
+            "h1"
+          ],
+          "routes": [
+            {
+              "match": [
+                {
+                  "host": [
+                    "gamma.arrix.home.lan",
+                    "*.gamma.arrix.home.lan"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "static_response",
+                  "status_code": 308,
+                  "headers": {
+                    "Location": [
+                      "https://{http.request.host}{http.request.uri}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "handle": [
+                {
+                  "handler": "static_response",
+                  "status_code": 404
+                }
+              ]
+            }
+          ],
+          "automatic_https": {
+            "disable": true
+          }
+        },
+        "srv-lan": {
+          "listen": [
+            ":8443"
+          ],
+          "listener_wrappers": [
+            {
+              "wrapper": "proxy_protocol",
+              "fallback_policy": "require"
+            },
+            {
+              "wrapper": "tls"
+            }
+          ],
+          "protocols": [
+            "h1",
+            "h2"
+          ],
+          "routes": [
+            {
+              "match": [
+                {
+                  "host": [
+                    "gamma.arrix.home.lan"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "gamma:3000"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "*.gamma.arrix.home.lan"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "gamma:3000"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "handle": [
+                {
+                  "handler": "static_response",
+                  "abort": true
+                }
+              ]
+            }
+          ],
+          "tls_connection_policies": [
+            {
+              "match": {
+                "sni": [
+                  "gamma.arrix.home.lan",
+                  "*.gamma.arrix.home.lan"
+                ]
+              }
+            }
+          ],
+          "strict_sni_host": true,
+          "automatic_https": {
+            "disable_redirects": true
+          }
+        },
+        "srv0": {
+          "listen": [
+            ":443"
+          ],
+          "routes": [
+            {
+              "match": [
+                {
+                  "host": [
+                    "gamma.arrix.test"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "gamma:3000"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "web.test"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "host.docker.internal:4000"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "*.gamma.arrix.test"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "gamma:3000"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "*.web.test"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "host.docker.internal:4000"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "automatic_https": {
+            "disable_redirects": false
+          }
+        }
+      }
+    },
+    "tls": {
+      "automation": {
+        "policies": [
+          {
+            "subjects": [
+              "*.gamma.arrix.home.lan",
+              "*.gamma.arrix.test",
+              "*.web.test",
+              "gamma.arrix.home.lan",
+              "gamma.arrix.test",
+              "web.test"
+            ],
+            "issuers": [
+              {
+                "module": "internal"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
