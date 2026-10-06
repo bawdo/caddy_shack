@@ -375,6 +375,7 @@ Stable contract, documented under `caddy_shack --help`:
 7  state file corrupt
 8  state lock held by another caddy_shack process
 9  status only: Caddy is up but its live config does not match the registry
+10 LAN mode not enabled (lan commands, or register with --lan / --lan-domain)
 ```
 
 ### Quick smoke test
@@ -413,9 +414,9 @@ Doctor exits 1 if any check FAILs (or, in `--fix` mode, if any fix fails).
 DNS and trust-store fixes use `sudo`; you'll be prompted for your password
 unless `sudo` is already cached.
 
-## LAN exposure (planned, not yet implemented)
+## LAN exposure
 
-A backend will optionally get a second, LAN-facing name (e.g.
+A backend can optionally get a second, LAN-facing name (e.g.
 `gamma.arrix.home.lan`) next to its `.test` name, so other devices on the
 local network can reach it. `.test` names stay reachable from this machine
 only.
@@ -459,6 +460,75 @@ only.
   backends.
 - On native Linux, Docker's published ports bypass ufw, so binding to the
   LAN IP exposes the ports whatever ufw says.
+
+### Setting it up
+
+One-time setup, on the machine running Caddy:
+
+```
+caddy_shack lan enable --suffix arrix.home.lan
+```
+
+This discovers the machine's LAN IPv4 address, starts the `caddy_shack_lan`
+forwarder bound to it on ports 443 and 80, and asks for confirmation first
+(`--yes` skips the prompt). `--suffix` is required the first time and is kept
+afterwards. Neither the suffix nor any LAN name may be `test` or end in
+`.test`. Pass `--ip 192.168.1.20` to pin the address instead of discovering
+it. A failed bind exits 1.
+
+Then, for each backend you want on the LAN:
+
+```
+caddy_shack register gamma --port 3000 --lan                         # gamma.arrix.home.lan
+caddy_shack register gamma --port 3000 --lan-domain gamma.example.lan  # explicit name
+```
+
+`--lan` and `--lan-domain` are mutually exclusive. Registering again without
+either flag removes the LAN name. Both flags exit 10 if LAN mode is not enabled.
+
+Two things are needed on the other devices:
+
+- DNS: point a wildcard A record for `*.arrix.home.lan` (your suffix) at the
+  LAN IP, on your router or local DNS server. Alternatively, add an A record
+  for each LAN name.
+- Trust: LAN devices must trust the local CA, since TLS terminates in the main
+  Caddy using the same CA as `.test`. Export it with `caddy_shack ca` (see
+  above).
+
+To stop exposing, run `caddy_shack lan disable`. Your settings are kept, and
+`.test` names are unaffected. It still completes while Caddy is stopped: the
+state is saved and the Caddy config is updated on the next start.
+
+### Restarts and IP changes
+
+How `restart` treats the LAN address depends on how you enabled it:
+
+- Discovered (no `--ip`): `restart` re-discovers the LAN IP and rebinds the
+  forwarder to it, so a change of network (say Ethernet to Wi-Fi) is picked up.
+- Pinned (`--ip`): `restart` never changes the IP. If it has gone away, LAN is
+  reported as down until it returns.
+
+LAN being down (the IP is missing or the forwarder cannot bind) is a notice,
+not an error: `start`, `restart`, `sync`, `install` and `upgrade` still exit 0
+and `.test` keeps working.
+
+### Status and doctor
+
+`caddy_shack status` gains a LAN section showing the mode, address and
+forwarder state. `caddy_shack doctor` adds `lan-ip-present`, `lan-forwarder`,
+`lan-ip-drift`, `lan-path`, `lan-dns` and `lan-firewall`.
+
+### Caveats
+
+- Client IP on Docker Desktop: backends see Docker Desktop's VM address
+  (observed as `192.168.65.1`) in `X-Forwarded-For`, not the LAN client's IP.
+  On native Linux the real client IP is expected to come through, but this is
+  not yet confirmed.
+- ufw on native Linux: Docker's published ports bypass ufw, so a firewall rule
+  will not stop LAN access to the forwarder's ports.
+- State schema: LAN support moves `state.json` to schema 2. Older `caddy_shack`
+  binaries cannot read it and report it as corrupt (exit 7), so upgrade every
+  copy you use.
 
 ## Development
 
