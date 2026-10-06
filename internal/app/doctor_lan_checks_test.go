@@ -11,12 +11,15 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -229,7 +232,7 @@ func TestCheckLANPathPass(t *testing.T) {
 	a := lanPathApp(t, pathBackends)
 	seen := stubDial(t, func(_ string, cfg *tls.Config) error {
 		if strings.HasSuffix(cfg.ServerName, ".test") {
-			return errors.New("tls: handshake failure")
+			return tlsAlert()
 		}
 		if cfg.RootCAs == nil {
 			t.Error("positive dial has no RootCAs")
@@ -271,7 +274,7 @@ func TestCheckLANPathFailsWhenTestNameServed(t *testing.T) {
 func TestCheckLANPathSkipsHalves(t *testing.T) {
 	// No LAN names: positive half skips, negative half still runs.
 	a := lanPathApp(t, map[string]state.Backend{"a": {Domain: "a.test", Upstream: "x:1"}})
-	seen := stubDial(t, func(string, *tls.Config) error { return errors.New("refused") })
+	seen := stubDial(t, func(string, *tls.Config) error { return tlsAlert() })
 	r := checkLANPath(context.Background(), a)
 	if r.Status != SeverityPass || len(*seen) != 1 {
 		t.Errorf("no names: got %+v dials=%v", r, *seen)
@@ -282,6 +285,70 @@ func TestCheckLANPathSkipsHalves(t *testing.T) {
 	r = checkLANPath(context.Background(), a)
 	if r.Status != SeveritySkip || len(*seen) != 0 {
 		t.Errorf("no backends: got %+v dials=%v", r, *seen)
+	}
+}
+
+// tlsAlert is the error a TLS client sees when the server refuses the
+// handshake with an alert.
+func tlsAlert() error {
+	return &net.OpError{Op: "remote error", Err: errors.New("tls: internal error")}
+}
+
+// A probe that cannot reach the listener, or a handshake that ends without
+// an alert, says nothing about .test isolation: WARN, not PASS.
+func TestCheckLANPathWarnsWhenNegativeProbeInconclusive(t *testing.T) {
+	for _, probeErr := range []error{
+		&net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED},
+		io.EOF,
+	} {
+		a := lanPathApp(t, pathBackends)
+		stubDial(t, func(_ string, cfg *tls.Config) error {
+			if strings.HasSuffix(cfg.ServerName, ".test") {
+				return probeErr
+			}
+			return nil
+		})
+		r := checkLANPath(context.Background(), a)
+		detail := strings.Join(r.Detail, "\n")
+		if r.Status != SeverityWarn || !strings.Contains(r.Summary+detail, "could not probe 192.168.1.12:443") {
+			t.Errorf("%v: want warn naming the address, got %+v", probeErr, r)
+		}
+	}
+}
+
+// A failed positive half stands even when the negative probe cannot connect.
+func TestCheckLANPathFailStandsOverInconclusiveProbe(t *testing.T) {
+	a := lanPathApp(t, pathBackends)
+	stubDial(t, func(string, *tls.Config) error {
+		return &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	})
+	if r := checkLANPath(context.Background(), a); r.Status != SeverityFail {
+		t.Errorf("want fail, got %+v", r)
+	}
+}
+
+// The real dialler: a closed port is a dial error, a server that rejects
+// the handshake is a TLS alert.
+func TestLANTLSDialClassifiesErrors(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := ln.Addr().String()
+	_ = ln.Close()
+	cfg := &tls.Config{ServerName: "a.test", InsecureSkipVerify: true, MinVersion: tls.VersionTLS12} //nolint:gosec // test probe
+	if err := lanTLSDial(context.Background(), closed, cfg); err == nil || isTLSAlert(err) {
+		t.Errorf("closed port: got %v", err)
+	}
+
+	srv := httptest.NewUnstartedServer(http.NotFoundHandler())
+	srv.TLS = &tls.Config{GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+		return nil, errors.New("no certificate for this name")
+	}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	defer srv.Close()
+	if err := lanTLSDial(context.Background(), srv.Listener.Addr().String(), cfg); !isTLSAlert(err) {
+		t.Errorf("rejecting server: want TLS alert, got %v", err)
 	}
 }
 

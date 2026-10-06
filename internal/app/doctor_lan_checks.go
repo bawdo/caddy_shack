@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -19,18 +20,29 @@ import (
 
 const lanProbeTimeout = 3 * time.Second
 
-// lanTLSDial completes a TLS handshake against addr with cfg and closes the
-// connection. A nil return means the handshake completed. A variable so
-// tests can stub it.
+// lanTLSDial connects over TCP, then completes a TLS handshake against addr
+// with cfg and closes the connection. A nil return means the handshake
+// completed. A TCP failure comes back as the dial's *net.OpError (Op
+// "dial"); a server refusing the handshake as a TLS alert (see
+// isTLSAlert). A variable so tests can stub it.
 var lanTLSDial = func(ctx context.Context, addr string, cfg *tls.Config) error {
 	ctx, cancel := context.WithTimeout(ctx, lanProbeTimeout)
 	defer cancel()
-	d := tls.Dialer{NetDialer: &net.Dialer{Timeout: lanProbeTimeout}, Config: cfg}
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	raw, err := (&net.Dialer{Timeout: lanProbeTimeout}).DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}
-	return conn.Close()
+	conn := tls.Client(raw, cfg)
+	defer func() { _ = conn.Close() }()
+	return conn.HandshakeContext(ctx)
+}
+
+// isTLSAlert reports whether err is the server refusing the handshake with
+// a TLS alert ("remote error: tls: ..."), as opposed to a failed dial, a
+// reset, a timeout or an EOF.
+func isTLSAlert(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "remote error"
 }
 
 // lanLookupHost resolves a name through the system resolver. A variable so
@@ -186,7 +198,7 @@ func checkLANPath(ctx context.Context, a *App) CheckResult {
 		return CheckResult{Name: name, Status: SeveritySkip, Summary: "no backends registered"}
 	}
 	addr := net.JoinHostPort(s.LAN.IP, strconv.Itoa(a.inst.LANHTTPSPort))
-	var failures, passes []string
+	var failures, warnings, passes []string
 
 	if len(names) > 0 {
 		pemStr, err := a.ExportCA(ctx, true)
@@ -208,14 +220,22 @@ func checkLANPath(ctx context.Context, a *App) CheckResult {
 		// Verification is off on purpose: any completed handshake means
 		// the LAN listener answers for a .test name.
 		cfg := &tls.Config{ServerName: tests[0], InsecureSkipVerify: true, MinVersion: tls.VersionTLS12} //nolint:gosec // probing for a handshake, not trust
-		if err := lanTLSDial(ctx, addr, cfg); err == nil {
+		// Only a TLS alert counts as a refusal: a failed dial or a dropped
+		// connection says nothing about how .test names are handled.
+		switch err := lanTLSDial(ctx, addr, cfg); {
+		case err == nil:
 			failures = append(failures, fmt.Sprintf("%s completed a handshake for %s: the LAN listener must refuse .test names", addr, tests[0]))
-		} else {
+		case isTLSAlert(err):
 			passes = append(passes, tests[0]+" is refused")
+		default:
+			warnings = append(warnings, fmt.Sprintf("could not probe %s: %v", addr, err))
 		}
 	}
 	if len(failures) > 0 {
-		return CheckResult{Name: name, Status: SeverityFail, Summary: "LAN listener check failed", Detail: failures}
+		return CheckResult{Name: name, Status: SeverityFail, Summary: "LAN listener check failed", Detail: append(failures, warnings...)}
+	}
+	if len(warnings) > 0 {
+		return CheckResult{Name: name, Status: SeverityWarn, Summary: warnings[0], Detail: passes}
 	}
 	return CheckResult{Name: name, Status: SeverityPass, Summary: strings.Join(passes, "; ")}
 }
