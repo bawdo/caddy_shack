@@ -123,7 +123,9 @@ func (a *App) ensureLAN(s *state.State) error {
 		}
 		if len(specDrift(spec, info)) == 0 {
 			if st == docker.StateStopped {
-				return a.docker.Start(name)
+				if err := a.docker.Start(name); err != nil {
+					return a.lanStartError(s.LAN.IP, err)
+				}
 			}
 			return nil
 		}
@@ -140,8 +142,19 @@ func (a *App) ensureLAN(s *state.State) error {
 
 var addrInUse = regexp.MustCompile(`(?i)address already in use|port is already allocated`)
 
-// lanStartError turns Docker's bind failure into a message naming the
-// address and port.
+// lanStartFailure is the forwarder failing to be created or started, most
+// often because another process holds the LAN address and port. lan enable
+// reports it as an error; start, sync and friends turn it into a notice.
+type lanStartFailure struct {
+	msg string
+	err error
+}
+
+func (e *lanStartFailure) Error() string { return e.msg + ": " + e.err.Error() }
+func (e *lanStartFailure) Unwrap() error { return e.err }
+
+// lanStartError turns Docker's create or start failure into a
+// lanStartFailure naming the address and port.
 func (a *App) lanStartError(ip string, err error) error {
 	if addrInUse.MatchString(err.Error()) {
 		port := a.inst.LANHTTPSPort
@@ -151,9 +164,12 @@ func (a *App) lanStartError(ip string, err error) error {
 				break
 			}
 		}
-		return fmt.Errorf("%s:%d is already in use by another process: %w", ip, port, err)
+		return &lanStartFailure{msg: fmt.Sprintf("%s:%d is already in use by another process", ip, port), err: err}
 	}
-	return fmt.Errorf("start LAN forwarder: %w", err)
+	return &lanStartFailure{
+		msg: fmt.Sprintf("could not start the LAN forwarder on %s:%d and %s:%d", ip, a.inst.LANHTTPSPort, ip, a.inst.LANHTTPPort),
+		err: err,
+	}
 }
 
 // stopLAN stops the forwarder if it is running. Safe when absent.
@@ -187,9 +203,15 @@ type lanDownError struct{ IP string }
 func (e *lanDownError) Error() string { return fmt.Sprintf("%s: %s", e.IP, ErrLANDown) }
 func (e *lanDownError) Unwrap() error { return ErrLANDown }
 
-// noteLANDown turns ErrLANDown into a notice (nil) and passes anything else
-// through, so start, sync and friends carry on without the forwarder.
+// noteLANDown turns ErrLANDown and a forwarder that could not be created or
+// started into a notice (nil), and passes anything else through, so start,
+// sync and friends carry on without the forwarder.
 func (a *App) noteLANDown(err error) error {
+	var startFail *lanStartFailure
+	if errors.As(err, &startFail) {
+		a.notef("notice: LAN access is off: %v. Run 'caddy_shack doctor' for details.\n", startFail)
+		return nil
+	}
 	if !errors.Is(err, ErrLANDown) {
 		return err
 	}
@@ -205,7 +227,8 @@ func (a *App) noteLANDown(err error) error {
 
 // ensureLANFromState brings the forwarder in line with the saved LAN
 // settings, for use after Caddy's config is in place. With no LAN settings
-// at all Docker is not touched. LAN down is a notice, not an error.
+// at all Docker is not touched. LAN down, or a forwarder that cannot bind,
+// is a notice, not an error.
 func (a *App) ensureLANFromState() error {
 	s, err := loadState(a.paths.StatePath)
 	if err != nil {

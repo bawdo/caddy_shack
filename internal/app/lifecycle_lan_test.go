@@ -344,3 +344,35 @@ func TestRestartSkipsRediscoveryWithoutDiscoveredLAN(t *testing.T) {
 		t.Errorf("caddy left %v after restart", d.Containers[CaddyContainerName])
 	}
 }
+
+func TestStartForwarderBindFailureIsNotice(t *testing.T) {
+	f := lanFixture(t, discovered("192.168.1.12"))
+	saveLAN(t, f, "192.168.1.12", state.LANModePinned)
+	d := f.app.docker.(*docker.Fake)
+	d.CreateErrs = map[string]error{LANContainerName: errors.New("Bind for 192.168.1.12:443 failed: port is already allocated")}
+	buf := notices(f)
+	if err := f.app.Start(context.Background()); err != nil {
+		t.Fatalf("forwarder bind failure must not fail start: %v", err)
+	}
+	for _, want := range []string{"192.168.1.12:443 is already in use", "caddy_shack doctor"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("notice missing %q: %q", want, buf.String())
+		}
+	}
+}
+
+func TestStartForwarderStartFailureIsNotice(t *testing.T) {
+	f := lanFixture(t, discovered("192.168.1.12"))
+	saveLAN(t, f, "192.168.1.12", state.LANModePinned)
+	d := f.app.docker.(*docker.Fake)
+	d.CreateErrs = map[string]error{LANContainerName: errors.New("driver failed programming external connectivity")}
+	buf := notices(f)
+	if err := f.app.Start(context.Background()); err != nil {
+		t.Fatalf("forwarder start failure must not fail start: %v", err)
+	}
+	for _, want := range []string{"192.168.1.12:443", "192.168.1.12:80", "driver failed", "caddy_shack doctor"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("notice missing %q: %q", want, buf.String())
+		}
+	}
+}

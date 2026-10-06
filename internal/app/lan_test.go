@@ -427,3 +427,16 @@ func TestLANDisableCaddyDown(t *testing.T) {
 		t.Error("LANDomain touched")
 	}
 }
+
+func TestLANEnableForwarderBindFailureFails(t *testing.T) {
+	f := lanFixture(t, discovered("192.168.1.12"))
+	d := f.app.docker.(*docker.Fake)
+	d.CreateErrs = map[string]error{LANContainerName: errors.New("Bind for 192.168.1.12:443 failed: port is already allocated")}
+	_, err := f.app.LANEnable(context.Background(), LANEnableInput{Suffix: "lan"})
+	if err == nil || ExitCode(err) != 1 {
+		t.Fatalf("want exit 1, got %v (exit %d)", err, ExitCode(err))
+	}
+	if !strings.Contains(err.Error(), "192.168.1.12:443 is already in use") {
+		t.Errorf("error: %v", err)
+	}
+}
