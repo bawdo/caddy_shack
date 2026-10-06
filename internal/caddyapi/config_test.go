@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -383,5 +384,29 @@ func TestSrvLanUsesHostRelay(t *testing.T) {
 	}
 	if !seen {
 		t.Fatal("no srv-lan route for web.arrix.home.lan")
+	}
+}
+
+// The LAN forwarder carries TCP only, so the LAN servers must not advertise
+// HTTP/3 on a UDP port nobody publishes. srv0 keeps Caddy's defaults.
+func TestBuildLANServersDisableHTTP3(t *testing.T) {
+	var doc struct {
+		Apps struct {
+			HTTP struct {
+				Servers map[string]map[string]any `json:"servers"`
+			} `json:"http"`
+		} `json:"apps"`
+	}
+	if err := json.Unmarshal(Build(lanState()), &doc); err != nil {
+		t.Fatal(err)
+	}
+	servers := doc.Apps.HTTP.Servers
+	for name, want := range map[string][]any{"srv-lan": {"h1", "h2"}, "lan-http": {"h1"}} {
+		if got := servers[name]["protocols"]; !reflect.DeepEqual(got, want) {
+			t.Errorf("%s protocols = %v, want %v", name, got, want)
+		}
+	}
+	if _, ok := servers["srv0"]["protocols"]; ok {
+		t.Error("srv0 must not set protocols")
 	}
 }

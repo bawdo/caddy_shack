@@ -100,6 +100,7 @@ func BuildWith(s *state.State, opts Options) []byte {
 	type server struct {
 		Listen                []string           `json:"listen"`
 		ListenerWrappers      []listenerWrapper  `json:"listener_wrappers,omitempty"`
+		Protocols             []string           `json:"protocols,omitempty"`
 		Routes                []route            `json:"routes"`
 		TLSConnectionPolicies []connectionPolicy `json:"tls_connection_policies,omitempty"`
 		StrictSNIHost         bool               `json:"strict_sni_host,omitempty"`
@@ -236,6 +237,10 @@ func BuildWith(s *state.State, opts Options) []byte {
 		// (no LAN SNI with a .test Host header) and a terminal abort route.
 		// The PROXY header precedes the TLS handshake, so proxy_protocol
 		// must wrap before tls.
+		//
+		// Protocols is set only on the LAN servers: the forwarder carries
+		// TCP alone, so they must not advertise HTTP/3 on a UDP port nobody
+		// publishes. srv0 omits it and keeps Caddy's defaults.
 		proxyProtocol := listenerWrapper{Wrapper: "proxy_protocol", FallbackPolicy: "require"}
 		lanRoutes := append(hostRoutes(lanNames, byLANName), route{
 			Handle: []any{staticResponse{Handler: "static_response", Abort: true}},
@@ -243,6 +248,7 @@ func BuildWith(s *state.State, opts Options) []byte {
 		servers["srv-lan"] = server{
 			Listen:                []string{":" + strconv.Itoa(LANHTTPSListenPort)},
 			ListenerWrappers:      []listenerWrapper{proxyProtocol, {Wrapper: "tls"}},
+			Protocols:             []string{"h1", "h2"},
 			Routes:                lanRoutes,
 			TLSConnectionPolicies: []connectionPolicy{{Match: sniMatch{SNI: sni}}},
 			StrictSNIHost:         true,
@@ -269,6 +275,7 @@ func BuildWith(s *state.State, opts Options) []byte {
 		servers["lan-http"] = server{
 			Listen:           []string{":" + strconv.Itoa(LANHTTPListenPort)},
 			ListenerWrappers: []listenerWrapper{proxyProtocol},
+			Protocols:        []string{"h1"},
 			Routes:           httpRoutes,
 			AutomaticHTTPS:   automaticHTTPS{Disable: true},
 		}

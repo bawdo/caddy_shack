@@ -15,6 +15,9 @@
               "fallback_policy": "require"
             }
           ],
+          "protocols": [
+            "h1"
+          ],
           "routes": [
             {
               "match": [
@@ -62,6 +65,10 @@
             {
               "wrapper": "tls"
             }
+          ],
+          "protocols": [
+            "h1",
+            "h2"
           ],
           "routes": [
             {
