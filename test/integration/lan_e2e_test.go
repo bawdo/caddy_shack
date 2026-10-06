@@ -8,13 +8,13 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -222,17 +222,33 @@ func (f *lanFixture) testServes(t *testing.T, host string) {
 	}
 }
 
-// lanHandshake runs a bare TLS handshake against the LAN HTTPS port.
-func (f *lanFixture) lanHandshake(ip, sni string) (*tls.ConnectionState, error) {
-	d := &net.Dialer{Timeout: 5 * time.Second}
-	conn, err := tls.DialWithDialer(d, "tcp", net.JoinHostPort(ip, strconv.Itoa(f.inst.LANHTTPSPort)),
-		&tls.Config{ServerName: sni, InsecureSkipVerify: true})
+// lanHandshake dials the LAN HTTPS port, failing the test if the TCP
+// connection itself fails, then runs a TLS handshake with the given SNI and
+// returns its outcome. Separating the dial means a handshake error can only
+// come from TLS, never from a refused or timed out connection.
+func (f *lanFixture) lanHandshake(t *testing.T, ip, sni string) (*tls.ConnectionState, error) {
+	t.Helper()
+	addr := net.JoinHostPort(ip, strconv.Itoa(f.inst.LANHTTPSPort))
+	raw, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
+		t.Fatalf("dial %s: %v", addr, err)
+	}
+	defer func() { _ = raw.Close() }()
+	_ = raw.SetDeadline(time.Now().Add(5 * time.Second))
+	conn := tls.Client(raw, &tls.Config{ServerName: sni, InsecureSkipVerify: true})
+	if err := conn.Handshake(); err != nil {
 		return nil, err
 	}
-	defer func() { _ = conn.Close() }()
 	cs := conn.ConnectionState()
 	return &cs, nil
+}
+
+// isTLSAlert reports whether err is the server refusing the handshake with
+// a TLS alert ("remote error: tls: ..."), as opposed to a reset, a timeout
+// or an EOF.
+func isTLSAlert(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "remote error"
 }
 
 // refusesConnections polls until nothing accepts TCP on ip:port.
@@ -296,11 +312,16 @@ func TestLANWildcardSubdomain(t *testing.T) {
 
 // TestLANRefusesTestSNI: the LAN listener must not complete a handshake for
 // a .test name. Per Ruling R2 this is not weakened if Caddy adds a catch-all
-// connection policy: the failure is reported as a product bug.
+// connection policy: the failure is reported as a product bug. A LAN SNI
+// handshake on the same port first proves the listener is up, and each
+// refusal must be a TLS alert, not a connection failure.
 func TestLANRefusesTestSNI(t *testing.T) {
 	f := setupLAN(t, lanOptions{})
+	if _, err := f.lanHandshake(t, f.ip, "gamma."+lanSuffix); err != nil {
+		t.Fatalf("control: SNI gamma.%s handshake failed: %v", lanSuffix, err)
+	}
 	for _, sni := range []string{"gamma.test", "bar.gamma.test"} {
-		cs, err := f.lanHandshake(f.ip, sni)
+		cs, err := f.lanHandshake(t, f.ip, sni)
 		if err == nil {
 			var subj []string
 			if len(cs.PeerCertificates) > 0 {
@@ -317,22 +338,33 @@ func TestLANRefusesTestSNI(t *testing.T) {
 			t.Errorf("SNI %s: handshake completed on the LAN port (cert DNS names %v); request got %s", sni, subj, got)
 			continue
 		}
-		t.Logf("SNI %s refused: %v", sni, err)
+		if !isTLSAlert(err) {
+			t.Errorf("SNI %s: handshake failed, but not with a TLS alert: %v", sni, err)
+			continue
+		}
+		t.Logf("SNI %s refused with a TLS alert: %v", sni, err)
 	}
 }
 
+// TestLANRefusesTestHost: a LAN SNI with a .test Host header gets Caddy's
+// strict_sni_host answer (421), never gamma's backend. setupLAN has just
+// proved this SNI handshakes, so a transport error is a failure, not a
+// rejection.
 func TestLANRefusesTestHost(t *testing.T) {
 	f := setupLAN(t, lanOptions{})
 	client := lanClient(f.ip, f.inst.LANHTTPSPort, "gamma."+lanSuffix, nil)
 	resp, err := client.Get("https://gamma.test/")
 	if err != nil {
-		t.Logf("Host gamma.test with a LAN SNI: request failed (rejected): %v", err)
-		return
+		t.Fatalf("Host gamma.test with SNI gamma.%s: transport error, want a 421 response: %v", lanSuffix, err)
 	}
 	b, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode == http.StatusOK {
-		t.Fatalf("Host gamma.test with SNI gamma.%s was served: %d %s", lanSuffix, resp.StatusCode, b)
+	if resp.StatusCode != http.StatusMisdirectedRequest {
+		t.Errorf("Host gamma.test with SNI gamma.%s: %d, want 421: %s", lanSuffix, resp.StatusCode, b)
+	}
+	var er echoReply
+	if json.Unmarshal(b, &er) == nil && er.Host != "" {
+		t.Errorf("Host gamma.test with SNI gamma.%s reached the echo backend: %s", lanSuffix, b)
 	}
 	t.Logf("Host gamma.test with a LAN SNI: %d", resp.StatusCode)
 }
@@ -428,30 +460,24 @@ func TestLANRebindOnRestart(t *testing.T) {
 	refusesConnections(t, "127.0.0.2", f.inst.LANHTTPSPort)
 }
 
-func TestLANClientIPSameHost(t *testing.T) {
+// TestLANClientIP checks the client address Caddy hands the backend for a
+// same-host dial to the LAN listener. On native Linux it proves Method check
+// 4: the PROXY v2 header carries the real client address, so the backend's
+// X-Forwarded-For equals the LAN IP the test dialled from. On Docker Desktop
+// the port forwarding replaces the client address before haproxy sees it,
+// which the spec accepts and documents, so the test logs the value and
+// skips.
+func TestLANClientIP(t *testing.T) {
 	f := setupLAN(t, lanOptions{})
 	name := "gamma." + lanSuffix
 	_, er := f.lanGet(t, f.ip, name, name, nil, 15*time.Second)
-	t.Logf("observed client IP: X-Forwarded-For=%q (forwarder bound to %s; backend RemoteAddr %s)", er.XFF, f.ip, er.RemoteAddr)
+	t.Logf("observed client IP: X-Forwarded-For=%q (dialled %s; backend RemoteAddr %s)", er.XFF, f.ip, er.RemoteAddr)
 
-	out, err := exec.Command("docker", "network", "inspect", f.inst.NetworkName,
-		"-f", "{{range .IPAM.Config}}{{.Subnet}} {{end}}").CombinedOutput()
-	if err != nil {
-		t.Fatalf("network inspect: %v: %s", err, out)
+	if runtime.GOOS != "linux" {
+		t.Skipf("Docker Desktop's port forwarding replaces the client address (observed %s); accepted and documented per the spec", er.XFF)
 	}
-	xff, err := netip.ParseAddr(strings.TrimSpace(strings.Split(er.XFF, ",")[0]))
-	if err != nil {
-		t.Fatalf("X-Forwarded-For %q is not an address: %v", er.XFF, err)
-	}
-	for _, sub := range strings.Fields(string(out)) {
-		p, err := netip.ParsePrefix(sub)
-		if err != nil {
-			continue
-		}
-		t.Logf("docker network %s subnet: %s", f.inst.NetworkName, p)
-		if p.Contains(xff) {
-			t.Errorf("client IP %s is inside the Docker network subnet %s: the PROXY header did not carry the host address", xff, p)
-		}
+	if er.XFF != f.ip {
+		t.Errorf("X-Forwarded-For = %q, want the dialling LAN IP %s", er.XFF, f.ip)
 	}
 }
 
