@@ -456,8 +456,9 @@ only.
 - Port 80 on the LAN only ever redirects to HTTPS.
 - TLS terminates once, in the main Caddy, using the same local CA as `.test`.
   LAN devices must trust that CA (see `caddy_shack ca`).
-- PROXY protocol v2 carries the real LAN client IP through to Caddy and the
-  backends.
+- PROXY protocol v2 carries the client address the forwarder sees through to
+  Caddy. Whether backends then see the real LAN client IP depends on the
+  Docker engine (see the client IP caveat below).
 - On native Linux, Docker's published ports bypass ufw, so binding to the
   LAN IP exposes the ports whatever ufw says.
 
