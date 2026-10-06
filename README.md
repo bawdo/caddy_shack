@@ -500,6 +500,59 @@ To stop exposing, run `caddy_shack lan disable`. Your settings are kept, and
 `.test` names are unaffected. It still completes while Caddy is stopped: the
 state is saved and the Caddy config is updated on the next start.
 
+### Several machines on one network
+
+Each machine runs its own caddy_shack bound to its own LAN IP, so give each
+one its own suffix. LAN names then never clash, and DNS needs one wildcard
+record per machine rather than one record per service.
+
+On a Mac at `10.0.0.10`:
+
+```
+caddy_shack lan enable --suffix mac.home.lan
+caddy_shack register gamma --port 3000 --lan     # gamma.mac.home.lan
+```
+
+On a Raspberry Pi at `10.0.0.20`:
+
+```
+caddy_shack lan enable --suffix pi.home.lan
+caddy_shack register gamma --port 3000 --lan     # gamma.pi.home.lan
+```
+
+Then add one wildcard A record per machine to your local DNS:
+
+```
+*.mac.home.lan   A   10.0.0.10
+*.pi.home.lan    A   10.0.0.20
+```
+
+A wildcard covers exactly one label, so `gamma.mac.home.lan` matches
+`*.mac.home.lan` but `gamma.arrix.mac.home.lan` would need its own
+`*.arrix.mac.home.lan` record. A plain `mac.home.lan` record for the machine
+itself can sit alongside the wildcard.
+
+`--lan` builds the LAN name from the backend's name, so a backend called
+`arrix-gamma-ecs` becomes `arrix-gamma-ecs.mac.home.lan`. To get a shorter
+name, pass it explicitly (re-registering is a full upsert, so repeat the
+backend's other settings):
+
+```
+caddy_shack register arrix-gamma-ecs --container arrix-gamma-alb-proxy --port 80 \
+  --domain gamma.lan.arrix.dev --lan-domain gamma.mac.home.lan
+```
+
+Points to keep in mind:
+
+- Changing the suffix later (`lan enable --suffix ...` again) does not rename
+  existing LAN names. Re-register each backend to move it to the new suffix.
+- Each machine has its own local CA. A device that trusts the Mac's CA will
+  still warn on `*.pi.home.lan` until it also trusts the Pi's, so run
+  `caddy_shack ca` on each machine and install both roots on your devices.
+- The backend receives the LAN name as the `Host` header. Apps that check it
+  (Rails `config.hosts`, a proxy matching on hostname) must allow the new
+  name, or they reply with an error such as 403.
+
 ### Restarts and IP changes
 
 How `restart` treats the LAN address depends on how you enabled it:
