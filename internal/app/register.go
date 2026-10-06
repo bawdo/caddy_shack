@@ -114,20 +114,23 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 	var lanDomain string
 	if in.LAN || in.LANDomain != "" {
 		if !s.LANEnabled() {
-			return fmt.Errorf("%w: run 'caddy_shack lan enable' first", ErrLANDisabled)
+			return fmt.Errorf("%w", ErrLANDisabled)
 		}
+		lanDomain = in.LANDomain
 		if in.LAN {
 			lanDomain = in.Name + "." + s.LAN.Suffix
-		} else {
-			if err := validLANName(in.LANDomain); err != nil {
-				return err
-			}
-			lanDomain = in.LANDomain
+		}
+		if err := validLANName(lanDomain); err != nil {
+			return err
 		}
 	}
 
 	// Domain-conflict check (skipping the same name's own row). Names from
-	// the .test and LAN spaces share one namespace, so every pairing counts.
+	// the .test and LAN spaces share one namespace, so every pairing counts,
+	// including a backend's own Domain against its own LAN name.
+	if lanDomain != "" && lanDomain == in.Domain {
+		return fmt.Errorf("%w: %s is both the domain and the LAN name", ErrDomainConflict, lanDomain)
+	}
 	for name, b := range s.Backends {
 		if name == in.Name {
 			continue

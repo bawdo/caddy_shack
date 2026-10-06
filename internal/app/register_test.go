@@ -566,3 +566,46 @@ func TestRegisterBothFlagsInvalid(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestRegisterRejectsOwnDomainAsOwnLANDomain(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	lanSeed(t, f, true, nil)
+	err := f.app.Register(context.Background(), RegisterInput{Name: "gamma", Port: 3000, Domain: "gamma.example.lan", LANDomain: "gamma.example.lan"})
+	if !errors.Is(err, ErrDomainConflict) || ExitCode(err) != 3 {
+		t.Fatalf("want ErrDomainConflict exit 3, got %v", err)
+	}
+	if f.loads() != 0 {
+		t.Error("caddy was loaded")
+	}
+}
+
+// --lan builds the name from the backend name and the suffix, so it must be
+// validated too: a long dotted name can push it past 253 characters.
+func TestRegisterLANValidatesResolvedName(t *testing.T) {
+	label := strings.Repeat("a", 31)
+	long := strings.Join([]string{label, label, label, label, label, label, label, label}, ".")
+	for _, in := range []RegisterInput{
+		{Name: long, Port: 3000, LAN: true},
+		{Name: "gamma-", Port: 3000, LAN: true},
+		{Name: "gamma", Port: 3000, LANDomain: long + ".arrix.home.lan"},
+	} {
+		f := newFixture(t, http.StatusOK)
+		lanSeed(t, f, true, nil)
+		err := f.app.Register(context.Background(), in)
+		if !errors.Is(err, ErrInvalidArgs) {
+			t.Errorf("%+v: want ErrInvalidArgs, got %v", in, err)
+		}
+		if f.loads() != 0 {
+			t.Errorf("%+v: caddy was loaded", in)
+		}
+	}
+}
+
+func TestRegisterLANDisabledMessageSaysRemedyOnce(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	lanSeed(t, f, false, nil)
+	err := f.app.Register(context.Background(), RegisterInput{Name: "gamma", Port: 3000, LAN: true})
+	if n := strings.Count(err.Error(), "caddy_shack lan enable"); n != 1 {
+		t.Errorf("remedy appears %d times: %q", n, err)
+	}
+}
