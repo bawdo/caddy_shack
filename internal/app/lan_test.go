@@ -440,3 +440,65 @@ func TestLANEnableForwarderBindFailureFails(t *testing.T) {
 		t.Errorf("error: %v", err)
 	}
 }
+
+// The forwarder image is pulled before the state lock is taken, so a slow
+// pull does not hold every other command off.
+func TestLANEnablePullsImageBeforeLock(t *testing.T) {
+	f := lanFixture(t, discovered("192.168.1.12"))
+	rec := &recDocker{Client: f.app.docker}
+	f.app.docker = rec
+	pulled := false
+	rec.onPull = func(image string) {
+		if image != LANImage {
+			return
+		}
+		pulled = true
+		held, err := state.LockHeld(f.statePath + ".lock")
+		if err != nil || held {
+			t.Errorf("state lock held during pull (held=%v err=%v)", held, err)
+		}
+	}
+	if _, err := f.app.LANEnable(context.Background(), LANEnableInput{Suffix: "lan"}); err != nil {
+		t.Fatal(err)
+	}
+	if !pulled {
+		t.Fatal("forwarder image not pulled")
+	}
+	pull, create := -1, -1
+	for i, c := range rec.calls {
+		switch c {
+		case "pull:" + LANImage:
+			pull = i
+		case "create:" + LANContainerName:
+			create = i
+		}
+	}
+	if pull < 0 || create < 0 || pull > create {
+		t.Errorf("calls: %v", rec.calls)
+	}
+}
+
+func TestLANEnablePullFailureFailsWithoutLocalImage(t *testing.T) {
+	f := lanFixture(t, discovered("192.168.1.12"))
+	d := f.app.docker.(*docker.Fake)
+	d.PullErr = errors.New("registry unreachable")
+	_, err := f.app.LANEnable(context.Background(), LANEnableInput{Suffix: "lan"})
+	if err == nil || !strings.Contains(err.Error(), "registry unreachable") {
+		t.Fatalf("got %v", err)
+	}
+	if _, statErr := os.Stat(f.statePath); statErr == nil {
+		t.Error("state was written")
+	}
+}
+
+// Offline with the image already cached, enable carries on as docker run
+// would.
+func TestLANEnablePullFailureToleratedWithLocalImage(t *testing.T) {
+	f := lanFixture(t, discovered("192.168.1.12"))
+	d := f.app.docker.(*docker.Fake)
+	d.PullErr = errors.New("registry unreachable")
+	d.ImageIDs[LANImage] = "sha256:cached"
+	if _, err := f.app.LANEnable(context.Background(), LANEnableInput{Suffix: "lan"}); err != nil {
+		t.Fatal(err)
+	}
+}

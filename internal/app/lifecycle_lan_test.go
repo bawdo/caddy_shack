@@ -19,6 +19,7 @@ type recDocker struct {
 	docker.Client
 	calls    []string
 	onCreate func(name string)
+	onPull   func(image string)
 }
 
 func (r *recDocker) rec(s string) { r.calls = append(r.calls, s) }
@@ -39,7 +40,13 @@ func (r *recDocker) CreateAndStart(spec docker.ContainerSpec) error {
 	}
 	return r.Client.CreateAndStart(spec)
 }
-func (r *recDocker) PullImage(i string) error { r.rec("pull:" + i); return r.Client.PullImage(i) }
+func (r *recDocker) PullImage(i string) error {
+	r.rec("pull:" + i)
+	if r.onPull != nil {
+		r.onPull(i)
+	}
+	return r.Client.PullImage(i)
+}
 func (r *recDocker) EnsureNetwork(n string) error {
 	r.rec("network:" + n)
 	return r.Client.EnsureNetwork(n)

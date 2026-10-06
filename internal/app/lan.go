@@ -365,6 +365,20 @@ func (a *App) resolveLANIP(pin string) (string, state.LANMode, string, error) {
 	return ip.String(), state.LANModePinned, "", nil
 }
 
+// pullLANImage fetches the forwarder image. A failed pull is tolerated when
+// the image is already cached, so enable still works offline.
+func (a *App) pullLANImage() error {
+	err := a.docker.PullImage(LANImage)
+	if err == nil {
+		return nil
+	}
+	if id, idErr := a.docker.ImageID(LANImage); idErr == nil && id != "" {
+		a.notef("notice: could not pull %s, using the cached image: %v\n", LANImage, err)
+		return nil
+	}
+	return fmt.Errorf("pull LAN forwarder image: %w", err)
+}
+
 // LANEnable switches LAN mode on: settings are saved and pushed to Caddy
 // first, then the forwarder is started. Backends' LANDomain values are left
 // alone, so a re-enable with a new suffix does not rename anything.
@@ -390,6 +404,11 @@ func (a *App) LANEnable(ctx context.Context, in LANEnableInput) (LANEnableResult
 	}
 	if in.Confirm != nil && !in.Confirm(fmt.Sprintf("Bind LAN access to %s (%s)? ", ip, mode)) {
 		return LANEnableResult{}, errors.New("cancelled")
+	}
+	// Pull before taking the lock: creating the forwarder would otherwise
+	// pull implicitly with every other command locked out.
+	if err := a.pullLANImage(); err != nil {
+		return LANEnableResult{}, err
 	}
 
 	lock, err := acquireStateLock(a.paths.LockPath)
