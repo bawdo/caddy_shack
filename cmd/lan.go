@@ -27,8 +27,18 @@ func newLANEnableCmd() *cobra.Command {
 		Short: "Bind Caddy to a LAN address and serve LAN names",
 		Long: `Bind a forwarder to this machine's LAN IP on ports 443 and 80 and serve
 backends that have a LAN name. Without --ip the address is discovered; with
-it the address is pinned. --suffix is required the first time and is kept
-afterwards.`,
+it the address is pinned.
+
+--suffix is the DNS domain appended to a backend's name to form its LAN name:
+with "--suffix mac.home.arpa", "register gamma --lan" serves
+gamma.mac.home.arpa. Point a wildcard DNS A record for *.<suffix> at this
+machine's LAN IP so every LAN name resolves. The suffix must be a lowercase
+DNS name and cannot be "test" or end in ".test". Prefer home.arpa (reserved
+for home networks), avoid .local (clashes with mDNS), and give each machine
+on the network its own suffix. It is required the first time and is kept
+afterwards; changing it does not rename existing LAN names.`,
+		Example: `  caddy_shack lan enable --suffix mac.home.arpa
+  caddy_shack lan enable --suffix mac.home.arpa --ip 192.168.1.20 --yes`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := app.New()
@@ -63,7 +73,7 @@ afterwards.`,
 		},
 	}
 	c.Flags().StringVar(&ip, "ip", "", "LAN IPv4 address to bind (default: discover)")
-	c.Flags().StringVar(&suffix, "suffix", "", "DNS suffix for LAN names (required the first time)")
+	c.Flags().StringVar(&suffix, "suffix", "", "Domain appended to backend names for LAN names, e.g. mac.home.arpa (required the first time)")
 	c.Flags().BoolVar(&yes, "yes", false, "Do not ask for confirmation")
 	return c
 }

@@ -472,9 +472,22 @@ caddy_shack lan enable --suffix arrix.home.lan
 
 This discovers the machine's LAN IPv4 address, starts the `caddy_shack_lan`
 forwarder bound to it on ports 443 and 80, and asks for confirmation first
-(`--yes` skips the prompt). `--suffix` is required the first time and is kept
-afterwards. Neither the suffix nor any LAN name may be `test` or end in
-`.test`. Pass `--ip 192.168.1.20` to pin the address instead of discovering
+(`--yes` skips the prompt).
+
+`--suffix` is the DNS domain appended to a backend's name to form its LAN
+name: with `--suffix arrix.home.lan`, `register gamma --lan` serves
+`gamma.arrix.home.lan`. It is required the first time and is kept afterwards.
+It must be a lowercase DNS name (letters, digits, hyphens and dots), and
+neither the suffix nor any LAN name may be `test` or end in `.test`. Choosing
+one:
+
+- Prefer a name under `home.arpa` (for example `mac.home.arpa`), which is
+  reserved for home networks (RFC 8375). `.lan` names such as `arrix.home.lan`
+  are common and work, but are not formally reserved.
+- Avoid `.local`, which clashes with mDNS (Bonjour/Avahi).
+- Use a domain your local DNS can serve, since you will add a wildcard record
+  for it (see below).
+- Give each machine its own suffix (see "Several machines on one network"). Pass `--ip 192.168.1.20` to pin the address instead of discovering
 it. A failed bind exits 1.
 
 Then, for each backend you want on the LAN:
