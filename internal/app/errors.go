@@ -16,10 +16,14 @@ var (
 	ErrDrift             = errors.New("live caddy config does not match the registry; run 'caddy_shack sync'")
 	ErrLANDown           = errors.New("LAN IP is not present on any interface")
 	ErrLANDisabled       = errors.New("LAN mode is not enabled; run 'caddy_shack lan enable' first")
+	// ErrCertIssuance covers any failure of an ACME order: the challenge, the
+	// DNS validation, or a rate limit. Distinguished from a generic failure
+	// because a script may want to back off rather than retry.
+	ErrCertIssuance = errors.New("certificate issuance failed")
 )
 
 // ExitCode maps an error to the documented exit codes.
-// 0 = nil, 1 = generic failure, 2-10 = specific sentinels.
+// 0 = nil, 1 = generic failure, 2-11 = specific sentinels.
 func ExitCode(err error) int {
 	switch {
 	case err == nil:
@@ -42,6 +46,8 @@ func ExitCode(err error) int {
 		return 9
 	case errors.Is(err, ErrLANDisabled):
 		return 10
+	case errors.Is(err, ErrCertIssuance):
+		return 11
 	default:
 		return 1
 	}

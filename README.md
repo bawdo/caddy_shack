@@ -360,6 +360,82 @@ redirect or pipe. The command reads the CA from the running Caddy admin API, so
 the export always matches what Caddy is actually serving. It returns exit 6 when
 caddy isn't installed and exit 5 when the container isn't running.
 
+### Let's Encrypt certificates for a public domain
+
+`.test` domains are served by Caddy's internal CA. For a domain you actually
+own, `caddy_shack cert` obtains a publicly-trusted Let's Encrypt certificate
+and loads it into the same running Caddy.
+
+This is useful for local development against a real domain whose public DNS
+points at `127.0.0.1`: you get real HTTPS with no trust-store fiddling, and
+anything that only trusts public CAs works without extra setup.
+
+Because the domain resolves to loopback, Let's Encrypt cannot reach it to
+validate over HTTP. DNS-01 is the only challenge that works, and caddy_shack
+runs it manually: it prints the TXT records and waits while you add them at your
+DNS provider.
+
+```
+caddy_shack cert request alpha.arrix.dev --email you@example.com
+```
+
+Requests go to the **staging** environment by default. Staging certificates are
+not trusted by browsers, which is the point: prove the DNS flow works without
+spending quota. Production allows only five duplicate certificates per week for
+the same set of names.
+
+```
+caddy_shack cert request alpha.arrix.dev --email you@example.com --production
+```
+
+Each certificate covers the domain and its single-label subdomains, so one
+request serves both `alpha.arrix.dev` and `vite.alpha.arrix.dev`. That matches
+how `register` already routes: registering a backend serves its wildcard too.
+
+```
+caddy_shack register web --port 5173 --domain alpha.arrix.dev
+# https://alpha.arrix.dev and https://vite.alpha.arrix.dev are both live
+```
+
+Note that Caddy wildcards match exactly one label. A backend registered directly
+on a subdomain (for example `caddy_shack register vite --domain vite.alpha.arrix.dev`)
+is covered by the parent domain's wildcard certificate and correctly uses it. However,
+multi-level subdomains are not covered: `*.vite.alpha.arrix.dev` would require its own
+certificate request, as would `a.b.alpha.arrix.dev`.
+
+A wildcard order produces **two** TXT records on the same name, one per
+identifier. Both must exist at the same time; do not replace the first when you
+add the second. caddy_shack shows both at once and then polls your authoritative
+nameservers, so pressing Enter early is harmless.
+
+Managing what you have:
+
+```
+caddy_shack cert list           # domains, environment, expiry, days left
+caddy_shack cert list --json    # for scripts
+caddy_shack cert renew alpha.arrix.dev          # no-op unless within 30 days
+caddy_shack cert renew alpha.arrix.dev --force  # renew regardless
+caddy_shack cert remove alpha.arrix.dev         # stop serving it
+```
+
+Certificates last 90 days. Because the challenge is manual, renewal is manual
+too: `cert renew` prompts for the TXT records the same way `cert request` does.
+`cert list` shows the days remaining so you can see one coming. A failed
+certificate request or renewal leaves the previously working certificate
+untouched, so a failure is a no-op rather than an outage.
+
+Certificate material is stored on this machine, not inside Caddy's volume, so it
+survives `caddy_shack upgrade` and container recreates the same way registered
+backends do.
+
+Worth knowing before you point `--production` at a real domain: the private
+key travels from that host-side store to Caddy over the loopback admin API,
+and Caddy also writes its own copy into the config it autosaves inside the
+`caddy_shack` container's Docker volume, in plaintext. That is an accepted
+trade-off for a local development tool on a machine you already trust, not a
+flaw to work around, but consider it before issuing a certificate for
+something that matters.
+
 ### Exit codes
 
 Stable contract, documented under `caddy_shack --help`:
@@ -376,7 +452,13 @@ Stable contract, documented under `caddy_shack --help`:
 8  state lock held by another caddy_shack process
 9  status only: Caddy is up but its live config does not match the registry
 10 LAN mode not enabled (register with --lan or --lan-domain)
+11 certificate issuance failed (ACME order, DNS validation, or rate limit)
 ```
+
+`state.json`'s format is upgraded in place the first time a newer caddy_shack
+binary writes it. That upgrade is one-way: downgrading to an older
+caddy_shack afterwards is not supported, and it exits 7 rather than reading a
+state file from a newer schema version.
 
 ### Quick smoke test
 
@@ -596,9 +678,11 @@ forwarder state. `caddy_shack doctor` adds `lan-ip-present`, `lan-forwarder`,
   not yet confirmed.
 - ufw on native Linux: Docker's published ports bypass ufw, so a firewall rule
   will not stop LAN access to the forwarder's ports.
-- State schema: LAN support moves `state.json` to schema 2. Older `caddy_shack`
-  binaries cannot read it and report it as corrupt (exit 7), so upgrade every
-  copy you use.
+- State schema: LAN support and Let's Encrypt certificates share schema 2 of
+  `state.json`. Older `caddy_shack` binaries cannot read it and report it as
+  corrupt (exit 7), so upgrade every copy you use. A pre-release build that
+  has only one of the two features will read a schema 2 file but drop the
+  other feature's settings the next time it writes, so don't mix them.
 
 ## Development
 

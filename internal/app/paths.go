@@ -10,6 +10,9 @@ import (
 type Paths struct {
 	StatePath string
 	LockPath  string
+	// CertStoreDir roots the certificate store: certs/<domain>/ and
+	// acme/account-<env>.key live beneath it.
+	CertStoreDir string
 }
 
 // DefaultPaths returns the macOS paths under os.UserConfigDir().
@@ -21,7 +24,8 @@ func DefaultPaths() (Paths, error) {
 	}
 	dir := filepath.Join(base, "caddy_shack")
 	return Paths{
-		StatePath: filepath.Join(dir, "state.json"),
-		LockPath:  filepath.Join(dir, "state.json.lock"),
+		StatePath:    filepath.Join(dir, "state.json"),
+		LockPath:     filepath.Join(dir, "state.json.lock"),
+		CertStoreDir: dir,
 	}, nil
 }

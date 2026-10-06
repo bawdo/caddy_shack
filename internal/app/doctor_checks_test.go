@@ -887,6 +887,185 @@ func TestCheckConfigDriftPassWhenNoBackends(t *testing.T) {
 	}
 }
 
+// certDriftTestApp builds an App with one backend and one loaded certificate
+// in state, backed by real certstore material on disk, so checkConfigDrift
+// has both routes and a load_pem entry to compare.
+func certDriftTestApp(t *testing.T) (*App, *state.State) {
+	t.Helper()
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	st := &state.State{
+		SchemaVersion: 1,
+		Backends: map[string]state.Backend{
+			"a": {Domain: "a.test", Upstream: "127.0.0.1:1000"},
+		},
+		Certs: map[string]state.Cert{
+			"alpha.arrix.dev": {
+				Domain:   "alpha.arrix.dev",
+				Subjects: []string{"alpha.arrix.dev", "*.alpha.arrix.dev"},
+				Env:      "staging",
+			},
+		},
+	}
+	if err := state.Save(statePath, st); err != nil {
+		t.Fatal(err)
+	}
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRunning
+	a := NewWithPaths(Paths{StatePath: statePath, LockPath: statePath + ".lock", CertStoreDir: dir}, nil, fake)
+	if err := a.certs.Save("alpha.arrix.dev",
+		[]byte("-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----\n"),
+		[]byte("-----BEGIN EC PRIVATE KEY-----\nKEY\n-----END EC PRIVATE KEY-----\n")); err != nil {
+		t.Fatal(err)
+	}
+	return a, st
+}
+
+// wireCaddyToLiveConfig points a's caddy client at a stub GET-only server
+// that always returns liveCfg, so checkConfigDrift compares against exactly
+// the bytes the test controls.
+func wireCaddyToLiveConfig(t *testing.T, a *App, liveCfg []byte) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write(liveCfg)
+	}))
+	t.Cleanup(srv.Close)
+	a.caddy = caddyapi.NewClient(srv.URL, time.Second)
+}
+
+func TestCheckConfigDriftPassWhenRoutesAndCertsMatch(t *testing.T) {
+	a, st := certDriftTestApp(t)
+	desired, err := a.buildConfig(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wireCaddyToLiveConfig(t, a, desired)
+
+	r := checkConfigDrift(context.Background(), a)
+	if r.Status != SeverityPass {
+		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
+	}
+}
+
+func TestCheckConfigDriftFailWhenOnlyRoutesDiffer(t *testing.T) {
+	a, st := certDriftTestApp(t)
+	desired, err := a.buildConfig(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(desired, &m); err != nil {
+		t.Fatal(err)
+	}
+	// Mutate a route's upstream so routes differ; leave certificates as-is.
+	apps := m["apps"].(map[string]any)
+	http := apps["http"].(map[string]any)
+	servers := http["servers"].(map[string]any)
+	srv0 := servers["srv0"].(map[string]any)
+	routes := srv0["routes"].([]any)
+	route0 := routes[0].(map[string]any)
+	handle := route0["handle"].([]any)
+	handler0 := handle[0].(map[string]any)
+	upstreams := handler0["upstreams"].([]any)
+	upstream0 := upstreams[0].(map[string]any)
+	upstream0["dial"] = "127.0.0.1:9999"
+	live, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wireCaddyToLiveConfig(t, a, live)
+
+	r := checkConfigDrift(context.Background(), a)
+	if r.Status != SeverityFail {
+		t.Fatalf("status: %v summary=%s", r.Status, r.Summary)
+	}
+	detail := strings.Join(r.Detail, "\n")
+	if !strings.Contains(detail, "live route differs from registry: a") {
+		t.Errorf("detail must name the changed backend, got %q", detail)
+	}
+	if strings.Contains(detail, "certificates") {
+		t.Errorf("detail must not mention certificates when only routes differ, got %q", detail)
+	}
+}
+
+func TestCheckConfigDriftFailWhenOnlyCertsDiffer(t *testing.T) {
+	a, st := certDriftTestApp(t)
+	desired, err := a.buildConfig(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(desired, &m); err != nil {
+		t.Fatal(err)
+	}
+	// Drop the loaded certificate from the live config; routes are untouched.
+	apps := m["apps"].(map[string]any)
+	tlsApp := apps["tls"].(map[string]any)
+	delete(tlsApp, "certificates")
+	live, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wireCaddyToLiveConfig(t, a, live)
+
+	r := checkConfigDrift(context.Background(), a)
+	if r.Status != SeverityFail {
+		t.Fatalf("status: %v summary=%s", r.Status, r.Summary)
+	}
+	detail := strings.Join(r.Detail, "\n")
+	if !strings.Contains(detail, "loaded certificates differ") {
+		t.Errorf("detail must mention certificates, got %q", detail)
+	}
+	if strings.Contains(detail, "live route differs") {
+		t.Errorf("detail must not say routes differ when only certificates differ, got %q", detail)
+	}
+	for _, d := range r.Detail {
+		if strings.Contains(d, "BEGIN CERTIFICATE") || strings.Contains(d, "BEGIN EC PRIVATE KEY") || strings.Contains(d, "KEY") {
+			t.Errorf("detail must never contain key material, got %q", d)
+		}
+	}
+}
+
+func TestCheckConfigDriftFailWhenRoutesAndCertsBothDiffer(t *testing.T) {
+	a, st := certDriftTestApp(t)
+	desired, err := a.buildConfig(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(desired, &m); err != nil {
+		t.Fatal(err)
+	}
+	apps := m["apps"].(map[string]any)
+	httpApp := apps["http"].(map[string]any)
+	servers := httpApp["servers"].(map[string]any)
+	srv0 := servers["srv0"].(map[string]any)
+	routes := srv0["routes"].([]any)
+	route0 := routes[0].(map[string]any)
+	handle := route0["handle"].([]any)
+	handler0 := handle[0].(map[string]any)
+	upstreams := handler0["upstreams"].([]any)
+	upstream0 := upstreams[0].(map[string]any)
+	upstream0["dial"] = "127.0.0.1:9999"
+	tlsApp := apps["tls"].(map[string]any)
+	delete(tlsApp, "certificates")
+	live, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wireCaddyToLiveConfig(t, a, live)
+
+	r := checkConfigDrift(context.Background(), a)
+	if r.Status != SeverityFail {
+		t.Fatalf("status: %v summary=%s", r.Status, r.Summary)
+	}
+	detail := strings.Join(r.Detail, "\n")
+	if !strings.Contains(detail, "live route differs") || !strings.Contains(detail, "loaded certificates differ") {
+		t.Errorf("detail must mention both routes and certificates, got %q", detail)
+	}
+}
+
 func TestCheckBackendsPassWhenAllReachable(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")

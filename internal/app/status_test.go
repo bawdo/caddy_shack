@@ -153,6 +153,126 @@ func TestStatusReturnsErrStateCorruptWhenStateFileBroken(t *testing.T) {
 	}
 }
 
+func TestStatusReportsNoCertificatesWhenNoneStored(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	if err := writeFile(t, statePath, `{"schema_version":2,"backends":{},"certs":{}}`); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("{}")) }))
+	defer srv.Close()
+	fakeDock := docker.NewFake()
+	fakeDock.Containers[CaddyContainerName] = docker.StateRunning
+
+	a := NewWithPaths(Paths{StatePath: statePath, LockPath: statePath + ".lock"},
+		caddyapi.NewClient(srv.URL, time.Second), fakeDock)
+	rep, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if rep.CertCount != 0 {
+		t.Errorf("CertCount: got %d want 0", rep.CertCount)
+	}
+	if rep.SoonestCertExpiryDays != nil {
+		t.Errorf("SoonestCertExpiryDays: got %v want nil", *rep.SoonestCertExpiryDays)
+	}
+}
+
+func TestStatusReportsOneCertificate(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	notAfter := time.Now().Add(45 * 24 * time.Hour).Format(time.RFC3339)
+	body := `{"schema_version":2,"backends":{},"certs":{"a.example.com":{"domain":"a.example.com","subjects":["a.example.com"],"env":"production","email":"k@example.com","issued_at":"2026-01-01T00:00:00Z","not_after":"` + notAfter + `"}}}`
+	if err := writeFile(t, statePath, body); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("{}")) }))
+	defer srv.Close()
+	fakeDock := docker.NewFake()
+	fakeDock.Containers[CaddyContainerName] = docker.StateRunning
+
+	a := NewWithPaths(Paths{StatePath: statePath, LockPath: statePath + ".lock"},
+		caddyapi.NewClient(srv.URL, time.Second), fakeDock)
+	rep, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if rep.CertCount != 1 {
+		t.Errorf("CertCount: got %d want 1", rep.CertCount)
+	}
+	if rep.SoonestCertExpiryDays == nil {
+		t.Fatal("SoonestCertExpiryDays: got nil, want a value")
+	}
+	if got := *rep.SoonestCertExpiryDays; got < 43 || got > 45 {
+		t.Errorf("SoonestCertExpiryDays: got %d want about 45", got)
+	}
+}
+
+func TestStatusReportsSoonestExpiryAmongSeveralCertificates(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	far := time.Now().Add(80 * 24 * time.Hour).Format(time.RFC3339)
+	soon := time.Now().Add(5 * 24 * time.Hour).Format(time.RFC3339)
+	mid := time.Now().Add(40 * 24 * time.Hour).Format(time.RFC3339)
+	// "a.example.com" sorts first but is not the soonest expiry; the
+	// soonest, "b.example.com", must still win regardless of map order.
+	body := `{"schema_version":2,"backends":{},"certs":{
+		"a.example.com":{"domain":"a.example.com","subjects":["a.example.com"],"env":"production","email":"k@example.com","issued_at":"2026-01-01T00:00:00Z","not_after":"` + far + `"},
+		"b.example.com":{"domain":"b.example.com","subjects":["b.example.com"],"env":"production","email":"k@example.com","issued_at":"2026-01-01T00:00:00Z","not_after":"` + soon + `"},
+		"c.example.com":{"domain":"c.example.com","subjects":["c.example.com"],"env":"production","email":"k@example.com","issued_at":"2026-01-01T00:00:00Z","not_after":"` + mid + `"}
+	}}`
+	if err := writeFile(t, statePath, body); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("{}")) }))
+	defer srv.Close()
+	fakeDock := docker.NewFake()
+	fakeDock.Containers[CaddyContainerName] = docker.StateRunning
+
+	a := NewWithPaths(Paths{StatePath: statePath, LockPath: statePath + ".lock"},
+		caddyapi.NewClient(srv.URL, time.Second), fakeDock)
+	rep, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if rep.CertCount != 3 {
+		t.Errorf("CertCount: got %d want 3", rep.CertCount)
+	}
+	if rep.SoonestCertExpiryDays == nil {
+		t.Fatal("SoonestCertExpiryDays: got nil, want a value")
+	}
+	if got := *rep.SoonestCertExpiryDays; got < 3 || got > 5 {
+		t.Errorf("SoonestCertExpiryDays: got %d want about 5", got)
+	}
+}
+
+func TestStatusReportsExpiredCertificateAsNegativeDays(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	notAfter := time.Now().Add(-5 * 24 * time.Hour).Format(time.RFC3339)
+	body := `{"schema_version":2,"backends":{},"certs":{"a.example.com":{"domain":"a.example.com","subjects":["a.example.com"],"env":"production","email":"k@example.com","issued_at":"2026-01-01T00:00:00Z","not_after":"` + notAfter + `"}}}`
+	if err := writeFile(t, statePath, body); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200); _, _ = w.Write([]byte("{}")) }))
+	defer srv.Close()
+	fakeDock := docker.NewFake()
+	fakeDock.Containers[CaddyContainerName] = docker.StateRunning
+
+	a := NewWithPaths(Paths{StatePath: statePath, LockPath: statePath + ".lock"},
+		caddyapi.NewClient(srv.URL, time.Second), fakeDock)
+	rep, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if rep.SoonestCertExpiryDays == nil {
+		t.Fatal("SoonestCertExpiryDays: got nil, want a value")
+	}
+	if got := *rep.SoonestCertExpiryDays; got >= 0 {
+		t.Errorf("SoonestCertExpiryDays: got %d want negative for an expired certificate", got)
+	}
+}
+
 func TestStatusReturnsErrDockerUnreachableWhenDaemonDown(t *testing.T) {
 	dir := t.TempDir()
 	fakeDock := docker.NewFake()

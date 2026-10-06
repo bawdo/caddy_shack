@@ -333,13 +333,13 @@ func TestBuildConfigPerEngine(t *testing.T) {
 	}}
 
 	desktop := NewWithPaths(Paths{}, nil, docker.NewFake())
-	if string(desktop.buildConfig(s)) != string(caddyapi.Build(s)) {
+	if string(mustBuildConfig(t, desktop, s)) != string(caddyapi.Build(s)) {
 		t.Error("Docker Desktop config must be byte-identical to caddyapi.Build")
 	}
 
 	fd := docker.NewFake()
 	useNativeLinux(t, fd)
-	native := string(NewWithPaths(Paths{}, nil, fd).buildConfig(s))
+	native := string(mustBuildConfig(t, NewWithPaths(Paths{}, nil, fd), s))
 	if !strings.Contains(native, `"dial": "unix//run/caddy_shack/relay.sock"`) ||
 		!strings.Contains(native, `"X-Caddy-Shack-Port": [`) {
 		t.Errorf("native host-mode route should dial the relay:\n%s", native)

@@ -67,6 +67,12 @@ func renderStatus(w io.Writer, rep app.StatusReport, asJSON bool) {
 	default:
 		_, _ = fmt.Fprintln(w, "config in sync:  unknown")
 	}
+	if rep.CertCount > 0 {
+		_, _ = fmt.Fprintf(w, "certificates:    %d\n", rep.CertCount)
+		if rep.SoonestCertExpiryDays != nil {
+			_, _ = fmt.Fprintf(w, "soonest expiry:  %s\n", formatExpiry(*rep.SoonestCertExpiryDays))
+		}
+	}
 	_, _ = fmt.Fprintf(w, "healthy:         %t\n", rep.Healthy)
 	renderStatusLAN(w, rep.LAN)
 }
@@ -92,4 +98,34 @@ func renderStatusLAN(w io.Writer, l *app.LANStatus) {
 		_, _ = fmt.Fprintln(w, "drift:      none")
 	}
 	_, _ = fmt.Fprintf(w, "backends:   %d with LAN names\n", l.LANBackends)
+}
+
+// formatExpiry renders a days-remaining count from app.StatusReport in plain
+// language for the human status output. Negative values (an expiry already
+// in the past) are spelled out as "expired N days ago" rather than a bare
+// negative number, which is the one line in `status` that someone is most
+// likely to be reading because something is actually wrong. Zero is the
+// genuinely ambiguous case: DaysRemaining truncates toward zero, so a
+// certificate that expired a few hours ago and one expiring in the next
+// twenty-odd hours both compute as 0. Rather than assert either "today" or
+// "expired", the zero case says so honestly.
+func formatExpiry(days int) string {
+	switch {
+	case days > 0:
+		return fmt.Sprintf("%d %s", days, pluralDays(days))
+	case days < 0:
+		n := -days
+		return fmt.Sprintf("expired %d %s ago", n, pluralDays(n))
+	default:
+		return "today or in the last day (check cert list)"
+	}
+}
+
+// pluralDays returns "day" for n == 1 and "days" otherwise, so formatExpiry
+// never prints "1 days".
+func pluralDays(n int) string {
+	if n == 1 {
+		return "day"
+	}
+	return "days"
 }

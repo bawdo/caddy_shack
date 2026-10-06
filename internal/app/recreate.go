@@ -111,7 +111,11 @@ func (a *App) recreateCaddy(ctx context.Context, image string) error {
 	if err := a.waitForAdmin(ctx); err != nil {
 		return fmt.Errorf("recreated container but the caddy admin API did not come up; run 'caddy_shack status': %w", err)
 	}
-	if err := a.caddy.Load(ctx, a.buildConfig(s)); err != nil {
+	cfg, err := a.buildConfig(s)
+	if err != nil {
+		return fmt.Errorf("recreated container but failed to load certificates; run 'caddy_shack status': %w", err)
+	}
+	if err := a.caddy.Load(ctx, cfg); err != nil {
 		return fmt.Errorf("recreated container but failed to restore backends; run 'caddy_shack status': %w", err)
 	}
 	if err := a.ensureRelay(); err != nil {

@@ -5,9 +5,42 @@ import (
 	"net"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/bawdo/caddy_shack/internal/state"
 )
+
+// LoadedCert is one externally-issued certificate to hand Caddy directly.
+// Subjects are the DNS names it covers; they are withheld from the internal
+// issuer's automation policy so Caddy serves this certificate rather than
+// minting its own over the top.
+type LoadedCert struct {
+	Subjects []string
+	CertPEM  string
+	KeyPEM   string
+}
+
+// isSubjectCovered reports whether a plain (non-wildcard) subject is served
+// by a loaded certificate: either the subject itself is a literal covered
+// name, or its immediate parent wildcard (e.g. *.alpha.arrix.dev for
+// vite.alpha.arrix.dev) is. A Caddy `*` matches exactly one label, so the
+// parent check must not recurse: a.b.alpha.arrix.dev is not covered by
+// *.alpha.arrix.dev. This subsumption only applies to plain subjects; a
+// wildcard subject is covered only by an exact match, never by its parent.
+func isSubjectCovered(subject string, covered map[string]bool) bool {
+	if covered[subject] {
+		return true
+	}
+	if strings.HasPrefix(subject, "*.") {
+		return false
+	}
+	if i := strings.Index(subject, "."); i >= 0 {
+		if covered["*."+subject[i+1:]] {
+			return true
+		}
+	}
+	return false
+}
 
 // LAN listener ports inside the main container. The forwarder container
 // relays the LAN's 443 and 80 to these, so neither is published directly.
@@ -23,6 +56,10 @@ type Options struct {
 	// host is HostRelay.Host) through a relay instead of dialling them
 	// directly. Container-mode upstreams are never touched.
 	HostRelay *HostRelay
+	// Certs are externally-issued certificates to load directly. Their
+	// subjects are withheld from the internal issuer. Nil reproduces the
+	// internal-issuer only config.
+	Certs []LoadedCert
 }
 
 // HostRelay describes the native-Linux relay: a Caddy in the host's network
@@ -49,6 +86,7 @@ func Build(s *state.State) []byte {
 // BuildWith is Build with Options applied. BuildWith(s, Options{}) is
 // byte-for-byte Build(s).
 func BuildWith(s *state.State, opts Options) []byte {
+	certs := opts.Certs
 	type upstream struct {
 		Dial string `json:"dial"`
 	}
@@ -119,8 +157,16 @@ func BuildWith(s *state.State, opts Options) []byte {
 	type automation struct {
 		Policies []policy `json:"policies"`
 	}
+	type pemPair struct {
+		Certificate string `json:"certificate"`
+		Key         string `json:"key"`
+	}
+	type certificates struct {
+		LoadPEM []pemPair `json:"load_pem"`
+	}
 	type tlsApp struct {
-		Automation automation `json:"automation"`
+		Automation   automation    `json:"automation"`
+		Certificates *certificates `json:"certificates,omitempty"`
 	}
 	type apps struct {
 		HTTP httpApp `json:"http"`
@@ -187,12 +233,28 @@ func BuildWith(s *state.State, opts Options) []byte {
 	}
 	routes := hostRoutes(domains, byDomain)
 
+	// Subjects covered by a loaded certificate are withheld from the
+	// internal issuer. Caddy's automatic HTTPS skips a hostname that already
+	// has a manually loaded certificate, but leaving the name in an explicit
+	// internal policy would ask Caddy to manage it regardless.
+	covered := make(map[string]bool)
+	for _, c := range certs {
+		for _, sub := range c.Subjects {
+			covered[sub] = true
+		}
+	}
+
 	// TLS subjects are derived from the registered names, not a static
 	// *.test: a single-label wildcard can't cover bar.foo.test or a
 	// *.foo.test wildcard cert. We mint certs only for names actually in use.
 	subjects := make([]string, 0, len(domains)*2)
 	for _, d := range domains {
-		subjects = append(subjects, d, "*."+d)
+		if !isSubjectCovered(d, covered) {
+			subjects = append(subjects, d)
+		}
+		if w := "*." + d; !covered[w] {
+			subjects = append(subjects, w)
+		}
 	}
 
 	servers := map[string]server{
@@ -223,7 +285,11 @@ func BuildWith(s *state.State, opts Options) []byte {
 		for _, n := range lanNames {
 			lanHosts = append(lanHosts, n, "*."+n)
 		}
-		subjects = append(subjects, lanHosts...)
+		for _, h := range lanHosts {
+			if !isSubjectCovered(h, covered) {
+				subjects = append(subjects, h)
+			}
+		}
 
 		// An empty sni list matches every handshake in Caddy, so with no
 		// LAN names the policy matches a name that can never be sent.
@@ -282,20 +348,36 @@ func BuildWith(s *state.State, opts Options) []byte {
 	}
 	sort.Strings(subjects)
 
+	// An automation policy with an empty subjects list means "every
+	// hostname", which would hand every name to the internal issuer. Emit no
+	// policy in that case, unless there were no domains to begin with: that
+	// matches the config Build has always produced for an empty state, where
+	// the empty policy is harmless because there are no routes to protect.
+	policies := []policy{}
+	if len(subjects) > 0 || len(domains) == 0 {
+		policies = append(policies, policy{
+			Subjects: subjects,
+			Issuers:  []issuer{{Module: "internal"}},
+		})
+	}
+
+	loadPEM := make([]pemPair, 0, len(certs))
+	for _, c := range certs {
+		loadPEM = append(loadPEM, pemPair{Certificate: c.CertPEM, Key: c.KeyPEM})
+	}
+
+	tls := tlsApp{Automation: automation{Policies: policies}}
+	if len(loadPEM) > 0 {
+		tls.Certificates = &certificates{LoadPEM: loadPEM}
+	}
+
 	cfg := config{
 		Admin: adminConfig{Listen: "0.0.0.0:2019"},
 		Apps: apps{
 			HTTP: httpApp{
 				Servers: servers,
 			},
-			TLS: tlsApp{
-				Automation: automation{
-					Policies: []policy{{
-						Subjects: subjects,
-						Issuers:  []issuer{{Module: "internal"}},
-					}},
-				},
-			},
+			TLS: tls,
 		},
 	}
 

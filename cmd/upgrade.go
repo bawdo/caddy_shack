@@ -15,9 +15,10 @@ func newUpgradeCmd() *cobra.Command {
 		Short: "Re-pull caddy:2 and recreate the container, keeping volumes and backends",
 		Long: `Re-pulls the caddy:2 image and, if it differs from the running image,
 recreates the container against it. Both named volumes are preserved, so
-certs survive, and registered backends are restored from state (the registry
-is the source of truth, so routes it doesn't know about are not carried
-over). No-op when already up to date.`,
+internal-CA certs survive, and registered backends are restored from state (the
+registry is the source of truth, so routes it doesn't know about are not
+carried over). Let's Encrypt certs survive separately, being stored on the
+host and re-pushed from state. No-op when already up to date.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := app.New()
 			if err != nil {

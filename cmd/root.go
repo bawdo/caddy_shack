@@ -48,6 +48,7 @@ Exit codes (stable, script-friendly):
   9  status only: Caddy is up but its live config does not match the
      registry (e.g. it restarted and lost its routes); run 'caddy_shack sync'
   10  LAN mode not enabled
+  11  certificate issuance failed (ACME order, DNS validation, or rate limit)
 
 See docs/superpowers/specs/2026-05-27-mvp-vertical-slice-design.md for the
 full design.`,
@@ -68,6 +69,7 @@ full design.`,
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newCACmd())
 	root.AddCommand(newLANCmd())
+	root.AddCommand(newCertCmd())
 	applyHelpBareword(root)
 	return root
 }

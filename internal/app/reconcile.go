@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,6 +46,9 @@ type Drift struct {
 	// Unknown lists live route hosts no registered backend accounts for
 	// (sorted).
 	Unknown []string `json:"unknown,omitempty"`
+	// CertsDiffer is true when the externally-issued certificates loaded
+	// into Caddy are not the ones the certificate store holds.
+	CertsDiffer bool `json:"certs_differ,omitempty"`
 }
 
 // compareConfig diffs the live config against what s renders to. desired
@@ -93,6 +98,7 @@ func compareConfig(s *state.State, live, desired []byte) (Drift, error) {
 		}
 	}
 	sort.Strings(d.Unknown)
+	d.CertsDiffer = !reflect.DeepEqual(loadedCertHashes(liveCfg), loadedCertHashes(desiredCfg))
 
 	// With nothing registered there is nothing to serve, so a Caddy that
 	// has no routes (e.g. freshly booted, or freshly installed) is in sync
@@ -137,6 +143,26 @@ func routesByHost(cfg map[string]any) map[string]any {
 	return out
 }
 
+// loadedCertHashes returns the set of apps.tls.certificates.load_pem entries
+// in cfg as SHA-256 hashes of each entry's JSON encoding, so certificates can
+// be compared without diffing, holding or printing the key material.
+func loadedCertHashes(cfg map[string]any) map[string]bool {
+	out := map[string]bool{}
+	apps, _ := cfg["apps"].(map[string]any)
+	tlsApp, _ := apps["tls"].(map[string]any)
+	certificates, _ := tlsApp["certificates"].(map[string]any)
+	loadPEM, _ := certificates["load_pem"].([]any)
+	for _, entry := range loadPEM {
+		b, err := json.Marshal(entry)
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(b)
+		out[hex.EncodeToString(sum[:])] = true
+	}
+	return out
+}
+
 // staticOnly reports whether every handler of route is a static_response.
 func staticOnly(route map[string]any) bool {
 	handlers, _ := route["handle"].([]any)
@@ -161,7 +187,11 @@ func (a *App) liveDrift(ctx context.Context, s *state.State) (Drift, error) {
 		}
 		return Drift{}, fmt.Errorf("read live caddy config: %w", err)
 	}
-	return compareConfig(s, live, a.buildConfig(s))
+	desired, err := a.buildConfig(s)
+	if err != nil {
+		return Drift{}, err
+	}
+	return compareConfig(s, live, desired)
 }
 
 // SyncReport is the outcome of Sync.
@@ -184,7 +214,11 @@ func (a *App) reconcileLocked(ctx context.Context, s *state.State) (SyncReport, 
 	if d.InSync {
 		return rep, nil
 	}
-	if err := a.caddy.Load(ctx, a.buildConfig(s)); err != nil {
+	cfg, err := a.buildConfig(s)
+	if err != nil {
+		return rep, err
+	}
+	if err := a.caddy.Load(ctx, cfg); err != nil {
 		if errors.Is(err, caddyapi.ErrUnreachable) {
 			return rep, fmt.Errorf("%w: %v", ErrCaddyNotRunning, err)
 		}

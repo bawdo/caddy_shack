@@ -153,6 +153,133 @@ func assertJSONMatchesGolden(t *testing.T, got []byte, name string) {
 	}
 }
 
+func TestBuildWithNoCertsIsUnchanged(t *testing.T) {
+	s := &state.State{
+		SchemaVersion: state.SchemaVersion,
+		Backends: map[string]state.Backend{
+			"hello": {Domain: "hello.test", Upstream: "host.docker.internal:3000"},
+		},
+		Certs: map[string]state.Cert{},
+	}
+	got := Build(s)
+
+	var cfg map[string]any
+	if err := json.Unmarshal(got, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	tlsApp := cfg["apps"].(map[string]any)["tls"].(map[string]any)
+	if _, present := tlsApp["certificates"]; present {
+		t.Error("with no certs, the config must not carry a certificates block")
+	}
+}
+
+func TestBuildLoadsCertPEMAndExcludesItsSubjects(t *testing.T) {
+	s := &state.State{
+		SchemaVersion: state.SchemaVersion,
+		Backends: map[string]state.Backend{
+			"hello": {Domain: "hello.test", Upstream: "host.docker.internal:3000"},
+			"web":   {Domain: "alpha.arrix.dev", Upstream: "host.docker.internal:5173"},
+		},
+		Certs: map[string]state.Cert{},
+	}
+	certs := []LoadedCert{{
+		Subjects: []string{"alpha.arrix.dev", "*.alpha.arrix.dev"},
+		CertPEM:  "-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----\n",
+		KeyPEM:   "-----BEGIN EC PRIVATE KEY-----\nKEY\n-----END EC PRIVATE KEY-----\n",
+	}}
+	got := BuildWith(s, Options{Certs: certs})
+
+	var cfg map[string]any
+	if err := json.Unmarshal(got, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	tlsApp := cfg["apps"].(map[string]any)["tls"].(map[string]any)
+
+	loadPEM, ok := tlsApp["certificates"].(map[string]any)["load_pem"].([]any)
+	if !ok || len(loadPEM) != 1 {
+		t.Fatalf("expected exactly one load_pem entry, got %v", tlsApp["certificates"])
+	}
+	entry := loadPEM[0].(map[string]any)
+	if entry["certificate"] != certs[0].CertPEM {
+		t.Errorf("certificate = %q, want the chain PEM verbatim", entry["certificate"])
+	}
+	if entry["key"] != certs[0].KeyPEM {
+		t.Errorf("key = %q, want the key PEM verbatim", entry["key"])
+	}
+
+	// The internal issuer must not claim the LE subjects, or Caddy would
+	// mint an internal certificate that shadows the loaded one.
+	policies := tlsApp["automation"].(map[string]any)["policies"].([]any)
+	subjects := policies[0].(map[string]any)["subjects"].([]any)
+	for _, sub := range subjects {
+		if sub == "alpha.arrix.dev" || sub == "*.alpha.arrix.dev" {
+			t.Errorf("internal policy must not claim %q, it has a loaded certificate", sub)
+		}
+	}
+	// The .test subjects must still be there.
+	var sawTest bool
+	for _, sub := range subjects {
+		if sub == "hello.test" {
+			sawTest = true
+		}
+	}
+	if !sawTest {
+		t.Error("internal policy lost hello.test")
+	}
+}
+
+func TestBuildKeepsRoutesForCertCoveredDomains(t *testing.T) {
+	s := &state.State{
+		SchemaVersion: state.SchemaVersion,
+		Backends: map[string]state.Backend{
+			"web": {Domain: "alpha.arrix.dev", Upstream: "host.docker.internal:5173"},
+		},
+		Certs: map[string]state.Cert{},
+	}
+	certs := []LoadedCert{{
+		Subjects: []string{"alpha.arrix.dev", "*.alpha.arrix.dev"},
+		CertPEM:  "cert", KeyPEM: "key",
+	}}
+	got := BuildWith(s, Options{Certs: certs})
+
+	var cfg map[string]any
+	if err := json.Unmarshal(got, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	routes := cfg["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)["srv0"].(map[string]any)["routes"].([]any)
+	if len(routes) != 2 {
+		t.Fatalf("expected exact + wildcard routes, got %d", len(routes))
+	}
+}
+
+func TestBuildOmitsAutomationPolicyWhenEveryDomainHasACert(t *testing.T) {
+	s := &state.State{
+		SchemaVersion: state.SchemaVersion,
+		Backends: map[string]state.Backend{
+			"web": {Domain: "alpha.arrix.dev", Upstream: "host.docker.internal:5173"},
+		},
+		Certs: map[string]state.Cert{},
+	}
+	certs := []LoadedCert{{
+		Subjects: []string{"alpha.arrix.dev", "*.alpha.arrix.dev"},
+		CertPEM:  "cert", KeyPEM: "key",
+	}}
+	got := BuildWith(s, Options{Certs: certs})
+
+	var cfg map[string]any
+	if err := json.Unmarshal(got, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	tlsApp := cfg["apps"].(map[string]any)["tls"].(map[string]any)
+	automation, present := tlsApp["automation"]
+	if present {
+		policies := automation.(map[string]any)["policies"]
+		if policies != nil && len(policies.([]any)) != 0 {
+			t.Errorf("a policy with no subjects would make Caddy manage every hostname; got %v", policies)
+		}
+	}
+}
+
 var testRelay = &HostRelay{
 	Host:       "host.docker.internal",
 	Dial:       "unix//run/caddy_shack/relay.sock",
@@ -229,6 +356,107 @@ func TestBuildWithHostRelayReroutesOnlyHostMode(t *testing.T) {
 		default:
 			t.Errorf("unexpected route %s", host)
 		}
+	}
+}
+
+// internalPolicySubjects extracts the internal issuer's automation policy
+// subjects from a Build result, or nil if there is no policy at all.
+func internalPolicySubjects(t *testing.T, got []byte) []string {
+	t.Helper()
+	var cfg map[string]any
+	if err := json.Unmarshal(got, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	tlsApp := cfg["apps"].(map[string]any)["tls"].(map[string]any)
+	automation, present := tlsApp["automation"]
+	if !present {
+		return nil
+	}
+	policiesAny, ok := automation.(map[string]any)["policies"].([]any)
+	if !ok || len(policiesAny) == 0 {
+		return nil
+	}
+	subjectsAny := policiesAny[0].(map[string]any)["subjects"].([]any)
+	subjects := make([]string, 0, len(subjectsAny))
+	for _, s := range subjectsAny {
+		subjects = append(subjects, s.(string))
+	}
+	return subjects
+}
+
+func containsSubject(subjects []string, want string) bool {
+	for _, s := range subjects {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestBuildParentWildcardCoversSubdomainButNotItsOwnWildcard pins the fix for
+// a defect found in review: a wildcard certificate (*.alpha.arrix.dev) covers
+// a plain subdomain registered as its own backend (vite.alpha.arrix.dev), but
+// does not cover that subdomain's own wildcard (*.vite.alpha.arrix.dev),
+// because a Caddy `*` matches exactly one label. Both alpha.arrix.dev and
+// vite.alpha.arrix.dev must be withheld from the internal issuer, while
+// *.vite.alpha.arrix.dev must still be minted internally, and the unrelated
+// .test backend must be untouched.
+func TestBuildParentWildcardCoversSubdomainButNotItsOwnWildcard(t *testing.T) {
+	s := &state.State{
+		SchemaVersion: state.SchemaVersion,
+		Backends: map[string]state.Backend{
+			"hello": {Domain: "hello.test", Upstream: "host.docker.internal:3000"},
+			"root":  {Domain: "alpha.arrix.dev", Upstream: "host.docker.internal:4000"},
+			"vite":  {Domain: "vite.alpha.arrix.dev", Upstream: "host.docker.internal:5173"},
+		},
+		Certs: map[string]state.Cert{},
+	}
+	certs := []LoadedCert{{
+		Subjects: []string{"alpha.arrix.dev", "*.alpha.arrix.dev"},
+		CertPEM:  "cert", KeyPEM: "key",
+	}}
+	got := BuildWith(s, Options{Certs: certs})
+
+	subjects := internalPolicySubjects(t, got)
+
+	for _, notWant := range []string{"alpha.arrix.dev", "*.alpha.arrix.dev", "vite.alpha.arrix.dev"} {
+		if containsSubject(subjects, notWant) {
+			t.Errorf("internal policy must not claim %q, it has a loaded certificate; got %v", notWant, subjects)
+		}
+	}
+	if !containsSubject(subjects, "*.vite.alpha.arrix.dev") {
+		t.Errorf("internal policy must still mint *.vite.alpha.arrix.dev, the parent wildcard does not cover it; got %v", subjects)
+	}
+	if !containsSubject(subjects, "hello.test") {
+		t.Errorf("internal policy lost the unrelated hello.test backend; got %v", subjects)
+	}
+}
+
+// TestBuildParentWildcardDoesNotCoverTwoLevelsDown pins that a single-label
+// wildcard cert never covers a two-label-deep subdomain: Caddy's `*` matches
+// exactly one label, so *.alpha.arrix.dev cannot serve a.b.alpha.arrix.dev.
+func TestBuildParentWildcardDoesNotCoverTwoLevelsDown(t *testing.T) {
+	s := &state.State{
+		SchemaVersion: state.SchemaVersion,
+		Backends: map[string]state.Backend{
+			"hello": {Domain: "hello.test", Upstream: "host.docker.internal:3000"},
+			"deep":  {Domain: "a.b.alpha.arrix.dev", Upstream: "host.docker.internal:6000"},
+		},
+		Certs: map[string]state.Cert{},
+	}
+	certs := []LoadedCert{{
+		Subjects: []string{"alpha.arrix.dev", "*.alpha.arrix.dev"},
+		CertPEM:  "cert", KeyPEM: "key",
+	}}
+	got := BuildWith(s, Options{Certs: certs})
+
+	subjects := internalPolicySubjects(t, got)
+
+	if !containsSubject(subjects, "a.b.alpha.arrix.dev") {
+		t.Errorf("internal policy must still mint a.b.alpha.arrix.dev, *.alpha.arrix.dev does not reach two labels down; got %v", subjects)
+	}
+	if !containsSubject(subjects, "hello.test") {
+		t.Errorf("internal policy lost the unrelated hello.test backend; got %v", subjects)
 	}
 }
 
@@ -408,5 +636,55 @@ func TestBuildLANServersDisableHTTP3(t *testing.T) {
 	}
 	if _, ok := servers["srv0"]["protocols"]; ok {
 		t.Error("srv0 must not set protocols")
+	}
+}
+
+func TestBuildWithCertsKeepsLANServersIntact(t *testing.T) {
+	certs := []LoadedCert{{
+		Subjects: []string{"alpha.arrix.dev", "*.alpha.arrix.dev"},
+		CertPEM:  "CERT",
+		KeyPEM:   "KEY",
+	}}
+	plain := decodeLAN(t, Build(lanState()))
+	withCerts := decodeLAN(t, BuildWith(lanState(), Options{Certs: certs}))
+	if !reflect.DeepEqual(plain, withCerts) {
+		t.Errorf("loading a certificate for an unrelated domain changed the LAN servers\nwithout: %+v\nwith:    %+v", plain, withCerts)
+	}
+}
+
+func TestBuildWithheldLANNamesCoveredByCert(t *testing.T) {
+	certs := []LoadedCert{{
+		Subjects: []string{"arrix.home.lan", "*.arrix.home.lan"},
+		CertPEM:  "CERT",
+		KeyPEM:   "KEY",
+	}}
+	subjects := internalPolicySubjects(t, BuildWith(lanState(), Options{Certs: certs}))
+
+	if containsSubject(subjects, "gamma.arrix.home.lan") {
+		t.Errorf("a LAN name covered by a loaded wildcard must not go to the internal issuer; got %v", subjects)
+	}
+	if !containsSubject(subjects, "*.gamma.arrix.home.lan") {
+		t.Errorf("*.gamma.arrix.home.lan is two labels below the cert's wildcard and still needs the internal issuer; got %v", subjects)
+	}
+	if !containsSubject(subjects, "gamma.arrix.test") {
+		t.Errorf("internal policy lost the .test name; got %v", subjects)
+	}
+}
+
+func TestBuildOmitsPolicyWhenOnlyLANNamesAllCovered(t *testing.T) {
+	s := &state.State{
+		SchemaVersion: state.SchemaVersion,
+		Backends:      map[string]state.Backend{},
+		LAN:           &state.LAN{Enabled: true, IP: "192.168.1.20", Mode: state.LANModeDiscovered, Suffix: "arrix.dev"},
+	}
+	// An empty subjects list means "every hostname" to Caddy, so with every
+	// name covered there must be no internal policy at all.
+	s.Backends["gamma"] = state.Backend{Domain: "gamma.arrix.dev", Upstream: "gamma:3000", LANDomain: "lan.arrix.dev"}
+	certs := []LoadedCert{
+		{Subjects: []string{"gamma.arrix.dev", "*.gamma.arrix.dev"}, CertPEM: "A", KeyPEM: "A"},
+		{Subjects: []string{"lan.arrix.dev", "*.lan.arrix.dev"}, CertPEM: "B", KeyPEM: "B"},
+	}
+	if subjects := internalPolicySubjects(t, BuildWith(s, Options{Certs: certs})); len(subjects) != 0 {
+		t.Errorf("every name is covered, so no internal policy should exist; got %v", subjects)
 	}
 }

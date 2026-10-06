@@ -864,6 +864,9 @@ func DriftDetail(d Drift) []string {
 	if len(d.Unknown) > 0 {
 		out = append(out, "live but not registered: "+strings.Join(d.Unknown, ", "))
 	}
+	if d.CertsDiffer {
+		out = append(out, "loaded certificates differ from the certificate store")
+	}
 	if len(out) == 0 {
 		out = append(out, "live config differs from what the registry renders")
 	}

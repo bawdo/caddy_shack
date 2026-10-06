@@ -100,7 +100,7 @@ func (f *fixture) syncLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load state: %v", err)
 	}
-	f.setLive(string(f.app.buildConfig(s)))
+	f.setLive(string(mustBuildConfig(t, f.app, s)))
 }
 
 // loads returns how many POST /load requests the stub has received.

@@ -110,10 +110,18 @@ func (a *App) caddyOptions() caddyapi.Options {
 	}}
 }
 
-// buildConfig renders the Caddy config for s on this engine. Every push to
-// Caddy and the drift check go through here so they cannot disagree.
-func (a *App) buildConfig(s *state.State) []byte {
-	return caddyapi.BuildWith(s, a.caddyOptions())
+// buildConfig renders the Caddy config for s on this engine, with the
+// externally-issued certificates s records. Every push to Caddy and the drift
+// check go through here so they cannot disagree, and so no push can drop a
+// loaded certificate out of the running Caddy.
+func (a *App) buildConfig(s *state.State) ([]byte, error) {
+	certs, err := a.loadedCerts(s)
+	if err != nil {
+		return nil, err
+	}
+	opts := a.caddyOptions()
+	opts.Certs = certs
+	return caddyapi.BuildWith(s, opts), nil
 }
 
 // ensureRelay makes the relay container exist, match its spec, and run, on

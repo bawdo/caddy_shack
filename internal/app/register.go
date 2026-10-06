@@ -167,18 +167,32 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 // state write then fails, Caddy is rolled back to prev so the two don't
 // diverge; if that rollback fails too, the error says so.
 func (a *App) commit(ctx context.Context, prev, updated *state.State) error {
-	if err := a.caddy.Load(ctx, a.buildConfig(updated)); err != nil {
+	cfg, err := a.buildConfig(updated)
+	if err != nil {
+		return err
+	}
+	if err := a.caddy.Load(ctx, cfg); err != nil {
 		if errors.Is(err, caddyapi.ErrUnreachable) {
 			return fmt.Errorf("%w: %v", ErrCaddyNotRunning, err)
 		}
 		return err
 	}
 	if err := state.Save(a.paths.StatePath, updated); err != nil {
-		if rbErr := a.caddy.Load(ctx, a.buildConfig(prev)); rbErr != nil {
+		rbErr := a.loadPrev(ctx, prev)
+		if rbErr != nil {
 			return fmt.Errorf("save state: %w; caddy now serves the change but the registry does not have it, "+
 				"and rolling caddy back failed (%v); fix the state file, then run 'caddy_shack sync'", err, rbErr)
 		}
 		return fmt.Errorf("save state: %w (caddy rolled back to the registry)", err)
 	}
 	return nil
+}
+
+// loadPrev pushes the config for prev, for rolling Caddy back.
+func (a *App) loadPrev(ctx context.Context, prev *state.State) error {
+	cfg, err := a.buildConfig(prev)
+	if err != nil {
+		return err
+	}
+	return a.caddy.Load(ctx, cfg)
 }

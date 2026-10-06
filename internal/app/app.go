@@ -6,7 +6,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/bawdo/caddy_shack/internal/acme"
 	"github.com/bawdo/caddy_shack/internal/caddyapi"
+	"github.com/bawdo/caddy_shack/internal/certstore"
 	"github.com/bawdo/caddy_shack/internal/docker"
 )
 
@@ -82,6 +84,8 @@ type App struct {
 	inst   Instance
 	caddy  *caddyapi.Client
 	docker docker.Client
+	certs  *certstore.Store
+	issuer acme.Issuer
 	// notices receives advisory messages (engine fallbacks, recreate
 	// announcements, "run install" hints). Defaults to stderr.
 	notices io.Writer
@@ -116,7 +120,16 @@ func NewForInstance(p Paths, inst Instance, caddy *caddyapi.Client, dock docker.
 	if dock == nil {
 		dock = docker.NewCLI()
 	}
-	return &App{paths: p, inst: inst, caddy: caddy, docker: dock, notices: os.Stderr, lan: systemLANResolver{}}
+	return &App{
+		paths:   p,
+		inst:    inst,
+		caddy:   caddy,
+		docker:  dock,
+		certs:   certstore.New(p.CertStoreDir),
+		issuer:  acme.NewLegoIssuer(),
+		notices: os.Stderr,
+		lan:     systemLANResolver{},
+	}
 }
 
 // notef writes one advisory message to the notices writer.
