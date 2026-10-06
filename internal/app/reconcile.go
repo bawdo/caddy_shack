@@ -231,10 +231,14 @@ func (a *App) requireRunning() error {
 	return nil
 }
 
+// stateLockTimeout is how long acquireStateLock waits for another holder. A
+// variable so tests can shorten it.
+var stateLockTimeout = 5 * time.Second
+
 // acquireStateLock takes the state lock with the documented 5s timeout,
 // mapping contention to ErrLockContention (exit 8).
 func acquireStateLock(path string) (*state.Lock, error) {
-	lock, err := state.AcquireLock(path, 5*time.Second)
+	lock, err := state.AcquireLock(path, stateLockTimeout)
 	if err != nil {
 		if errors.Is(err, state.ErrLockTimeout) {
 			return nil, fmt.Errorf("%w: %v", ErrLockContention, err)

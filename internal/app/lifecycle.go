@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/bawdo/caddy_shack/internal/docker"
+	"github.com/bawdo/caddy_shack/internal/state"
 )
 
 // Start starts the existing CaddyShack container, or confirms it is running,
@@ -82,13 +83,25 @@ func (a *App) stopLANIfConfigured() error {
 
 // Restart stops then starts. Tolerates absent (returns ErrNotInstalled). In
 // between, a discovered LAN IP is looked up again so a move to another
-// network is followed.
+// network is followed. Rediscovery never stops the start: its failure is a
+// notice, and it is skipped (without taking the state lock) unless a
+// lock-free read shows LAN mode on in discovered mode.
 func (a *App) Restart(ctx context.Context) error {
 	if err := a.Stop(); err != nil {
 		return err
 	}
-	if err := a.rediscoverLAN(); err != nil {
-		return err
+	if a.wantsRediscovery() {
+		if err := a.rediscoverLAN(); err != nil {
+			a.notef("notice: could not rediscover the LAN IP: %v\n", err)
+		}
 	}
 	return a.Start(ctx)
+}
+
+// wantsRediscovery reports, from a lock-free read of state, whether LAN mode
+// is on with a discovered address. An unreadable state means no: Start then
+// reports it.
+func (a *App) wantsRediscovery() bool {
+	s, err := loadState(a.paths.StatePath)
+	return err == nil && s.LANEnabled() && s.LAN.Mode == state.LANModeDiscovered
 }

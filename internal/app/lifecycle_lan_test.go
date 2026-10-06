@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bawdo/caddy_shack/internal/docker"
 	"github.com/bawdo/caddy_shack/internal/state"
@@ -273,5 +275,72 @@ func TestLifecycleNoLANUnchanged(t *testing.T) {
 	}
 	if !reflect.DeepEqual(rec.calls, want) {
 		t.Errorf("restart: %v", rec.calls)
+	}
+}
+
+// shortLockTimeout makes a held state lock fail fast instead of after the
+// production timeout.
+func shortLockTimeout(t *testing.T) {
+	t.Helper()
+	old := stateLockTimeout
+	stateLockTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { stateLockTimeout = old })
+}
+
+// Rediscovery runs between Stop and Start, so its failure must never leave
+// Caddy stopped.
+func TestRestartStartsCaddyWhenStateLockHeld(t *testing.T) {
+	f := lanFixture(t, discovered("192.168.1.50"))
+	saveLAN(t, f, "192.168.1.12", state.LANModeDiscovered)
+	shortLockTimeout(t)
+	lock, err := state.AcquireLock(f.statePath+".lock", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Release() }()
+	buf := notices(f)
+	_ = f.app.Restart(context.Background())
+	d := f.app.docker.(*docker.Fake)
+	if d.Containers[CaddyContainerName] != docker.StateRunning {
+		t.Errorf("caddy left %v after restart", d.Containers[CaddyContainerName])
+	}
+	if !strings.Contains(buf.String(), "could not rediscover the LAN IP") {
+		t.Errorf("notice: %q", buf.String())
+	}
+}
+
+func TestRestartStartsCaddyWhenStateCorrupt(t *testing.T) {
+	f := lanFixture(t, discovered("192.168.1.50"))
+	if err := os.WriteFile(f.statePath, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := f.app.Restart(context.Background())
+	if !errors.Is(err, ErrStateCorrupt) {
+		t.Errorf("want Start's ErrStateCorrupt, got %v", err)
+	}
+	d := f.app.docker.(*docker.Fake)
+	if d.Containers[CaddyContainerName] != docker.StateRunning {
+		t.Errorf("caddy left %v after restart", d.Containers[CaddyContainerName])
+	}
+}
+
+// Without discovered LAN settings rediscovery is skipped without taking the
+// state lock, so a held lock does not delay the restart.
+func TestRestartSkipsRediscoveryWithoutDiscoveredLAN(t *testing.T) {
+	f := lanFixture(t, discovered("192.168.1.50"))
+	saveLAN(t, f, "192.168.1.12", state.LANModePinned)
+	shortLockTimeout(t)
+	lock, err := state.AcquireLock(f.statePath+".lock", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Release() }()
+	buf := notices(f)
+	_ = f.app.Restart(context.Background())
+	if strings.Contains(buf.String(), "rediscover") {
+		t.Errorf("pinned mode tried to rediscover: %q", buf.String())
+	}
+	if d := f.app.docker.(*docker.Fake); d.Containers[CaddyContainerName] != docker.StateRunning {
+		t.Errorf("caddy left %v after restart", d.Containers[CaddyContainerName])
 	}
 }
