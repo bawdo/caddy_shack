@@ -375,7 +375,7 @@ Stable contract, documented under `caddy_shack --help`:
 7  state file corrupt
 8  state lock held by another caddy_shack process
 9  status only: Caddy is up but its live config does not match the registry
-10 LAN mode not enabled (lan commands, or register with --lan / --lan-domain)
+10 LAN mode not enabled (register with --lan or --lan-domain)
 ```
 
 ### Quick smoke test
@@ -509,9 +509,12 @@ How `restart` treats the LAN address depends on how you enabled it:
 - Pinned (`--ip`): `restart` never changes the IP. If it has gone away, LAN is
   reported as down until it returns.
 
-LAN being down (the IP is missing or the forwarder cannot bind) is a notice,
-not an error: `start`, `restart`, `sync`, `install` and `upgrade` still exit 0
-and `.test` keeps working.
+LAN being down is a notice, not an error: whether the IP is missing or the
+forwarder cannot be started (say another process already holds the IP and
+port), `start`, `restart`, `sync`, `install` and `upgrade` print a notice
+naming the problem, still exit 0, and `.test` keeps working. Run
+`caddy_shack doctor` for the details. `lan enable` is the exception: there a
+failed bind exits 1.
 
 ### Status and doctor
 
