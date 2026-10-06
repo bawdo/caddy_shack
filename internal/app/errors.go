@@ -14,10 +14,12 @@ var (
 	ErrLockContention    = errors.New("state lock held by another process")
 	ErrUnhealthy         = errors.New("caddy_shack is unhealthy")
 	ErrDrift             = errors.New("live caddy config does not match the registry; run 'caddy_shack sync'")
+	ErrLANDown           = errors.New("LAN IP is not present on any interface")
+	ErrLANDisabled       = errors.New("LAN mode is not enabled; run 'caddy_shack lan enable' first")
 )
 
 // ExitCode maps an error to the documented exit codes.
-// 0 = nil, 1 = generic failure, 2-9 = specific sentinels.
+// 0 = nil, 1 = generic failure, 2-10 = specific sentinels.
 func ExitCode(err error) int {
 	switch {
 	case err == nil:
@@ -38,6 +40,8 @@ func ExitCode(err error) int {
 		return 8
 	case errors.Is(err, ErrDrift):
 		return 9
+	case errors.Is(err, ErrLANDisabled):
+		return 10
 	default:
 		return 1
 	}

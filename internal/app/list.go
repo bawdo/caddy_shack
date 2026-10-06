@@ -25,6 +25,7 @@ const listLiveTimeout = 2 * time.Second
 type Listing struct {
 	Name         string `json:"name"`
 	Domain       string `json:"domain"`
+	LANDomain    string `json:"lan_domain,omitempty"`
 	Upstream     string `json:"upstream"`
 	RegisteredAt string `json:"registered_at"`
 	// Live says whether Caddy is actually serving the backend. The
@@ -69,7 +70,7 @@ func (a *App) List(ctx context.Context) ([]Listing, error) {
 			live = LiveStale
 		}
 		out = append(out, Listing{
-			Name: n, Domain: b.Domain, Upstream: b.Upstream, RegisteredAt: b.RegisteredAt, Live: live,
+			Name: n, Domain: b.Domain, LANDomain: b.LANDomain, Upstream: b.Upstream, RegisteredAt: b.RegisteredAt, Live: live,
 		})
 	}
 	return out, nil

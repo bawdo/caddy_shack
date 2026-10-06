@@ -285,6 +285,12 @@ func parseContainerInfo(out []byte) (ContainerInfo, error) {
 		HostConfig struct {
 			NetworkMode string
 			ExtraHosts  []string
+			// PortBindings is keyed "<container port>/<proto>"; docker
+			// reports HostIp and HostPort as strings.
+			PortBindings map[string][]struct {
+				HostIp   string
+				HostPort string
+			}
 		}
 		Mounts []struct {
 			Type        string
@@ -312,5 +318,19 @@ func parseContainerInfo(out []byte) (ContainerInfo, error) {
 		info.Networks = append(info.Networks, n)
 	}
 	sort.Strings(info.Networks)
+	for key, bindings := range raw.HostConfig.PortBindings {
+		cport, err := strconv.Atoi(strings.SplitN(key, "/", 2)[0])
+		if err != nil {
+			continue
+		}
+		for _, b := range bindings {
+			hport, err := strconv.Atoi(b.HostPort)
+			if err != nil {
+				continue
+			}
+			info.Ports = append(info.Ports, PortMapping{HostAddr: b.HostIp, HostPort: hport, ContainerPort: cport})
+		}
+	}
+	SortPortMappings(info.Ports)
 	return info, nil
 }

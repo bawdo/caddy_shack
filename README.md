@@ -375,6 +375,7 @@ Stable contract, documented under `caddy_shack --help`:
 7  state file corrupt
 8  state lock held by another caddy_shack process
 9  status only: Caddy is up but its live config does not match the registry
+10 LAN mode not enabled (register with --lan or --lan-domain)
 ```
 
 ### Quick smoke test
@@ -412,6 +413,179 @@ caddy_shack doctor --no-backends  # skip per-backend reachability probes
 Doctor exits 1 if any check FAILs (or, in `--fix` mode, if any fix fails).
 DNS and trust-store fixes use `sudo`; you'll be prompted for your password
 unless `sudo` is already cached.
+
+## LAN exposure
+
+A backend can optionally get a second, LAN-facing name (e.g.
+`gamma.arrix.home.lan`) next to its `.test` name, so other devices on the
+local network can reach it. `.test` names stay reachable from this machine
+only.
+
+```
+ this machine                                   LAN device
+ ───────────                                    ──────────
+ https://gamma.arrix.test                       https://gamma.arrix.home.lan
+        │                                              │
+ 127.0.0.1:443 ─┐                           192.168.1.x:443 / :80
+ 127.0.0.1:80  ─┤ (published, as today)            │ (published)
+ 127.0.0.1:2019┘                                   ▼
+        │                               ┌──────────────────────┐
+        │                               │ caddy_shack_lan      │  haproxy, static config,
+        │                               │ TCP only, no TLS     │  adds PROXY v2 header
+        │                               └──────────┬───────────┘
+        │                     caddy_shack network  │ :8443 / :8080 (NOT published)
+        ▼                                          ▼
+ ┌──────────────────────────────────────────────────────────────┐
+ │ caddy_shack (main Caddy, unchanged container spec)           │
+ │  srv0     :443  routes: .test names           (as today)     │
+ │  srv-lan  :8443 routes: opted-in LAN names only, PROXY proto │
+ │  lan-http :8080 308 redirect → https://{host}{uri}           │
+ └───────────────────────┬──────────────────────────────────────┘
+                         ▼
+          same upstream (host relay / host.docker.internal / container alias)
+```
+
+- The LAN binding lives in its own container, `caddy_shack_lan`, not in the
+  main Caddy container. Docker refuses to start a container whose published
+  host IP no longer exists (verified on Docker Desktop for Mac and native
+  Docker Engine on Linux), so keeping it separate means a vanished LAN IP
+  only takes down LAN access, never the `.test` sites.
+- `.test` names are unreachable from the LAN by construction: the only path
+  in from the LAN is `srv-lan`, which holds routes for opted-in LAN names
+  only.
+- Port 80 on the LAN only ever redirects to HTTPS.
+- TLS terminates once, in the main Caddy, using the same local CA as `.test`.
+  LAN devices must trust that CA (see `caddy_shack ca`).
+- PROXY protocol v2 carries the client address the forwarder sees through to
+  Caddy. Whether backends then see the real LAN client IP depends on the
+  Docker engine (see the client IP caveat below).
+- On native Linux, Docker's published ports bypass ufw, so binding to the
+  LAN IP exposes the ports whatever ufw says.
+
+### Setting it up
+
+One-time setup, on the machine running Caddy:
+
+```
+caddy_shack lan enable --suffix arrix.home.lan
+```
+
+This discovers the machine's LAN IPv4 address, starts the `caddy_shack_lan`
+forwarder bound to it on ports 443 and 80, and asks for confirmation first
+(`--yes` skips the prompt). `--suffix` is required the first time and is kept
+afterwards. Neither the suffix nor any LAN name may be `test` or end in
+`.test`. Pass `--ip 192.168.1.20` to pin the address instead of discovering
+it. A failed bind exits 1.
+
+Then, for each backend you want on the LAN:
+
+```
+caddy_shack register gamma --port 3000 --lan                         # gamma.arrix.home.lan
+caddy_shack register gamma --port 3000 --lan-domain gamma.example.lan  # explicit name
+```
+
+`--lan` and `--lan-domain` are mutually exclusive. Registering again without
+either flag removes the LAN name. Both flags exit 10 if LAN mode is not enabled.
+
+Two things are needed on the other devices:
+
+- DNS: point a wildcard A record for `*.arrix.home.lan` (your suffix) at the
+  LAN IP, on your router or local DNS server. Alternatively, add an A record
+  for each LAN name.
+- Trust: LAN devices must trust the local CA, since TLS terminates in the main
+  Caddy using the same CA as `.test`. Export it with `caddy_shack ca` (see
+  above).
+
+To stop exposing, run `caddy_shack lan disable`. Your settings are kept, and
+`.test` names are unaffected. It still completes while Caddy is stopped: the
+state is saved and the Caddy config is updated on the next start.
+
+### Several machines on one network
+
+Each machine runs its own caddy_shack bound to its own LAN IP, so give each
+one its own suffix. LAN names then never clash, and DNS needs one wildcard
+record per machine rather than one record per service.
+
+On a Mac at `10.0.0.10`:
+
+```
+caddy_shack lan enable --suffix mac.home.lan
+caddy_shack register gamma --port 3000 --lan     # gamma.mac.home.lan
+```
+
+On a Raspberry Pi at `10.0.0.20`:
+
+```
+caddy_shack lan enable --suffix pi.home.lan
+caddy_shack register gamma --port 3000 --lan     # gamma.pi.home.lan
+```
+
+Then add one wildcard A record per machine to your local DNS:
+
+```
+*.mac.home.lan   A   10.0.0.10
+*.pi.home.lan    A   10.0.0.20
+```
+
+A wildcard covers exactly one label, so `gamma.mac.home.lan` matches
+`*.mac.home.lan` but `gamma.arrix.mac.home.lan` would need its own
+`*.arrix.mac.home.lan` record. A plain `mac.home.lan` record for the machine
+itself can sit alongside the wildcard.
+
+`--lan` builds the LAN name from the backend's name, so a backend called
+`arrix-gamma-ecs` becomes `arrix-gamma-ecs.mac.home.lan`. To get a shorter
+name, pass it explicitly (re-registering is a full upsert, so repeat the
+backend's other settings):
+
+```
+caddy_shack register arrix-gamma-ecs --container arrix-gamma-alb-proxy --port 80 \
+  --domain gamma.lan.arrix.dev --lan-domain gamma.mac.home.lan
+```
+
+Points to keep in mind:
+
+- Changing the suffix later (`lan enable --suffix ...` again) does not rename
+  existing LAN names. Re-register each backend to move it to the new suffix.
+- Each machine has its own local CA. A device that trusts the Mac's CA will
+  still warn on `*.pi.home.lan` until it also trusts the Pi's, so run
+  `caddy_shack ca` on each machine and install both roots on your devices.
+- The backend receives the LAN name as the `Host` header. Apps that check it
+  (Rails `config.hosts`, a proxy matching on hostname) must allow the new
+  name, or they reply with an error such as 403.
+
+### Restarts and IP changes
+
+How `restart` treats the LAN address depends on how you enabled it:
+
+- Discovered (no `--ip`): `restart` re-discovers the LAN IP and rebinds the
+  forwarder to it, so a change of network (say Ethernet to Wi-Fi) is picked up.
+- Pinned (`--ip`): `restart` never changes the IP. If it has gone away, LAN is
+  reported as down until it returns.
+
+LAN being down is a notice, not an error: whether the IP is missing or the
+forwarder cannot be started (say another process already holds the IP and
+port), `start`, `restart`, `sync`, `install` and `upgrade` print a notice
+naming the problem, still exit 0, and `.test` keeps working. Run
+`caddy_shack doctor` for the details. `lan enable` is the exception: there a
+failed bind exits 1.
+
+### Status and doctor
+
+`caddy_shack status` gains a LAN section showing the mode, address and
+forwarder state. `caddy_shack doctor` adds `lan-ip-present`, `lan-forwarder`,
+`lan-ip-drift`, `lan-path`, `lan-dns` and `lan-firewall`.
+
+### Caveats
+
+- Client IP on Docker Desktop: backends see Docker Desktop's VM address
+  (observed as `192.168.65.1`) in `X-Forwarded-For`, not the LAN client's IP.
+  On native Linux the real client IP is expected to come through, but this is
+  not yet confirmed.
+- ufw on native Linux: Docker's published ports bypass ufw, so a firewall rule
+  will not stop LAN access to the forwarder's ports.
+- State schema: LAN support moves `state.json` to schema 2. Older `caddy_shack`
+  binaries cannot read it and report it as corrupt (exit 7), so upgrade every
+  copy you use.
 
 ## Development
 

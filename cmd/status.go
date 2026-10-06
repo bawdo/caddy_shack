@@ -68,4 +68,28 @@ func renderStatus(w io.Writer, rep app.StatusReport, asJSON bool) {
 		_, _ = fmt.Fprintln(w, "config in sync:  unknown")
 	}
 	_, _ = fmt.Fprintf(w, "healthy:         %t\n", rep.Healthy)
+	renderStatusLAN(w, rep.LAN)
+}
+
+// renderStatusLAN writes the informational LAN block. It is purely
+// descriptive and never feeds into health or the exit code.
+func renderStatusLAN(w io.Writer, l *app.LANStatus) {
+	if l == nil {
+		return
+	}
+	if !l.Enabled {
+		_, _ = fmt.Fprintln(w, "LAN:        disabled")
+		return
+	}
+	_, _ = fmt.Fprintf(w, "LAN:        enabled (%s) %s, suffix %s\n", l.Mode, l.IP, l.Suffix)
+	if !l.IPPresent {
+		_, _ = fmt.Fprintf(w, "            %s is not on any interface\n", l.IP)
+	}
+	_, _ = fmt.Fprintf(w, "forwarder:  %s\n", l.ForwarderState)
+	if l.DiscoveredIP != "" {
+		_, _ = fmt.Fprintf(w, "drift:      interface now has %s, run caddy_shack restart\n", l.DiscoveredIP)
+	} else {
+		_, _ = fmt.Fprintln(w, "drift:      none")
+	}
+	_, _ = fmt.Fprintf(w, "backends:   %d with LAN names\n", l.LANBackends)
 }

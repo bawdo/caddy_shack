@@ -136,3 +136,45 @@ func TestRenderStatusJSONIncludesDrift(t *testing.T) {
 		t.Errorf("drift: %v", m["drift"])
 	}
 }
+
+func TestStatusLANTextOutput(t *testing.T) {
+	rep := app.StatusReport{
+		ContainerState: "running", AdminReachable: true, Healthy: true,
+		LAN: &app.LANStatus{Enabled: true, IP: "192.168.1.12", Mode: "discovered", Suffix: "arrix.home.lan",
+			IPPresent: true, ForwarderState: "running", LANBackends: 3},
+	}
+	var buf bytes.Buffer
+	renderStatus(&buf, rep, false)
+	out := buf.String()
+	for _, want := range []string{
+		"LAN:        enabled (discovered) 192.168.1.12, suffix arrix.home.lan\n",
+		"forwarder:  running\n",
+		"drift:      none\n",
+		"backends:   3 with LAN names\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q\nfull:\n%s", want, out)
+		}
+	}
+
+	rep.LAN.DiscoveredIP = "192.168.1.40"
+	buf.Reset()
+	renderStatus(&buf, rep, false)
+	if !strings.Contains(buf.String(), "drift:      interface now has 192.168.1.40, run caddy_shack restart\n") {
+		t.Errorf("drift line missing:\n%s", buf.String())
+	}
+
+	rep.LAN = &app.LANStatus{Enabled: false}
+	buf.Reset()
+	renderStatus(&buf, rep, false)
+	if !strings.Contains(buf.String(), "LAN:        disabled\n") {
+		t.Errorf("disabled line missing:\n%s", buf.String())
+	}
+
+	rep.LAN = nil
+	buf.Reset()
+	renderStatus(&buf, rep, false)
+	if strings.Contains(buf.String(), "LAN:") {
+		t.Errorf("unexpected LAN block:\n%s", buf.String())
+	}
+}

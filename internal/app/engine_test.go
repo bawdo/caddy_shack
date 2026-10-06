@@ -284,6 +284,7 @@ func TestSpecDrift(t *testing.T) {
 			{VolumeName: CaddyConfigVolume, ContainerPath: "/config"},
 		},
 		Command: native.Command,
+		Ports:   native.PortMappings,
 	}
 	if d := specDrift(native, legacy); len(d) != 2 {
 		t.Errorf("legacy container should lack add-host and relay volume, got %v", d)
@@ -313,7 +314,7 @@ func TestSpecDriftFlagsPreResumeCommand(t *testing.T) {
 		"exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"}
 	for _, hn := range []HostNetwork{{Kind: EngineLoopbackForwarded}, {Kind: EngineNativeLinux, Gateway: testGateway}} {
 		spec := caddyContainerSpec(DefaultInstance(), CaddyImage, hn)
-		info := docker.ContainerInfo{NetworkMode: "bridge", ExtraHosts: spec.ExtraHosts, Mounts: spec.Volumes, Command: preResume}
+		info := docker.ContainerInfo{NetworkMode: "bridge", ExtraHosts: spec.ExtraHosts, Mounts: spec.Volumes, Command: preResume, Ports: spec.PortMappings}
 		d := specDrift(spec, info)
 		if len(d) != 1 || d[0] != "outdated container command" {
 			t.Errorf("%s: want only the command flagged, got %v", hn.Kind, d)
@@ -348,5 +349,36 @@ func TestBuildConfigPerEngine(t *testing.T) {
 	}
 	if !strings.Contains(native, `"dial": "app:80"`) {
 		t.Error("container-mode route must be unchanged on native linux")
+	}
+}
+
+func TestSpecDriftPorts(t *testing.T) {
+	spec := docker.ContainerSpec{PortMappings: []docker.PortMapping{{HostAddr: "192.168.1.12", HostPort: 443, ContainerPort: 8443}}}
+	moved := docker.ContainerInfo{NetworkMode: "bridge", Ports: []docker.PortMapping{{HostAddr: "192.168.1.40", HostPort: 443, ContainerPort: 8443}}}
+	d := specDrift(spec, moved)
+	if len(d) != 1 || !strings.Contains(d[0], "port bindings") {
+		t.Errorf("moved address should report port drift, got %v", d)
+	}
+	same := docker.ContainerInfo{NetworkMode: "bridge", Ports: spec.PortMappings}
+	if d := specDrift(spec, same); len(d) != 0 {
+		t.Errorf("identical bindings should not drift: %v", d)
+	}
+	if d := specDrift(docker.ContainerSpec{}, moved); len(d) != 0 {
+		t.Errorf("a spec without ports never reports port drift: %v", d)
+	}
+}
+
+func TestCaddySpecHasNoPortDriftAgainstItself(t *testing.T) {
+	spec := caddyContainerSpec(DefaultInstance(), CaddyImage, HostNetwork{})
+	fake := docker.NewFake()
+	if err := fake.CreateAndStart(spec); err != nil {
+		t.Fatal(err)
+	}
+	info, err := fake.InspectContainer(spec.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := specDrift(spec, info); len(d) != 0 {
+		t.Errorf("caddy spec should not drift against itself: %v", d)
 	}
 }

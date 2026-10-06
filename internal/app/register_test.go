@@ -423,3 +423,189 @@ func TestDeregisterCascadeOnAbsentParentStillRemovesChildren(t *testing.T) {
 		t.Errorf("Cascaded: got %v want [bar.foo]", res.Cascaded)
 	}
 }
+
+// lanSeed saves a registry with LAN mode on (suffix arrix.home.lan) plus
+// the given backends.
+func lanSeed(t *testing.T, f *fixture, enabled bool, backends map[string]state.Backend) {
+	t.Helper()
+	s := &state.State{
+		Backends: backends,
+		LAN:      &state.LAN{Enabled: enabled, IP: "192.168.1.12", Mode: state.LANModePinned, Suffix: "arrix.home.lan"},
+	}
+	if err := state.Save(f.statePath, s); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func lanOf(t *testing.T, f *fixture, name string) string {
+	t.Helper()
+	s, err := state.Load(f.statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s.Backends[name].LANDomain
+}
+
+func TestRegisterLANUsesSuffix(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	lanSeed(t, f, true, nil)
+	if err := f.app.Register(context.Background(), RegisterInput{Name: "gamma", Port: 3000, LAN: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := lanOf(t, f, "gamma"); got != "gamma.arrix.home.lan" {
+		t.Errorf("LANDomain = %q", got)
+	}
+}
+
+func TestRegisterLANDottedName(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	lanSeed(t, f, true, nil)
+	if err := f.app.Register(context.Background(), RegisterInput{Name: "bar.gamma", Port: 3000, LAN: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := lanOf(t, f, "bar.gamma"); got != "bar.gamma.arrix.home.lan" {
+		t.Errorf("LANDomain = %q", got)
+	}
+}
+
+func TestRegisterLANDomainOverride(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	lanSeed(t, f, true, nil)
+	if err := f.app.Register(context.Background(), RegisterInput{Name: "gamma", Port: 3000, LANDomain: "app.example.lan"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := lanOf(t, f, "gamma"); got != "app.example.lan" {
+		t.Errorf("LANDomain = %q", got)
+	}
+}
+
+func TestRegisterLANWhenDisabled(t *testing.T) {
+	for _, in := range []RegisterInput{
+		{Name: "gamma", Port: 3000, LAN: true},
+		{Name: "gamma", Port: 3000, LANDomain: "g.example.lan"},
+	} {
+		f := newFixture(t, http.StatusOK)
+		lanSeed(t, f, false, map[string]state.Backend{
+			"other": {Domain: "other.test", Upstream: "host.docker.internal:1", LANDomain: "other.arrix.home.lan"},
+		})
+		err := f.app.Register(context.Background(), in)
+		if !errors.Is(err, ErrLANDisabled) || ExitCode(err) != 10 {
+			t.Fatalf("want ErrLANDisabled exit 10, got %v", err)
+		}
+		if got := lanOf(t, f, "other"); got != "other.arrix.home.lan" {
+			t.Errorf("other LANDomain touched: %q", got)
+		}
+		if f.loads() != 0 {
+			t.Error("caddy was loaded")
+		}
+	}
+}
+
+func TestRegisterLANDomainRejectsTest(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	lanSeed(t, f, true, nil)
+	for _, bad := range []string{"foo.test", "test"} {
+		err := f.app.Register(context.Background(), RegisterInput{Name: "gamma", Port: 3000, LANDomain: bad})
+		if !errors.Is(err, ErrInvalidArgs) {
+			t.Errorf("%q: want ErrInvalidArgs, got %v", bad, err)
+		}
+	}
+}
+
+func TestRegisterLANConflictAcrossSpaces(t *testing.T) {
+	const lan = "gamma.arrix.home.lan"
+	ctx := context.Background()
+
+	// Existing backend owns the name as its Domain; new one wants it as LAN.
+	f := newFixture(t, http.StatusOK)
+	lanSeed(t, f, true, map[string]state.Backend{"a": {Domain: lan, Upstream: "host.docker.internal:1"}})
+	err := f.app.Register(ctx, RegisterInput{Name: "b", Port: 2, LANDomain: lan})
+	if !errors.Is(err, ErrDomainConflict) {
+		t.Errorf("lan vs domain: got %v", err)
+	}
+
+	// Existing backend owns it as LANDomain; new one wants it as Domain.
+	f = newFixture(t, http.StatusOK)
+	lanSeed(t, f, true, map[string]state.Backend{"a": {Domain: "a.test", Upstream: "host.docker.internal:1", LANDomain: lan}})
+	err = f.app.Register(ctx, RegisterInput{Name: "b", Port: 2, Domain: lan})
+	if !errors.Is(err, ErrDomainConflict) {
+		t.Errorf("domain vs lan: got %v", err)
+	}
+
+	// Duplicate LANDomain.
+	err = f.app.Register(ctx, RegisterInput{Name: "c", Port: 3, LANDomain: lan})
+	if !errors.Is(err, ErrDomainConflict) {
+		t.Errorf("lan vs lan: got %v", err)
+	}
+
+	// Own row is excluded.
+	if err := f.app.Register(ctx, RegisterInput{Name: "a", Port: 1, LANDomain: lan}); err != nil {
+		t.Errorf("own row conflicted: %v", err)
+	}
+}
+
+func TestRegisterWithoutLANClearsIt(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	lanSeed(t, f, true, nil)
+	ctx := context.Background()
+	if err := f.app.Register(ctx, RegisterInput{Name: "gamma", Port: 3000, LAN: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.app.Register(ctx, RegisterInput{Name: "gamma", Port: 3000}); err != nil {
+		t.Fatal(err)
+	}
+	if got := lanOf(t, f, "gamma"); got != "" {
+		t.Errorf("LANDomain = %q, want empty", got)
+	}
+}
+
+func TestRegisterBothFlagsInvalid(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	err := f.app.Register(context.Background(), RegisterInput{Name: "gamma", Port: 3000, LAN: true, LANDomain: "x.lan"})
+	if !errors.Is(err, ErrInvalidArgs) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRegisterRejectsOwnDomainAsOwnLANDomain(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	lanSeed(t, f, true, nil)
+	err := f.app.Register(context.Background(), RegisterInput{Name: "gamma", Port: 3000, Domain: "gamma.example.lan", LANDomain: "gamma.example.lan"})
+	if !errors.Is(err, ErrDomainConflict) || ExitCode(err) != 3 {
+		t.Fatalf("want ErrDomainConflict exit 3, got %v", err)
+	}
+	if f.loads() != 0 {
+		t.Error("caddy was loaded")
+	}
+}
+
+// --lan builds the name from the backend name and the suffix, so it must be
+// validated too: a long dotted name can push it past 253 characters.
+func TestRegisterLANValidatesResolvedName(t *testing.T) {
+	label := strings.Repeat("a", 31)
+	long := strings.Join([]string{label, label, label, label, label, label, label, label}, ".")
+	for _, in := range []RegisterInput{
+		{Name: long, Port: 3000, LAN: true},
+		{Name: "gamma-", Port: 3000, LAN: true},
+		{Name: "gamma", Port: 3000, LANDomain: long + ".arrix.home.lan"},
+	} {
+		f := newFixture(t, http.StatusOK)
+		lanSeed(t, f, true, nil)
+		err := f.app.Register(context.Background(), in)
+		if !errors.Is(err, ErrInvalidArgs) {
+			t.Errorf("%+v: want ErrInvalidArgs, got %v", in, err)
+		}
+		if f.loads() != 0 {
+			t.Errorf("%+v: caddy was loaded", in)
+		}
+	}
+}
+
+func TestRegisterLANDisabledMessageSaysRemedyOnce(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	lanSeed(t, f, false, nil)
+	err := f.app.Register(context.Background(), RegisterInput{Name: "gamma", Port: 3000, LAN: true})
+	if n := strings.Count(err.Error(), "caddy_shack lan enable"); n != 1 {
+		t.Errorf("remedy appears %d times: %q", n, err)
+	}
+}

@@ -6,6 +6,12 @@ import (
 	"testing"
 )
 
+func TestExitCodeLANDisabled(t *testing.T) {
+	if got := ExitCode(ErrLANDisabled); got != 10 {
+		t.Errorf("got %d want 10", got)
+	}
+}
+
 func TestExitCodeMapping(t *testing.T) {
 	cases := []struct {
 		name string
@@ -22,6 +28,7 @@ func TestExitCodeMapping(t *testing.T) {
 		{"state corrupt", fmt.Errorf("wrap: %w", ErrStateCorrupt), 7},
 		{"lock contention", fmt.Errorf("wrap: %w", ErrLockContention), 8},
 		{"drift", fmt.Errorf("wrap: %w", ErrDrift), 9},
+		{"lan disabled", fmt.Errorf("wrap: %w", ErrLANDisabled), 10},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/bawdo/caddy_shack/internal/docker"
+	"github.com/bawdo/caddy_shack/internal/state"
 )
 
 // Start starts the existing CaddyShack container, or confirms it is running,
@@ -42,11 +43,12 @@ func (a *App) Start(ctx context.Context) error {
 	return a.restoreThenRelay(ctx)
 }
 
-// restoreThenRelay restores the registry into Caddy, then ensures the relay,
-// attempting both and reporting every failure.
+// restoreThenRelay restores the registry into Caddy, then ensures the relay
+// and the LAN forwarder, attempting all and reporting every failure. The
+// forwarder comes last so routes exist before LAN traffic can arrive.
 func (a *App) restoreThenRelay(ctx context.Context) error {
 	restoreErr := a.restoreBackends(ctx)
-	return errors.Join(restoreErr, a.ensureRelay())
+	return errors.Join(restoreErr, a.ensureRelay(), a.ensureLANFromState())
 }
 
 // Stop stops the CaddyShack container, and the native-Linux relay, if
@@ -64,13 +66,42 @@ func (a *App) Stop() error {
 			return err
 		}
 	}
-	return a.stopRelay()
+	if err := a.stopRelay(); err != nil {
+		return err
+	}
+	return a.stopLANIfConfigured()
 }
 
-// Restart stops then starts. Tolerates absent (returns ErrNotInstalled).
+// stopLANIfConfigured stops the forwarder when LAN settings exist. With none
+// Docker is not asked about it. An unreadable state still attempts the stop.
+func (a *App) stopLANIfConfigured() error {
+	if s, err := loadState(a.paths.StatePath); err == nil && s.LAN == nil {
+		return nil
+	}
+	return a.stopLAN()
+}
+
+// Restart stops then starts. Tolerates absent (returns ErrNotInstalled). In
+// between, a discovered LAN IP is looked up again so a move to another
+// network is followed. Rediscovery never stops the start: its failure is a
+// notice, and it is skipped (without taking the state lock) unless a
+// lock-free read shows LAN mode on in discovered mode.
 func (a *App) Restart(ctx context.Context) error {
 	if err := a.Stop(); err != nil {
 		return err
 	}
+	if a.wantsRediscovery() {
+		if err := a.rediscoverLAN(); err != nil {
+			a.notef("notice: could not rediscover the LAN IP: %v\n", err)
+		}
+	}
 	return a.Start(ctx)
+}
+
+// wantsRediscovery reports, from a lock-free read of state, whether LAN mode
+// is on with a discovered address. An unreadable state means no: Start then
+// reports it.
+func (a *App) wantsRediscovery() bool {
+	s, err := loadState(a.paths.StatePath)
+	return err == nil && s.LANEnabled() && s.LAN.Mode == state.LANModeDiscovered
 }

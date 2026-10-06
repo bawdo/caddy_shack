@@ -10,20 +10,41 @@ import (
 
 // SchemaVersion is bumped when the on-disk JSON shape changes in a
 // non-backward-compatible way.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // Backend is one registered upstream service.
 type Backend struct {
 	Domain       string `json:"domain"`
 	Upstream     string `json:"upstream"`
 	RegisteredAt string `json:"registered_at"`
+	LANDomain    string `json:"lan_domain,omitempty"`
+}
+
+// LANMode records how the LAN address was chosen.
+type LANMode string
+
+const (
+	LANModeDiscovered LANMode = "discovered"
+	LANModePinned     LANMode = "pinned"
+)
+
+// LAN holds the LAN exposure settings.
+type LAN struct {
+	Enabled bool    `json:"enabled"`
+	IP      string  `json:"ip"`
+	Mode    LANMode `json:"mode"`
+	Suffix  string  `json:"suffix"`
 }
 
 // State is the on-disk shape of state.json.
 type State struct {
 	SchemaVersion int                `json:"schema_version"`
 	Backends      map[string]Backend `json:"backends"`
+	LAN           *LAN               `json:"lan,omitempty"`
 }
+
+// LANEnabled reports whether LAN exposure is switched on.
+func (s *State) LANEnabled() bool { return s.LAN != nil && s.LAN.Enabled }
 
 // Clone returns a deep copy of s, so a caller can build an updated registry
 // while keeping the one it loaded.
@@ -31,6 +52,10 @@ func (s *State) Clone() *State {
 	c := &State{SchemaVersion: s.SchemaVersion, Backends: make(map[string]Backend, len(s.Backends))}
 	for k, v := range s.Backends {
 		c.Backends[k] = v
+	}
+	if s.LAN != nil {
+		lan := *s.LAN
+		c.LAN = &lan
 	}
 	return c
 }
@@ -54,7 +79,7 @@ func IsCorrupt(err error) bool {
 	return errors.As(err, &e)
 }
 
-// Load reads state.json. A missing file returns an empty State (schema_version=1).
+// Load reads state.json. A missing file returns an empty State (schema_version=2).
 // A malformed or unknown-version file returns *ErrCorrupt.
 func Load(path string) (*State, error) {
 	data, err := os.ReadFile(path)
@@ -68,10 +93,15 @@ func Load(path string) (*State, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, &ErrCorrupt{Path: path, Reason: err}
 	}
-	if s.SchemaVersion != SchemaVersion {
+	switch s.SchemaVersion {
+	case 1:
+		// The v1 shape is a subset of v2, so upgrade in memory.
+		s.SchemaVersion = SchemaVersion
+	case SchemaVersion:
+	default:
 		return nil, &ErrCorrupt{
 			Path:   path,
-			Reason: fmt.Errorf("unknown schema_version %d (want %d)", s.SchemaVersion, SchemaVersion),
+			Reason: fmt.Errorf("unknown schema_version %d (want 1 or %d)", s.SchemaVersion, SchemaVersion),
 		}
 	}
 	if s.Backends == nil {

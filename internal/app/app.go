@@ -40,9 +40,12 @@ type Instance struct {
 	DataVolume         string
 	ConfigVolume       string
 	RelayVolume        string
+	LANContainerName   string
 	HTTPPort           int
 	HTTPSPort          int
 	AdminPort          int
+	LANHTTPPort        int
+	LANHTTPSPort       int
 }
 
 // DefaultInstance is the single install the CLI manages.
@@ -54,9 +57,12 @@ func DefaultInstance() Instance {
 		DataVolume:         CaddyDataVolume,
 		ConfigVolume:       CaddyConfigVolume,
 		RelayVolume:        RelayVolume,
+		LANContainerName:   LANContainerName,
 		HTTPPort:           80,
 		HTTPSPort:          443,
 		AdminPort:          2019,
+		LANHTTPPort:        80,
+		LANHTTPSPort:       443,
 	}
 }
 
@@ -81,6 +87,8 @@ type App struct {
 	notices io.Writer
 	// hn caches the engine classification; see hostNetwork.
 	hn *HostNetwork
+	// lan finds and checks the LAN address; see LANResolver.
+	lan LANResolver
 }
 
 // New builds an App with default paths, a real Caddy client at the loopback
@@ -108,7 +116,7 @@ func NewForInstance(p Paths, inst Instance, caddy *caddyapi.Client, dock docker.
 	if dock == nil {
 		dock = docker.NewCLI()
 	}
-	return &App{paths: p, inst: inst, caddy: caddy, docker: dock, notices: os.Stderr}
+	return &App{paths: p, inst: inst, caddy: caddy, docker: dock, notices: os.Stderr, lan: systemLANResolver{}}
 }
 
 // notef writes one advisory message to the notices writer.

@@ -106,7 +106,9 @@ func compareConfig(s *state.State, live, desired []byte) (Drift, error) {
 }
 
 // routesByHost maps every host matched by a route in any http server of cfg
-// to that route.
+// to that route. Routes made only of static_response handlers (the LAN
+// HTTP-to-HTTPS redirect) are skipped, so a LAN name maps to its proxy route
+// whichever order the servers are walked in.
 func routesByHost(cfg map[string]any) map[string]any {
 	out := map[string]any{}
 	apps, _ := cfg["apps"].(map[string]any)
@@ -117,6 +119,9 @@ func routesByHost(cfg map[string]any) map[string]any {
 		routes, _ := srvMap["routes"].([]any)
 		for _, r := range routes {
 			route, _ := r.(map[string]any)
+			if staticOnly(route) {
+				continue
+			}
 			matches, _ := route["match"].([]any)
 			for _, m := range matches {
 				match, _ := m.(map[string]any)
@@ -130,6 +135,21 @@ func routesByHost(cfg map[string]any) map[string]any {
 		}
 	}
 	return out
+}
+
+// staticOnly reports whether every handler of route is a static_response.
+func staticOnly(route map[string]any) bool {
+	handlers, _ := route["handle"].([]any)
+	if len(handlers) == 0 {
+		return false
+	}
+	for _, h := range handlers {
+		hm, _ := h.(map[string]any)
+		if hm["handler"] != "static_response" {
+			return false
+		}
+	}
+	return true
 }
 
 // liveDrift fetches Caddy's live config and compares it with s.
@@ -211,7 +231,11 @@ func (a *App) Sync(ctx context.Context) (SyncReport, error) {
 	if err := a.requireRunning(); err != nil {
 		return SyncReport{}, err
 	}
-	return a.reconcile(ctx)
+	rep, err := a.reconcile(ctx)
+	if err != nil {
+		return rep, err
+	}
+	return rep, a.ensureLANFromState()
 }
 
 // requireRunning returns ErrCaddyNotRunning unless the Caddy container is
@@ -227,10 +251,14 @@ func (a *App) requireRunning() error {
 	return nil
 }
 
+// stateLockTimeout is how long acquireStateLock waits for another holder. A
+// variable so tests can shorten it.
+var stateLockTimeout = 5 * time.Second
+
 // acquireStateLock takes the state lock with the documented 5s timeout,
 // mapping contention to ErrLockContention (exit 8).
 func acquireStateLock(path string) (*state.Lock, error) {
-	lock, err := state.AcquireLock(path, 5*time.Second)
+	lock, err := state.AcquireLock(path, stateLockTimeout)
 	if err != nil {
 		if errors.Is(err, state.ErrLockTimeout) {
 			return nil, fmt.Errorf("%w: %v", ErrLockContention, err)

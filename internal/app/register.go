@@ -33,6 +33,12 @@ type RegisterInput struct {
 	// instead of host.docker.internal:<Port>. Requires the caddy container
 	// to be attached to CaddyNetworkName (ensured here).
 	Container string
+	// LAN gives the backend the LAN name <Name>.<LAN suffix>. Mutually
+	// exclusive with LANDomain. Needs LAN mode enabled.
+	LAN bool
+	// LANDomain gives the backend an explicit LAN name. Mutually exclusive
+	// with LAN. Needs LAN mode enabled.
+	LANDomain string
 }
 
 // nameRE accepts one or more dot-separated DNS labels. A single label (foo)
@@ -53,6 +59,9 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 	}
 	if in.Port < 1 || in.Port > 65535 {
 		return fmt.Errorf("%w: port out of range (got %d, must be 1-65535)", ErrInvalidArgs, in.Port)
+	}
+	if in.LAN && in.LANDomain != "" {
+		return fmt.Errorf("%w: --lan and --lan-domain are mutually exclusive", ErrInvalidArgs)
 	}
 	if in.Domain == "" {
 		in.Domain = in.Name + ".test"
@@ -100,15 +109,41 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 		return err
 	}
 
-	// Domain-conflict check (skipping the same name's own row).
+	// Resolve the LAN name. Neither flag means no LAN name: Register is a
+	// full upsert, so re-registering without a flag clears an earlier one.
+	var lanDomain string
+	if in.LAN || in.LANDomain != "" {
+		if !s.LANEnabled() {
+			return fmt.Errorf("%w", ErrLANDisabled)
+		}
+		lanDomain = in.LANDomain
+		if in.LAN {
+			lanDomain = in.Name + "." + s.LAN.Suffix
+		}
+		if err := validLANName(lanDomain); err != nil {
+			return err
+		}
+	}
+
+	// Domain-conflict check (skipping the same name's own row). Names from
+	// the .test and LAN spaces share one namespace, so every pairing counts,
+	// including a backend's own Domain against its own LAN name.
+	if lanDomain != "" && lanDomain == in.Domain {
+		return fmt.Errorf("%w: %s is both the domain and the LAN name", ErrDomainConflict, lanDomain)
+	}
 	for name, b := range s.Backends {
-		if name != in.Name && b.Domain == in.Domain {
-			return fmt.Errorf("%w: %s already owned by backend %q", ErrDomainConflict, in.Domain, name)
+		if name == in.Name {
+			continue
+		}
+		for _, mine := range []string{in.Domain, lanDomain} {
+			if mine != "" && (b.Domain == mine || b.LANDomain == mine) {
+				return fmt.Errorf("%w: %s already owned by backend %q", ErrDomainConflict, mine, name)
+			}
 		}
 	}
 
 	existing, present := s.Backends[in.Name]
-	if present && existing.Domain == in.Domain && existing.Upstream == upstream {
+	if present && existing.Domain == in.Domain && existing.Upstream == upstream && existing.LANDomain == lanDomain {
 		// Identical re-registration: no state write. Caddy is still made
 		// to match the registry, so a caller that re-registers on startup
 		// gets its routes back after Caddy lost them.
@@ -119,6 +154,7 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 	updated := s.Clone()
 	updated.Backends[in.Name] = state.Backend{
 		Domain:       in.Domain,
+		LANDomain:    lanDomain,
 		Upstream:     upstream,
 		RegisteredAt: time.Now().Format(time.RFC3339),
 	}

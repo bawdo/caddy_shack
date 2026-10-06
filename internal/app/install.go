@@ -87,7 +87,10 @@ func (a *App) Install(ctx context.Context) error {
 		if len(drift) > 0 {
 			a.notef("recreating %s for the %s engine (%s); volumes, the local CA, networks and registered backends are kept\n",
 				a.inst.ContainerName, hn.Kind, strings.Join(drift, "; "))
-			return a.recreateCaddy(ctx, CaddyImage)
+			if err := a.recreateCaddy(ctx, CaddyImage); err != nil {
+				return err
+			}
+			return a.ensureLANFromState()
 		}
 	}
 

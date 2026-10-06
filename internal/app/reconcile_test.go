@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -425,5 +426,26 @@ func TestIncidentRegressionUnit(t *testing.T) {
 	}
 	if !strings.Contains(string(f.live), "gamma.lan.arrix.dev") {
 		t.Errorf("route not restored: %s", f.live)
+	}
+}
+
+// A LAN name is matched by both its srv-lan proxy route and the lan-http
+// redirect; routesByHost must pick the proxy route every time.
+func TestRoutesByHostSkipsStaticResponseRoutes(t *testing.T) {
+	s := &state.State{
+		SchemaVersion: state.SchemaVersion,
+		Backends:      map[string]state.Backend{"g": {Domain: "g.test", Upstream: "x:1", LANDomain: "g.lan"}},
+		LAN:           &state.LAN{Enabled: true, IP: "192.168.1.12", Mode: state.LANModePinned, Suffix: "lan"},
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(caddyapi.Build(s), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		r := routesByHost(cfg)["g.lan"].(map[string]any)
+		h := r["handle"].([]any)[0].(map[string]any)
+		if h["handler"] != "reverse_proxy" {
+			t.Fatalf("g.lan mapped to %v", h["handler"])
+		}
 	}
 }
