@@ -1,9 +1,11 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/docker"
@@ -124,10 +126,19 @@ func (a *App) buildConfig(s *state.State) ([]byte, error) {
 	return caddyapi.BuildWith(s, opts), nil
 }
 
+// relayReadyTimeout and relayReadyInterval bound the wait for a freshly
+// started relay to accept on its socket. Package vars so tests can shrink
+// them.
+var (
+	relayReadyTimeout  = 15 * time.Second
+	relayReadyInterval = 100 * time.Millisecond
+)
+
 // ensureRelay makes the relay container exist, match its spec, and run, on
 // native Linux. A no-op on every other engine. The relay holds no state, so
-// a mismatched one is simply replaced.
-func (a *App) ensureRelay() error {
+// a mismatched one is simply replaced. A relay it starts is waited on until
+// it accepts, so callers never hand back a Caddy whose host-mode routes 502.
+func (a *App) ensureRelay(ctx context.Context) error {
 	if a.hostNetwork().Kind != EngineNativeLinux {
 		return nil
 	}
@@ -143,7 +154,10 @@ func (a *App) ensureRelay() error {
 		}
 		if len(specDrift(spec, info)) == 0 {
 			if st == docker.StateStopped {
-				return a.docker.Start(a.inst.RelayContainerName)
+				if err := a.docker.Start(a.inst.RelayContainerName); err != nil {
+					return err
+				}
+				return a.waitForRelay(ctx)
 			}
 			return nil
 		}
@@ -158,7 +172,38 @@ func (a *App) ensureRelay() error {
 		_ = a.docker.Remove(a.inst.RelayContainerName)
 		return fmt.Errorf("start relay: %w", err)
 	}
-	return nil
+	return a.waitForRelay(ctx)
+}
+
+// relayProbeArgv makes one HTTP request over the relay's socket from inside
+// the main container, the way Caddy reaches it. docker start returns before
+// the relay's Caddy binds, and a socket left by an earlier run refuses
+// connections, so only a response proves the relay is serving. With no port
+// header the relay answers 502 itself, which curl (without -f) counts as
+// success.
+func relayProbeArgv() []string {
+	return []string{"curl", "-s", "-o", "/dev/null", "--max-time", "2",
+		"--unix-socket", RelaySocketPath, "http://relay/"}
+}
+
+// waitForRelay polls the relay socket until it answers or the bound elapses.
+// Honours ctx so Ctrl+C exits promptly.
+func (a *App) waitForRelay(ctx context.Context) error {
+	deadline := time.Now().Add(relayReadyTimeout)
+	for {
+		_, err := a.docker.Exec(ctx, a.inst.ContainerName, relayProbeArgv())
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("relay not accepting on %s within %s: %w", RelaySocketPath, relayReadyTimeout, err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(relayReadyInterval):
+		}
+	}
 }
 
 // stopRelay stops the relay if it is running. Safe on any engine: the relay

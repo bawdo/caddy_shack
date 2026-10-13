@@ -118,7 +118,7 @@ func (a *App) recreateCaddy(ctx context.Context, image string) error {
 	if err := a.caddy.Load(ctx, cfg); err != nil {
 		return fmt.Errorf("recreated container but failed to restore backends; run 'caddy_shack status': %w", err)
 	}
-	if err := a.ensureRelay(); err != nil {
+	if err := a.ensureRelay(ctx); err != nil {
 		return fmt.Errorf("recreated container and restored backends, but the relay failed; run 'caddy_shack doctor': %w", err)
 	}
 	return nil

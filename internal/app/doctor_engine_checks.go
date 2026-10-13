@@ -101,7 +101,7 @@ func checkContainerConfig(ctx context.Context, a *App) CheckResult {
 
 	ensureRelayFix := &FixAction{
 		Label: "(re)create and start " + a.inst.RelayContainerName,
-		Apply: func(_ context.Context) error { return a.ensureRelay() },
+		Apply: func(ctx context.Context) error { return a.ensureRelay(ctx) },
 	}
 	rs, err := a.docker.ContainerState(a.inst.RelayContainerName)
 	if err != nil {
@@ -134,11 +134,11 @@ func checkContainerConfig(ctx context.Context, a *App) CheckResult {
 			Detail:  []string{"check 'docker logs " + a.inst.RelayContainerName + "'"},
 			Fix: &FixAction{
 				Label: "recreate " + a.inst.RelayContainerName,
-				Apply: func(_ context.Context) error {
+				Apply: func(ctx context.Context) error {
 					if err := a.docker.Remove(a.inst.RelayContainerName); err != nil {
 						return err
 					}
-					return a.ensureRelay()
+					return a.ensureRelay(ctx)
 				},
 			},
 		}

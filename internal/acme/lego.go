@@ -93,7 +93,7 @@ func (l *LegoIssuer) Issue(ctx context.Context, req Request, prompt Prompter) (R
 	if l.InsecureSkipTLSVerify {
 		if tr, ok := cfg.HTTPClient.Transport.(*http.Transport); ok {
 			if tr.TLSClientConfig == nil {
-				tr.TLSClientConfig = &tls.Config{}
+				tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 			}
 			// #nosec G402 -- test-only escape hatch for a test ACME server
 			// (Pebble) that serves its directory with a self-signed

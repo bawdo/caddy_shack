@@ -102,6 +102,66 @@ func TestStartRestoresRoutesEvenWhenRelayFails(t *testing.T) {
 	}
 }
 
+// shrinkRelayWait bounds the relay readiness wait for one test.
+func shrinkRelayWait(t *testing.T) {
+	t.Helper()
+	savedTimeout, savedInterval := relayReadyTimeout, relayReadyInterval
+	relayReadyTimeout, relayReadyInterval = 50*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { relayReadyTimeout, relayReadyInterval = savedTimeout, savedInterval })
+}
+
+// relayProbeKey is the fake's Exec key for the relay readiness probe.
+func relayProbeKey() string {
+	return CaddyContainerName + ":" + strings.Join(relayProbeArgv(), " ")
+}
+
+// TestStartReportsRelayThatNeverAccepts: docker start returns before the
+// relay's Caddy binds its socket, so until it does every host-mode route is
+// a 502. Start waits for the socket and reports a relay that never accepts.
+func TestStartReportsRelayThatNeverAccepts(t *testing.T) {
+	shrinkRelayWait(t)
+	f := newFixture(t, http.StatusOK)
+	d := f.app.docker.(*docker.Fake)
+	useNativeLinux(t, d)
+	d.Containers[CaddyContainerName] = docker.StateStopped
+	d.ExecResponses[relayProbeKey()] = docker.ExecResponse{Err: errors.New("curl: (7) Couldn't connect")}
+	seedState(t, f.statePath, "myapp", "myapp.test", "app:3000")
+
+	err := f.app.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "relay") || !strings.Contains(err.Error(), "Couldn't connect") {
+		t.Fatalf("want the unready relay reported, got %v", err)
+	}
+}
+
+func TestStartReturnsOnceRelayAccepts(t *testing.T) {
+	shrinkRelayWait(t)
+	f := newFixture(t, http.StatusOK)
+	d := f.app.docker.(*docker.Fake)
+	useNativeLinux(t, d)
+	d.Containers[CaddyContainerName] = docker.StateStopped
+	seedState(t, f.statePath, "myapp", "myapp.test", "app:3000")
+
+	if err := f.app.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+}
+
+// TestStartLeavesRunningRelayUnprobed: a relay that was already running and
+// matches its spec is serving, so Start does not wait on it.
+func TestStartLeavesRunningRelayUnprobed(t *testing.T) {
+	shrinkRelayWait(t)
+	f := newFixture(t, http.StatusOK)
+	d := f.app.docker.(*docker.Fake)
+	useNativeLinux(t, d)
+	seedCurrentCaddy(d)
+	d.ExecResponses[relayProbeKey()] = docker.ExecResponse{Err: errors.New("probed a running relay")}
+	seedState(t, f.statePath, "myapp", "myapp.test", "app:3000")
+
+	if err := f.app.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+}
+
 func TestStartOnStoppedContainerFailsWhenAdminNeverComesUp(t *testing.T) {
 	savedTimeout, savedInterval := adminReadyTimeout, adminReadyInterval
 	adminReadyTimeout, adminReadyInterval = 50*time.Millisecond, 10*time.Millisecond
