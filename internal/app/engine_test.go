@@ -34,6 +34,7 @@ func useNativeLinux(t *testing.T, fake *docker.Fake) {
 	fake.Engine = nativeEngine
 	fake.Gateway = testGateway
 	stubInterfaces(t, hostIPs)
+	fake.ExecResponses[CaddyContainerName+":"+strings.Join(relayProbeArgv(), " ")] = docker.ExecResponse{}
 }
 
 func TestClassifyEngine(t *testing.T) {

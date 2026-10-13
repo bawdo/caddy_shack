@@ -48,7 +48,7 @@ func (a *App) Start(ctx context.Context) error {
 // forwarder comes last so routes exist before LAN traffic can arrive.
 func (a *App) restoreThenRelay(ctx context.Context) error {
 	restoreErr := a.restoreBackends(ctx)
-	return errors.Join(restoreErr, a.ensureRelay(), a.ensureLANFromState())
+	return errors.Join(restoreErr, a.ensureRelay(ctx), a.ensureLANFromState())
 }
 
 // Stop stops the CaddyShack container, and the native-Linux relay, if
