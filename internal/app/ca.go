@@ -50,7 +50,7 @@ func (a *App) ExportCA(ctx context.Context, includeIntermediate bool) (string, e
 
 	root := strings.TrimSpace(info.RootCertificate)
 	if root == "" {
-		return "", fmt.Errorf("local CA not provisioned yet; register a backend to trigger certificate issuance")
+		return "", fmt.Errorf("%w; register a backend to trigger certificate issuance", errLocalCANotProvisioned)
 	}
 
 	out := root + "\n"
@@ -61,3 +61,9 @@ func (a *App) ExportCA(ctx context.Context, includeIntermediate bool) (string, e
 	}
 	return out, nil
 }
+
+// errLocalCANotProvisioned marks the ExportCA failure where the container and
+// admin API are up but Caddy has not issued its local root yet. It stays a
+// generic (exit 1) error for the CLI; doctor uses it to tell "not yet" apart
+// from "broken".
+var errLocalCANotProvisioned = errors.New("local CA not provisioned yet")
