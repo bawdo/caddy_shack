@@ -22,15 +22,11 @@ what the registry (state.json) renders.
 status only reads. It exits 0 when healthy, 9 when everything is up but the
 live config has drifted from the registry (run 'caddy_shack sync'), and 1
 for any other unhealthy state. See 'caddy_shack --help' for every code.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			a, err := app.New()
-			if err != nil {
-				return err
-			}
+		RunE: withApp(func(cmd *cobra.Command, _ []string, a *app.App) error {
 			rep, runErr := a.Status(cmd.Context())
 			renderStatus(cmd.OutOrStdout(), rep, asJSON)
 			return runErr // exit code via app.ExitCode: 1 unhealthy, 9 drift
-		},
+		}),
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
 	return c

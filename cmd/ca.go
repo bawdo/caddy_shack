@@ -24,18 +24,14 @@ to redirect or pipe:
   caddy_shack ca | docker exec -i somecontainer tee /usr/local/share/ca-certificates/caddy_shack.crt
 
 Pass --intermediate to append the intermediate certificate after the root.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			a, err := app.New()
-			if err != nil {
-				return err
-			}
+		RunE: withApp(func(cmd *cobra.Command, _ []string, a *app.App) error {
 			pem, err := a.ExportCA(cmd.Context(), intermediate)
 			if err != nil {
 				return err
 			}
 			writeCA(cmd.OutOrStdout(), pem)
 			return nil
-		},
+		}),
 	}
 	c.Flags().BoolVar(&intermediate, "intermediate", false, "Also emit the intermediate certificate (root first)")
 	return c

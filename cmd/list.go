@@ -16,17 +16,13 @@ func newListCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List registered backends and whether Caddy is serving them",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			a, err := app.New()
-			if err != nil {
-				return err
-			}
+		RunE: withApp(func(cmd *cobra.Command, _ []string, a *app.App) error {
 			items, err := a.List(cmd.Context())
 			if err != nil {
 				return err
 			}
 			return renderList(cmd.OutOrStdout(), items, asJSON)
-		},
+		}),
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
 	return c

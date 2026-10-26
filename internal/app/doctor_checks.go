@@ -748,10 +748,6 @@ func checkPortAvailability(ctx context.Context, a *App) CheckResult {
 	return checkPortAvailabilityOn(ctx, a, a.inst.publishedPorts())
 }
 
-// checkPortAvailabilityOn is the test seam. Tests call it with a free
-// ephemeral port so they don't need root for 80/443.
-// Uses DialTimeout rather than net.Listen to avoid EACCES on ports 80/443
-// when running as a non-root user.
 // joinPorts renders ports as "80, 443, 2019".
 func joinPorts(ports []int) string {
 	s := make([]string, len(ports))
@@ -761,6 +757,10 @@ func joinPorts(ports []int) string {
 	return strings.Join(s, ", ")
 }
 
+// checkPortAvailabilityOn is the test seam. Tests call it with a free
+// ephemeral port so they don't need root for 80/443.
+// Uses DialTimeout rather than net.Listen to avoid EACCES on ports 80/443
+// when running as a non-root user.
 func checkPortAvailabilityOn(_ context.Context, a *App, ports []int) CheckResult {
 	var taken []string
 	for _, p := range ports {

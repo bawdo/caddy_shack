@@ -40,11 +40,7 @@ afterwards; changing it does not rename existing LAN names.`,
 		Example: `  caddy_shack lan enable --suffix mac.home.arpa
   caddy_shack lan enable --suffix mac.home.arpa --ip 192.168.1.20 --yes`,
 		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			a, err := app.New()
-			if err != nil {
-				return err
-			}
+		RunE: withApp(func(cmd *cobra.Command, _ []string, a *app.App) error {
 			in := app.LANEnableInput{IP: ip, Suffix: suffix}
 			if !yes {
 				out := cmd.OutOrStdout()
@@ -70,7 +66,7 @@ afterwards; changing it does not rename existing LAN names.`,
 			}
 			_, _ = fmt.Fprintf(out, "Point a DNS A record for *.%s (or each LAN name) at %s.\n", res.Suffix, res.IP)
 			return nil
-		},
+		}),
 	}
 	c.Flags().StringVar(&ip, "ip", "", "LAN IPv4 address to bind (default: discover)")
 	c.Flags().StringVar(&suffix, "suffix", "", "Domain appended to backend names for LAN names, e.g. mac.home.arpa (required the first time)")
@@ -83,16 +79,12 @@ func newLANDisableCmd() *cobra.Command {
 		Use:   "disable",
 		Short: "Stop LAN exposure (settings are kept)",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			a, err := app.New()
-			if err != nil {
-				return err
-			}
+		RunE: withApp(func(cmd *cobra.Command, _ []string, a *app.App) error {
 			if err := a.LANDisable(cmd.Context()); err != nil {
 				return err
 			}
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "LAN mode disabled")
 			return nil
-		},
+		}),
 	}
 }
