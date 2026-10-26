@@ -148,7 +148,7 @@ still need a real nameserver answering them, which is what dnsmasq is for.
    `p11-kit`'s `trust` command in place of macOS's `security`:
 
    ```
-   docker exec caddy_shack cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt
+   caddy_shack ca > /tmp/caddy_shack_root.crt
    sudo trust anchor /tmp/caddy_shack_root.crt
    ```
 
@@ -231,7 +231,7 @@ also starts the `caddy_shack_relay` container (see
 To get HTTPS without browser warnings, trust Caddy's internal root CA once:
 
 ```
-docker exec caddy_shack cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt
+caddy_shack ca > /tmp/caddy_shack_root.crt
 sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/caddy_shack_root.crt
 ```
 
