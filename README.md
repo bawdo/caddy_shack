@@ -223,7 +223,11 @@ caddy_shack install
 
 Pulls `caddy:2`, creates two named volumes (`caddy_shack_data`,
 `caddy_shack_config`), and starts a single container called `caddy_shack`
-listening on `127.0.0.1:80`, `:443`, and `:2019` (admin API, loopback-only).
+listening on `127.0.0.1:80`, `:443`, and `:2019` (admin API). Those host ports
+are published on `127.0.0.1` only, but inside Docker the admin API listens on
+`0.0.0.0:2019`, so it is reachable from any container on the default bridge or
+the shared `caddy_shack` network, including every app registered with
+`--container` (see [Security notes](#security-notes)).
 Idempotent: re-running on an existing install is a no-op. On native Linux it
 also starts the `caddy_shack_relay` container (see
 [Host-mode backends on native Linux](#host-mode-backends-on-native-linux)).
@@ -683,6 +687,32 @@ forwarder state. `caddy_shack doctor` adds `lan-ip-present`, `lan-forwarder`,
   corrupt (exit 7), so upgrade every copy you use. A pre-release build that
   has only one of the two features will read a schema 2 file but drop the
   other feature's settings the next time it writes, so don't mix them.
+
+## Security notes
+
+caddy_shack is a local development tool and trusts the containers you run next
+to it. Know where that trust boundary sits:
+
+- **The admin API is open to sibling containers.** Caddy's admin API listens on
+  `0.0.0.0:2019` inside its container, with no authentication, so any container
+  on the default bridge or the `caddy_shack` network (every app registered with
+  `--container` is on it) can call it. A hostile sibling could replace the whole
+  config with `POST /load`, proxy traffic to ports on your host, and read the
+  private keys of loaded certificates. Caddy's `enforce_origin` option does not
+  help here: it is an `Origin` header check, any client can set that header to
+  whatever it likes, and on a wildcard listener such as `0.0.0.0` Caddy skips
+  the `Host` check entirely. The practical guidance is to only attach
+  containers you trust to the `caddy_shack` network. The proper fix, a unix
+  socket or an mTLS remote admin endpoint, is noted for future work.
+- **Let's Encrypt private keys live in three places.** The key is embedded in
+  the config caddy_shack pushes to Caddy, so it sits in the certificate store
+  on the host, in Caddy's autosave in the `caddy_shack_config` volume, and is
+  readable by anyone who can reach the admin API via `GET /config/`.
+- **The LAN listener trusts any PROXY protocol header.** Its PROXY protocol
+  wrapper accepts a header from any sender on the shared network. An `allow`
+  list would not exclude siblings, because the forwarder shares that subnet, so
+  this is documented rather than filtered. The impact is a spoofable client
+  address in Caddy's logs and in the `X-Forwarded-For` header backends see.
 
 ## Development
 
