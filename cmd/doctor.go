@@ -21,31 +21,36 @@ func newDoctorCmd() *cobra.Command {
 		yes        bool
 		noBackends bool
 	)
+	run := withApp(func(cmd *cobra.Command, _ []string, a *app.App) error {
+		rep, err := a.Doctor(cmd.Context(), app.DoctorOptions{SkipBackends: noBackends})
+		if err != nil {
+			// Cancelled mid-run; render what we have and propagate.
+			renderDoctorReport(cmd.OutOrStdout(), rep, asJSON)
+			return err
+		}
+		if applyFix {
+			return runFixLoop(cmd, a, rep, yes)
+		}
+		renderDoctorReport(cmd.OutOrStdout(), rep, asJSON)
+		if rep.Summary.Fail > 0 {
+			return fmt.Errorf("doctor: %d failing check(s)", rep.Summary.Fail)
+		}
+		return nil
+	})
 	c := &cobra.Command{
 		Use:   "doctor",
 		Short: "Diagnose CaddyShack prerequisites; --fix to remediate",
-		RunE: withApp(func(cmd *cobra.Command, _ []string, a *app.App) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Validate flags before constructing the App so invalid
+			// arguments (exit 2) win over a construction failure.
 			if yes && !applyFix {
 				return fmt.Errorf("%w: --yes requires --fix", app.ErrInvalidArgs)
 			}
 			if asJSON && applyFix {
 				return fmt.Errorf("%w: --json cannot be combined with --fix", app.ErrInvalidArgs)
 			}
-			rep, err := a.Doctor(cmd.Context(), app.DoctorOptions{SkipBackends: noBackends})
-			if err != nil {
-				// Cancelled mid-run; render what we have and propagate.
-				renderDoctorReport(cmd.OutOrStdout(), rep, asJSON)
-				return err
-			}
-			if applyFix {
-				return runFixLoop(cmd, a, rep, yes)
-			}
-			renderDoctorReport(cmd.OutOrStdout(), rep, asJSON)
-			if rep.Summary.Fail > 0 {
-				return fmt.Errorf("doctor: %d failing check(s)", rep.Summary.Fail)
-			}
-			return nil
-		}),
+			return run(cmd, args)
+		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
 	c.Flags().BoolVar(&applyFix, "fix", false, "Apply available fixes (interactive)")
