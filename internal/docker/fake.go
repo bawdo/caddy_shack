@@ -32,9 +32,8 @@ type Fake struct {
 	Networks           map[string]bool
 	NetworkConnections map[string]bool // key: "<network>:<container>"
 
-	EnsureNetworkErr   error
-	ConnectNetworkErr  error
-	NetworkAttachedErr error
+	EnsureNetworkErr  error
+	ConnectNetworkErr error
 
 	ImageIDs            map[string]string // ref -> image id
 	ContainerImageIDs   map[string]string // container -> image id
@@ -254,15 +253,6 @@ func (f *Fake) ContainerImageID(name string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.ContainerImageIDs[name], nil
-}
-
-func (f *Fake) NetworkAttached(network, container string) (bool, error) {
-	if f.NetworkAttachedErr != nil {
-		return false, f.NetworkAttachedErr
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.NetworkConnections[network+":"+container], nil
 }
 
 func (f *Fake) EngineInfo() (EngineInfo, error) {

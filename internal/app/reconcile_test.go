@@ -26,7 +26,7 @@ func twoBackends() *state.State {
 
 func TestCompareConfig(t *testing.T) {
 	s := twoBackends()
-	desired := caddyapi.Build(s)
+	desired := caddyapi.Build(s, caddyapi.Options{})
 
 	changed := twoBackends()
 	changed.Backends["bravo"] = state.Backend{Domain: "bravo.test", Upstream: "bravo:8080"}
@@ -44,11 +44,11 @@ func TestCompareConfig(t *testing.T) {
 		{"in sync", s, desired, Drift{InSync: true, HTTPApp: true, TLSApp: true}},
 		{"bare caddy after restart", s, []byte(bareCaddyConfig),
 			Drift{Missing: []string{"alpha", "bravo"}}},
-		{"upstream changed", s, caddyapi.Build(changed),
+		{"upstream changed", s, caddyapi.Build(changed, caddyapi.Options{}),
 			Drift{HTTPApp: true, TLSApp: true, Changed: []string{"bravo"}}},
-		{"route the registry does not know", s, caddyapi.Build(withStranger),
+		{"route the registry does not know", s, caddyapi.Build(withStranger, caddyapi.Options{}),
 			Drift{HTTPApp: true, TLSApp: true, Unknown: []string{"*.stranger.test", "stranger.test"}}},
-		{"backend missing from live", s, caddyapi.Build(onlyAlpha),
+		{"backend missing from live", s, caddyapi.Build(onlyAlpha, caddyapi.Options{}),
 			Drift{HTTPApp: true, TLSApp: true, Missing: []string{"bravo"}}},
 		{"nothing registered, bare caddy", empty, []byte(bareCaddyConfig), Drift{InSync: true}},
 		{"nothing registered, live routes", empty, desired,
@@ -56,7 +56,7 @@ func TestCompareConfig(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := compareConfig(tc.reg, tc.live, caddyapi.Build(tc.reg))
+			got, err := compareConfig(tc.reg, tc.live, caddyapi.Build(tc.reg, caddyapi.Options{}))
 			if err != nil {
 				t.Fatalf("compareConfig: %v", err)
 			}
@@ -75,7 +75,7 @@ func TestCompareConfigPartiallyLiveIsChanged(t *testing.T) {
 	}}
 	live := `{"apps":{"http":{"servers":{"srv0":{"routes":[` +
 		`{"match":[{"host":["a.test"]}],"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"x:1"}]}]}]}}}}}`
-	got, err := compareConfig(s, []byte(live), caddyapi.Build(s))
+	got, err := compareConfig(s, []byte(live), caddyapi.Build(s, caddyapi.Options{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestCompareConfigPartiallyLiveIsChanged(t *testing.T) {
 }
 
 func TestCompareConfigRejectsUnparseableLiveConfig(t *testing.T) {
-	if _, err := compareConfig(twoBackends(), []byte("not json"), caddyapi.Build(twoBackends())); err == nil {
+	if _, err := compareConfig(twoBackends(), []byte("not json"), caddyapi.Build(twoBackends(), caddyapi.Options{})); err == nil {
 		t.Fatal("expected a parse error")
 	}
 }
@@ -283,7 +283,7 @@ func TestSyncRemovesRoutesTheRegistryDoesNotHave(t *testing.T) {
 	saveState(t, f.statePath, twoBackends())
 	withStranger := twoBackends()
 	withStranger.Backends["stranger"] = state.Backend{Domain: "stranger.test", Upstream: "x:1"}
-	f.setLive(string(caddyapi.Build(withStranger)))
+	f.setLive(string(caddyapi.Build(withStranger, caddyapi.Options{})))
 
 	if _, err := f.app.Sync(context.Background()); err != nil {
 		t.Fatalf("Sync: %v", err)
@@ -355,7 +355,7 @@ func TestListMarksLiveness(t *testing.T) {
 	saveState(t, f.statePath, reg)
 	live := twoBackends()
 	live.Backends["bravo"] = state.Backend{Domain: "bravo.test", Upstream: "bravo:9999"}
-	f.setLive(string(caddyapi.Build(live)))
+	f.setLive(string(caddyapi.Build(live, caddyapi.Options{})))
 
 	items, err := f.app.List(context.Background())
 	if err != nil {
@@ -438,7 +438,7 @@ func TestRoutesByHostSkipsStaticResponseRoutes(t *testing.T) {
 		LAN:           &state.LAN{Enabled: true, IP: "192.168.1.12", Mode: state.LANModePinned, Suffix: "lan"},
 	}
 	var cfg map[string]any
-	if err := json.Unmarshal(caddyapi.Build(s), &cfg); err != nil {
+	if err := json.Unmarshal(caddyapi.Build(s, caddyapi.Options{}), &cfg); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 20; i++ {

@@ -113,7 +113,7 @@ func TestStatusReportsBackendCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	s, _ := state.Load(statePath)
-	live := caddyapi.Build(s)
+	live := caddyapi.Build(s, caddyapi.Options{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200); _, _ = w.Write(live) }))
 	defer srv.Close()
 	fakeDock := docker.NewFake()
@@ -307,7 +307,7 @@ func statusLANApp(t *testing.T, stateJSON string, r LANResolver, fakeDock *docke
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)
-		_, _ = w.Write(caddyapi.Build(s))
+		_, _ = w.Write(caddyapi.Build(s, caddyapi.Options{}))
 	}))
 	t.Cleanup(srv.Close)
 	fakeDock.Containers[CaddyContainerName] = docker.StateRunning

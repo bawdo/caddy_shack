@@ -103,11 +103,8 @@ func (stoppedDocker) Remove(string) error                          { return nil 
 func (stoppedDocker) Exec(context.Context, string, []string) ([]byte, error) {
 	return nil, nil
 }
-func (stoppedDocker) EnsureNetwork(string) error          { return nil }
-func (stoppedDocker) ConnectNetwork(string, string) error { return nil }
-func (stoppedDocker) NetworkAttached(string, string) (bool, error) {
-	return false, nil
-}
+func (stoppedDocker) EnsureNetwork(string) error                { return nil }
+func (stoppedDocker) ConnectNetwork(string, string) error       { return nil }
 func (stoppedDocker) ImageID(string) (string, error)            { return "", nil }
 func (stoppedDocker) ContainerImageID(string) (string, error)   { return "", nil }
 func (stoppedDocker) EngineInfo() (dockerpkg.EngineInfo, error) { return dockerpkg.DesktopEngine, nil }
@@ -137,11 +134,8 @@ func (e execOnlyDocker) Exec(ctx context.Context, _ string, argv []string) ([]by
 	return exec.CommandContext(ctx, "docker", args...).CombinedOutput()
 }
 
-func (execOnlyDocker) EnsureNetwork(string) error          { return nil }
-func (execOnlyDocker) ConnectNetwork(string, string) error { return nil }
-func (execOnlyDocker) NetworkAttached(string, string) (bool, error) {
-	return true, nil
-}
+func (execOnlyDocker) EnsureNetwork(string) error                { return nil }
+func (execOnlyDocker) ConnectNetwork(string, string) error       { return nil }
 func (execOnlyDocker) ImageID(string) (string, error)            { return "", nil }
 func (execOnlyDocker) ContainerImageID(string) (string, error)   { return "", nil }
 func (execOnlyDocker) EngineInfo() (dockerpkg.EngineInfo, error) { return dockerpkg.DesktopEngine, nil }

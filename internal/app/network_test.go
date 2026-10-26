@@ -1,6 +1,7 @@
 package app
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/bawdo/caddy_shack/internal/docker"
@@ -17,7 +18,8 @@ func TestEnsureSharedNetworkCreatesAndConnects(t *testing.T) {
 	if !fake.Networks[CaddyNetworkName] {
 		t.Errorf("network %q not created", CaddyNetworkName)
 	}
-	attached, _ := fake.NetworkAttached(CaddyNetworkName, CaddyContainerName)
+	info, _ := fake.InspectContainer(CaddyContainerName)
+	attached := slices.Contains(info.Networks, CaddyNetworkName)
 	if !attached {
 		t.Errorf("caddy not attached to %q", CaddyNetworkName)
 	}

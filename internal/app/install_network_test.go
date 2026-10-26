@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/bawdo/caddy_shack/internal/docker"
@@ -23,7 +24,8 @@ func TestInstallAttachesSharedNetwork(t *testing.T) {
 	if !fake.Networks[CaddyNetworkName] {
 		t.Errorf("network %q not created on install", CaddyNetworkName)
 	}
-	attached, _ := fake.NetworkAttached(CaddyNetworkName, CaddyContainerName)
+	info, _ := fake.InspectContainer(CaddyContainerName)
+	attached := slices.Contains(info.Networks, CaddyNetworkName)
 	if !attached {
 		t.Errorf("caddy not attached to %q on install", CaddyNetworkName)
 	}
@@ -37,7 +39,8 @@ func TestStartAttachesSharedNetwork(t *testing.T) {
 	if err := f.app.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	attached, _ := d.NetworkAttached(CaddyNetworkName, CaddyContainerName)
+	info, _ := d.InspectContainer(CaddyContainerName)
+	attached := slices.Contains(info.Networks, CaddyNetworkName)
 	if !attached {
 		t.Errorf("caddy not attached to %q on start", CaddyNetworkName)
 	}

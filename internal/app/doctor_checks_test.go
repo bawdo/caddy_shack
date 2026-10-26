@@ -749,7 +749,7 @@ func TestCheckConfigDriftPassWhenRoutesMatch(t *testing.T) {
 	if err := state.Save(statePath, st); err != nil {
 		t.Fatal(err)
 	}
-	desired := caddyapi.Build(st)
+	desired := caddyapi.Build(st, caddyapi.Options{})
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)

@@ -69,9 +69,6 @@ type Client interface {
 	// ConnectNetwork attaches the named container to the named network.
 	// Idempotent: an already-attached container is success.
 	ConnectNetwork(network, container string) error
-	// NetworkAttached reports whether the named container is attached to
-	// the named network. Returns (false, nil) if the container is absent.
-	NetworkAttached(network, container string) (bool, error)
 	// ImageID returns the local image ID (e.g. "sha256:...") for ref.
 	// Errors if the image is not present locally.
 	ImageID(ref string) (string, error)

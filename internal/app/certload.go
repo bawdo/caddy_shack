@@ -11,7 +11,7 @@ import (
 )
 
 // loadedCerts turns the certificate metadata in state into the material
-// caddyapi.BuildWith needs, reading the PEM from the on-host store.
+// caddyapi.Build needs, reading the PEM from the on-host store.
 //
 // buildConfig calls this, and every config push must go through buildConfig.
 // A config pushed without it would drop the loaded certificates out of the
