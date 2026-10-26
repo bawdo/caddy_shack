@@ -111,20 +111,14 @@ func (a *App) issueAndInstall(ctx context.Context, domain, email, env string, pr
 		return fmt.Errorf("%w: %v", ErrCertIssuance, err)
 	}
 
-	lock, err := state.AcquireLock(a.paths.LockPath, 5*time.Second)
+	lock, err := acquireStateLock(a.paths.LockPath)
 	if err != nil {
-		if errors.Is(err, state.ErrLockTimeout) {
-			return fmt.Errorf("%w: %v", ErrLockContention, err)
-		}
 		return err
 	}
 	defer func() { _ = lock.Release() }()
 
-	s, err := state.Load(a.paths.StatePath)
+	s, err := loadState(a.paths.StatePath)
 	if err != nil {
-		if state.IsCorrupt(err) {
-			return fmt.Errorf("%w: %v", ErrStateCorrupt, err)
-		}
 		return err
 	}
 
@@ -266,11 +260,8 @@ func (a *App) CertList(ctx context.Context) ([]CertListing, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	s, err := state.Load(a.paths.StatePath)
+	s, err := loadState(a.paths.StatePath)
 	if err != nil {
-		if state.IsCorrupt(err) {
-			return nil, fmt.Errorf("%w: %v", ErrStateCorrupt, err)
-		}
 		return nil, err
 	}
 	domains := make([]string, 0, len(s.Certs))
@@ -306,20 +297,14 @@ func (a *App) CertRemove(ctx context.Context, domain string) (bool, error) {
 	// validation error, matching Deregister.
 	domain = strings.ToLower(domain)
 
-	lock, err := state.AcquireLock(a.paths.LockPath, 5*time.Second)
+	lock, err := acquireStateLock(a.paths.LockPath)
 	if err != nil {
-		if errors.Is(err, state.ErrLockTimeout) {
-			return false, fmt.Errorf("%w: %v", ErrLockContention, err)
-		}
 		return false, err
 	}
 	defer func() { _ = lock.Release() }()
 
-	s, err := state.Load(a.paths.StatePath)
+	s, err := loadState(a.paths.StatePath)
 	if err != nil {
-		if state.IsCorrupt(err) {
-			return false, fmt.Errorf("%w: %v", ErrStateCorrupt, err)
-		}
 		return false, err
 	}
 	if _, present := s.Certs[domain]; !present {
@@ -365,11 +350,8 @@ func (a *App) CertRenew(ctx context.Context, domain string, force bool, prompt a
 	// still finds the record.
 	domain = strings.ToLower(domain)
 
-	s, err := state.Load(a.paths.StatePath)
+	s, err := loadState(a.paths.StatePath)
 	if err != nil {
-		if state.IsCorrupt(err) {
-			return false, fmt.Errorf("%w: %v", ErrStateCorrupt, err)
-		}
 		return false, err
 	}
 	c, present := s.Certs[domain]

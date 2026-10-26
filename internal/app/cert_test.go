@@ -684,3 +684,25 @@ func TestCertRenewAndRemoveAgreeWithCertRequestOnCase(t *testing.T) {
 		})
 	}
 }
+
+func TestCertRemoveHonoursStateLockTimeout(t *testing.T) {
+	a, _ := certTestApp(t, docker.StateRunning)
+	held, err := state.AcquireLock(a.paths.LockPath, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.Release() }()
+
+	old := stateLockTimeout
+	stateLockTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { stateLockTimeout = old })
+
+	start := time.Now()
+	_, err = a.CertRemove(t.Context(), "example.com")
+	if !errors.Is(err, ErrLockContention) {
+		t.Fatalf("err = %v, want ErrLockContention", err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("CertRemove waited %s; stateLockTimeout was not honoured", time.Since(start))
+	}
+}
