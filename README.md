@@ -755,6 +755,10 @@ to it. Know where that trust boundary sits:
   the `Host` check, so `Origin` is the only check there is. Requests you run by
   hand need the header too:
   `curl -H 'Origin: http://127.0.0.1:2019' http://127.0.0.1:2019/config/`.
+  When the client meets a Caddy still running the pre-origins admin block (an
+  older install resuming its old autosave), which refuses any request that
+  carries `Origin`, it retries once without the header, so upgrades do not
+  lock themselves out; the next config push installs the new block.
 - **Let's Encrypt private keys live in three places.** The key is embedded in
   the config caddy_shack pushes to Caddy, so it sits in the certificate store
   on the host, in Caddy's autosave in the `caddy_shack_config` volume, and is

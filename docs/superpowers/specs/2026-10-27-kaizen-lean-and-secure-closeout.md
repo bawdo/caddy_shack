@@ -71,6 +71,12 @@ race suite and lint clean at every merge.
   commits inside its sandbox; the controller ran the full verification on
   the staged tree and again at HEAD, and the implementer signed with the
   sandbox disabled, as every other task did.
+- The first integration run against Docker found that a resumed
+  pre-origins autosave 403s a client that sends `Origin`, which would have
+  locked out every existing install. Fixed with a one-retry fallback in the
+  client (a request without `Origin` when Caddy refuses the origin) and
+  pinned by an integration test that keeps the old admin block
+  (`restart_drift_e2e_test.go`).
 - Deferred, with reasons, for the owner:
   - Doctor's trust-store fix now trusts the CA served by the admin API
     rather than the volume file. Same attacker already holds the root key,
