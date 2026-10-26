@@ -127,9 +127,9 @@ func (a *App) Status(ctx context.Context) (StatusReport, error) {
 		rep.CaddyVersion = a.caddyVersion(ctx)
 	}
 
-	s, err := state.Load(a.paths.StatePath)
+	s, err := loadState(a.paths.StatePath)
 	if err != nil {
-		if state.IsCorrupt(err) && priorityErr == nil {
+		if errors.Is(err, ErrStateCorrupt) && priorityErr == nil {
 			priorityErr = ErrStateCorrupt
 		}
 		s = nil

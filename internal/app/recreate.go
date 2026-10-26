@@ -2,12 +2,8 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
-	"time"
-
-	"github.com/bawdo/caddy_shack/internal/state"
 )
 
 // ensureCaddyVolumes creates every named volume the Caddy container mounts
@@ -60,20 +56,14 @@ func (a *App) noteStaleCaddy() {
 // State is loaded under the lock before the container is touched, so a
 // corrupt state.json aborts without any container mutation.
 func (a *App) recreateCaddy(ctx context.Context, image string) error {
-	lock, err := state.AcquireLock(a.paths.LockPath, 5*time.Second)
+	lock, err := acquireStateLock(a.paths.LockPath)
 	if err != nil {
-		if errors.Is(err, state.ErrLockTimeout) {
-			return fmt.Errorf("%w: %v", ErrLockContention, err)
-		}
 		return err
 	}
 	defer func() { _ = lock.Release() }()
 
-	s, err := state.Load(a.paths.StatePath)
+	s, err := loadState(a.paths.StatePath)
 	if err != nil {
-		if state.IsCorrupt(err) {
-			return fmt.Errorf("%w: %v", ErrStateCorrupt, err)
-		}
 		return err
 	}
 
