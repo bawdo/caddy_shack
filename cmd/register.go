@@ -51,11 +51,7 @@ serves the backend at <name>.<lan suffix> for other devices on the network.
 --lan-domain sets an explicit LAN name instead. The two flags are mutually
 exclusive. Registering again without either flag removes the LAN name.`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := app.New()
-			if err != nil {
-				return err
-			}
+		RunE: withApp(func(cmd *cobra.Command, args []string, a *app.App) error {
 			return a.Register(cmd.Context(), app.RegisterInput{
 				Name:      args[0],
 				Domain:    domain,
@@ -64,7 +60,7 @@ exclusive. Registering again without either flag removes the LAN name.`,
 				LAN:       lan,
 				LANDomain: lanDomain,
 			})
-		},
+		}),
 	}
 	c.Flags().IntVar(&port, "port", 0, "Host port the upstream service listens on (required)")
 	c.Flags().StringVar(&domain, "domain", "", "Optional domain (defaults to <name>.test)")

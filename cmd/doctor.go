@@ -24,16 +24,12 @@ func newDoctorCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "doctor",
 		Short: "Diagnose CaddyShack prerequisites; --fix to remediate",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: withApp(func(cmd *cobra.Command, _ []string, a *app.App) error {
 			if yes && !applyFix {
 				return fmt.Errorf("%w: --yes requires --fix", app.ErrInvalidArgs)
 			}
 			if asJSON && applyFix {
 				return fmt.Errorf("%w: --json cannot be combined with --fix", app.ErrInvalidArgs)
-			}
-			a, err := app.New()
-			if err != nil {
-				return err
 			}
 			rep, err := a.Doctor(cmd.Context(), app.DoctorOptions{SkipBackends: noBackends})
 			if err != nil {
@@ -49,7 +45,7 @@ func newDoctorCmd() *cobra.Command {
 				return fmt.Errorf("doctor: %d failing check(s)", rep.Summary.Fail)
 			}
 			return nil
-		},
+		}),
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
 	c.Flags().BoolVar(&applyFix, "fix", false, "Apply available fixes (interactive)")
@@ -67,7 +63,7 @@ func renderDoctorReport(w io.Writer, rep app.DoctorReport, asJSON bool) {
 	renderDoctorHuman(w, rep)
 }
 
-// renderDoctorJSON is implemented in Task 16.
+// renderDoctorJSON writes the report as indented JSON.
 func renderDoctorJSON(w io.Writer, rep app.DoctorReport) {
 	out, _ := json.MarshalIndent(rep, "", "  ")
 	_, _ = fmt.Fprintln(w, string(out))
