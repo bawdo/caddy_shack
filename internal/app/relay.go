@@ -123,7 +123,7 @@ func (a *App) buildConfig(s *state.State) ([]byte, error) {
 	}
 	opts := a.caddyOptions()
 	opts.Certs = certs
-	return caddyapi.BuildWith(s, opts), nil
+	return caddyapi.Build(s, opts), nil
 }
 
 // relayReadyTimeout and relayReadyInterval bound the wait for a freshly

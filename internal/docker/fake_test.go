@@ -90,9 +90,6 @@ func TestFakeInspectTracksCreateConnectRemove(t *testing.T) {
 	if _, err := f.InspectContainer("c"); err == nil {
 		t.Error("removed container should not inspect")
 	}
-	if attached, _ := f.NetworkAttached("net", "c"); attached {
-		t.Error("removed container should not stay attached")
-	}
 }
 
 func TestFakeInspectSynthesisesBridgeForSeededContainer(t *testing.T) {

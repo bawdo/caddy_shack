@@ -122,7 +122,7 @@ func (a *App) Install(ctx context.Context) error {
 		// from CreateAndStart, and there's nothing actionable for them in a
 		// secondary rm failure.
 		_ = a.docker.Remove(a.inst.ContainerName)
-		if isPortAllocatedErr(err) {
+		if addrInUse.MatchString(err.Error()) {
 			ports := a.inst.publishedPorts()
 			return fmt.Errorf("install: one of ports %d, %d, or %d on 127.0.0.1 is already in use. "+
 				"Check other containers with 'docker ps' or processes with 'sudo lsof -nP -iTCP:%d,%d,%d -sTCP:LISTEN'. "+
@@ -137,11 +137,4 @@ func (a *App) Install(ctx context.Context) error {
 	// removed with `docker rm` and is being reinstalled), so a fresh
 	// container is reconciled too.
 	return a.restoreThenRelay(ctx)
-}
-
-// isPortAllocatedErr returns true when the docker error indicates a host
-// port is already bound. Matches the exact wording in docker daemon's
-// "Bind for <addr>:<port> failed: port is already allocated" message.
-func isPortAllocatedErr(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "port is already allocated")
 }

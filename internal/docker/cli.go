@@ -134,8 +134,7 @@ func (CLI) Remove(name string) error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// Absent container is a no-op success.
-		if strings.Contains(strings.ToLower(string(out)), "no such object") ||
-			strings.Contains(strings.ToLower(string(out)), "no such container") {
+		if isNoSuchContainer(string(out)) {
 			return nil
 		}
 		return fmt.Errorf("docker rm -f %s: %w: %s", name, err, out)
@@ -200,26 +199,6 @@ func (CLI) ContainerImageID(name string) (string, error) {
 		return "", fmt.Errorf("docker inspect %s image: %w: %s", name, err, stderr.String())
 	}
 	return strings.TrimSpace(stdout.String()), nil
-}
-
-func (CLI) NetworkAttached(network, container string) (bool, error) {
-	cmd := exec.Command("docker", "inspect", "--type", "container", "--format", "{{json .NetworkSettings.Networks}}", container)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && isNoSuchContainer(stderr.String()) {
-			return false, nil
-		}
-		return false, fmt.Errorf("docker inspect %s networks: %w: %s", container, err, stderr.String())
-	}
-	var nets map[string]json.RawMessage
-	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &nets); err != nil {
-		return false, fmt.Errorf("parse networks for %s: %w", container, err)
-	}
-	_, ok := nets[network]
-	return ok, nil
 }
 
 func (CLI) EngineInfo() (EngineInfo, error) {

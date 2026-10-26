@@ -334,7 +334,7 @@ func TestBuildConfigPerEngine(t *testing.T) {
 	}}
 
 	desktop := NewWithPaths(Paths{}, nil, docker.NewFake())
-	if string(mustBuildConfig(t, desktop, s)) != string(caddyapi.Build(s)) {
+	if string(mustBuildConfig(t, desktop, s)) != string(caddyapi.Build(s, caddyapi.Options{})) {
 		t.Error("Docker Desktop config must be byte-identical to caddyapi.Build")
 	}
 

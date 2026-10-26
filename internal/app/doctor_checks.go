@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -580,7 +581,7 @@ func checkSharedNetwork(_ context.Context, a *App) CheckResult {
 			Summary: "no container-mode backends; shared network not required",
 		}
 	}
-	attached, err := a.docker.NetworkAttached(a.inst.NetworkName, a.inst.ContainerName)
+	info, err := a.docker.InspectContainer(a.inst.ContainerName)
 	if err != nil {
 		return CheckResult{
 			Name:    "shared-network",
@@ -589,7 +590,7 @@ func checkSharedNetwork(_ context.Context, a *App) CheckResult {
 			Detail:  []string{err.Error()},
 		}
 	}
-	if attached {
+	if slices.Contains(info.Networks, a.inst.NetworkName) {
 		return CheckResult{
 			Name:    "shared-network",
 			Status:  SeverityPass,

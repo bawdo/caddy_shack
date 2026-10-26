@@ -76,16 +76,10 @@ type HostRelay struct {
 	PortHeader string
 }
 
-// Build renders the full Caddy admin-API JSON config for the given State.
-// Routes are sorted by domain for deterministic output (important for
-// golden-file tests and predictable Caddy /load behaviour).
-func Build(s *state.State) []byte {
-	return BuildWith(s, Options{})
-}
-
-// BuildWith is Build with Options applied. BuildWith(s, Options{}) is
-// byte-for-byte Build(s).
-func BuildWith(s *state.State, opts Options) []byte {
+// Build renders the full Caddy admin-API JSON config for the given State,
+// with opts applied. Routes are sorted by domain for deterministic output
+// (important for golden-file tests and predictable Caddy /load behaviour).
+func Build(s *state.State, opts Options) []byte {
 	certs := opts.Certs
 	type upstream struct {
 		Dial string `json:"dial"`
