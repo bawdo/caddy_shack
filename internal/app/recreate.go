@@ -50,7 +50,8 @@ func (a *App) noteStaleCaddy() {
 //   - the data and config volumes are reused as-is, so the local root CA
 //     (and every browser/OS trust of it) and issued certs survive;
 //   - every network the old container was attached to is reattached
-//     (`docker run` only attaches the default bridge);
+//     (`docker run` only attaches the caddy_shack network it is created
+//     on), except the default bridge, which is dropped on purpose;
 //   - the backends in state.json are re-pushed to the new Caddy.
 //
 // State is loaded under the lock before the container is touched, so a
@@ -81,13 +82,22 @@ func (a *App) recreateCaddy(ctx context.Context, image string) error {
 	if err := a.ensureCaddyVolumes(); err != nil {
 		return err
 	}
+	// The container is created on this network, so it must exist first.
+	if err := a.docker.EnsureNetwork(a.inst.NetworkName); err != nil {
+		return err
+	}
 	if err := a.docker.CreateAndStart(caddyContainerSpec(a.inst, image, a.hostNetwork())); err != nil {
 		return err
 	}
 	for _, n := range info.Networks {
 		switch n {
 		case "bridge", "host", "none":
-			// Attached by `docker run` itself, or not attachable.
+			// The default bridge is left behind on purpose (a plain
+			// `docker run` container must not reach the admin API); host
+			// and none are not attachable. The caddy_shack network the
+			// container was created on comes round too, and reconnecting
+			// to it is a no-op (ConnectNetwork treats already-attached as
+			// success).
 			continue
 		}
 		if err := a.docker.ConnectNetwork(n, a.inst.ContainerName); err != nil {

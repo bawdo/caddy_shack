@@ -124,10 +124,21 @@ type apps struct {
 	TLS  tlsApp  `json:"tls"`
 }
 
-// adminConfig is Caddy's admin endpoint settings.
+// adminConfig is Caddy's admin endpoint settings. EnforceOrigin makes Caddy
+// refuse any request whose Origin header is not in Origins, which stops a
+// browser page that DNS-rebinds to 127.0.0.1 (a browser cannot forge
+// Origin). It does not stop another container, which can send any header.
 type adminConfig struct {
-	Listen string `json:"listen"`
+	Listen        string   `json:"listen"`
+	EnforceOrigin bool     `json:"enforce_origin"`
+	Origins       []string `json:"origins"`
 }
+
+// AdminOrigins are the only Origin values Caddy's admin API accepts, in both
+// the boot Caddyfile and every rendered config. They name the admin
+// endpoint as seen from inside the container (port 2019 whatever host port
+// it is published on), and Client sends the first one on every request.
+var AdminOrigins = []string{"127.0.0.1:2019", "localhost:2019"}
 
 // config is the root of the Caddy admin-API JSON config.
 type config struct {
@@ -135,6 +146,7 @@ type config struct {
 	// /load swaps. Without it, Caddy reverts admin to its built-in
 	// default (localhost:2019, container-loopback only) and the next
 	// register/deregister can't reach the API from the host.
+	// It also keeps enforce_origin on, so a push never switches it off.
 	Admin adminConfig `json:"admin"`
 	Apps  apps        `json:"apps"`
 }

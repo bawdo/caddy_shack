@@ -139,10 +139,13 @@ func TestHostNetworkIsCached(t *testing.T) {
 
 // desktopRunArgs is the exact `docker run` argv caddy_shack generates for
 // the Caddy container on Docker Desktop (macOS). It is the pre-native-Linux
-// argv with one deliberate change: the boot script resumes Caddy's
-// autosave, so restarts outside caddy_shack no longer drop every route.
+// argv with three deliberate changes: the boot script resumes Caddy's
+// autosave, so restarts outside caddy_shack no longer drop every route; its
+// admin block enforces Origin; and the container lives on the caddy_shack
+// network rather than the default bridge.
 var desktopRunArgs = []string{
 	"run", "-d", "--name", "caddy_shack", "--restart", "unless-stopped",
+	"--network", "caddy_shack",
 	"-p", "127.0.0.1:80:80", "-p", "127.0.0.1:443:443", "-p", "127.0.0.1:2019:2019",
 	"-v", "caddy_shack_data:/data", "-v", "caddy_shack_config:/config",
 	"caddy:2",
@@ -152,7 +155,7 @@ var desktopRunArgs = []string{
 // wantBootScript is the Caddy container command, pinned literally so a
 // change to how Caddy boots (and so whether it resumes its autosave after
 // an out-of-band restart) is always deliberate.
-const wantBootScript = "printf '{\\n\\tadmin 0.0.0.0:2019\\n}\\n' > /etc/caddy/Caddyfile && " +
+const wantBootScript = "printf '{\\n\\tadmin 0.0.0.0:2019 {\\n\\t\\tenforce_origin\\n\\t\\torigins 127.0.0.1:2019 localhost:2019\\n\\t}\\n}\\n' > /etc/caddy/Caddyfile && " +
 	"if caddy validate --config /config/caddy/autosave.json >/dev/null 2>&1; then " +
 	"exec caddy run --resume --config /etc/caddy/Caddyfile --adapter caddyfile; fi; " +
 	"exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"
@@ -176,6 +179,7 @@ func TestCaddyRunArgsNativeLinux(t *testing.T) {
 	hn := classifyEngine(nativeEngine, testGateway, hostIPs)
 	got := strings.Join(docker.RunArgs(caddyContainerSpec(DefaultInstance(), CaddyImage, hn)), " ")
 	want := "run -d --name caddy_shack --restart unless-stopped " +
+		"--network caddy_shack " +
 		"--add-host host.docker.internal:host-gateway " +
 		"-p 127.0.0.1:80:80 -p 127.0.0.1:443:443 -p 127.0.0.1:2019:2019 " +
 		"-v caddy_shack_data:/data -v caddy_shack_config:/config -v caddy_shack_relay_socket:/run/caddy_shack " +
@@ -287,18 +291,25 @@ func TestSpecDrift(t *testing.T) {
 		Command: native.Command,
 		Ports:   native.PortMappings,
 	}
-	if d := specDrift(native, legacy); len(d) != 2 {
-		t.Errorf("legacy container should lack add-host and relay volume, got %v", d)
+	wantLegacy := "network mode is bridge, want caddy_shack; " +
+		"missing --add-host host.docker.internal:host-gateway; " +
+		"missing volume caddy_shack_relay_socket:/run/caddy_shack"
+	if d := specDrift(native, legacy); strings.Join(d, "; ") != wantLegacy {
+		t.Errorf("legacy container should be on the bridge and lack add-host and relay volume, got %v", d)
 	}
 	current := legacy
+	current.NetworkMode = CaddyNetworkName
 	current.ExtraHosts = []string{HostGatewayEntry}
 	current.Mounts = append(current.Mounts, docker.VolumeMount{VolumeName: RelayVolume, ContainerPath: RelaySocketDir})
 	if d := specDrift(native, current); len(d) != 0 {
 		t.Errorf("current container should not drift: %v", d)
 	}
-	current.NetworkMode = "default"
-	if d := specDrift(native, current); len(d) != 0 {
+	if d := specDrift(docker.ContainerSpec{}, docker.ContainerInfo{NetworkMode: "default"}); len(d) != 0 {
 		t.Errorf("'default' network mode is the bridge: %v", d)
+	}
+	current.NetworkMode = "default"
+	if d := specDrift(native, current); strings.Join(d, "; ") != "network mode is bridge, want caddy_shack" {
+		t.Errorf("'default' network mode is the bridge, so it drifts from caddy_shack: %v", d)
 	}
 	relay := relayContainerSpec(DefaultInstance(), CaddyImage)
 	if d := specDrift(relay, docker.ContainerInfo{NetworkMode: "bridge", Command: relay.Command}); len(d) != 2 {
@@ -315,7 +326,7 @@ func TestSpecDriftFlagsPreResumeCommand(t *testing.T) {
 		"exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"}
 	for _, hn := range []HostNetwork{{Kind: EngineLoopbackForwarded}, {Kind: EngineNativeLinux, Gateway: testGateway}} {
 		spec := caddyContainerSpec(DefaultInstance(), CaddyImage, hn)
-		info := docker.ContainerInfo{NetworkMode: "bridge", ExtraHosts: spec.ExtraHosts, Mounts: spec.Volumes, Command: preResume, Ports: spec.PortMappings}
+		info := docker.ContainerInfo{NetworkMode: spec.NetworkMode, ExtraHosts: spec.ExtraHosts, Mounts: spec.Volumes, Command: preResume, Ports: spec.PortMappings}
 		d := specDrift(spec, info)
 		if len(d) != 1 || d[0] != "outdated container command" {
 			t.Errorf("%s: want only the command flagged, got %v", hn.Kind, d)

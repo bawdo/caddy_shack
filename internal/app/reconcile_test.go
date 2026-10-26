@@ -17,6 +17,10 @@ import (
 	"github.com/bawdo/caddy_shack/internal/state"
 )
 
+// bootedCaddyConfig is what GET /config/ returns from a Caddy freshly booted
+// from caddyBootScript: the admin block alone, no apps.
+const bootedCaddyConfig = `{"admin":{"listen":"0.0.0.0:2019","enforce_origin":true,"origins":["127.0.0.1:2019","localhost:2019"]}}`
+
 func twoBackends() *state.State {
 	return &state.State{SchemaVersion: state.SchemaVersion, Backends: map[string]state.Backend{
 		"alpha": {Domain: "alpha.test", Upstream: "host.docker.internal:3000"},
@@ -51,6 +55,7 @@ func TestCompareConfig(t *testing.T) {
 		{"backend missing from live", s, caddyapi.Build(onlyAlpha, caddyapi.Options{}),
 			Drift{HTTPApp: true, TLSApp: true, Missing: []string{"bravo"}}},
 		{"nothing registered, bare caddy", empty, []byte(bareCaddyConfig), Drift{InSync: true}},
+		{"nothing registered, freshly booted origin-enforcing caddy", empty, []byte(bootedCaddyConfig), Drift{InSync: true}},
 		{"nothing registered, live routes", empty, desired,
 			Drift{HTTPApp: true, TLSApp: true, Unknown: []string{"*.alpha.test", "*.bravo.test", "alpha.test", "bravo.test"}}},
 	}

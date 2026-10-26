@@ -1,6 +1,7 @@
 package caddyapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -683,5 +684,27 @@ func TestBuildOmitsPolicyWhenOnlyLANNamesAllCovered(t *testing.T) {
 	}
 	if subjects := internalPolicySubjects(t, Build(s, Options{Certs: certs})); len(subjects) != 0 {
 		t.Errorf("every name is covered, so no internal policy should exist; got %v", subjects)
+	}
+}
+
+// TestBuildAdminEnforcesOrigin pins the whole rendered admin object: bound
+// to every interface (so the host's published port reaches it) with
+// enforce_origin on, so a browser page that DNS-rebinds to 127.0.0.1 (and
+// cannot forge Origin) is refused.
+func TestBuildAdminEnforcesOrigin(t *testing.T) {
+	got := Build(&state.State{SchemaVersion: 1, Backends: map[string]state.Backend{}}, Options{})
+	var doc struct {
+		Admin json.RawMessage `json:"admin"`
+	}
+	if err := json.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, doc.Admin); err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	want := `{"listen":"0.0.0.0:2019","enforce_origin":true,"origins":["127.0.0.1:2019","localhost:2019"]}`
+	if compact.String() != want {
+		t.Errorf("admin:\n got  %s\n want %s", compact.String(), want)
 	}
 }

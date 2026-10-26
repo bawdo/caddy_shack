@@ -41,12 +41,27 @@ func NewClient(baseURL string, timeout time.Duration) *Client {
 	}
 }
 
+// newRequest builds a request to path on the admin API, honouring ctx, with
+// the Origin header Caddy's enforce_origin requires. The Origin is always
+// http://AdminOrigins[0], not derived from the base URL: Caddy compares it
+// with its configured origins (the container-side 127.0.0.1:2019), not with
+// the host port the request arrived on, so a non-default admin port still
+// matches.
+func (c *Client) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Origin", "http://"+AdminOrigins[0])
+	return req, nil
+}
+
 // Load POSTs config to /load. Treats 2xx as success. The request honours
 // ctx cancellation so Ctrl+C during a long config push exits promptly.
 func (c *Client) Load(ctx context.Context, config []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/load", bytes.NewReader(config))
+	req, err := c.newRequest(ctx, http.MethodPost, "/load", bytes.NewReader(config))
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
@@ -65,9 +80,9 @@ func (c *Client) Load(ctx context.Context, config []byte) error {
 // raw body. Connection errors wrap ErrUnreachable. Non-2xx returns
 // *ErrRejected with the status and body.
 func (c *Client) GetConfig(ctx context.Context) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/config/", nil)
+	req, err := c.newRequest(ctx, http.MethodGet, "/config/", nil)
 	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
+		return nil, err
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -93,9 +108,9 @@ type CAInfo struct {
 // Connection errors wrap ErrUnreachable. Non-2xx returns *ErrRejected. Honours
 // ctx so Ctrl+C during a hanging probe exits promptly.
 func (c *Client) LocalCA(ctx context.Context) (CAInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/pki/ca/local", nil)
+	req, err := c.newRequest(ctx, http.MethodGet, "/pki/ca/local", nil)
 	if err != nil {
-		return CAInfo{}, fmt.Errorf("build request: %w", err)
+		return CAInfo{}, err
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -117,7 +132,7 @@ func (c *Client) LocalCA(ctx context.Context) (CAInfo, error) {
 // timeout. Used by `status`. Honours ctx so Ctrl+C during a hanging probe
 // exits promptly.
 func (c *Client) Reachable(ctx context.Context) bool {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/config/", nil)
+	req, err := c.newRequest(ctx, http.MethodGet, "/config/", nil)
 	if err != nil {
 		return false
 	}

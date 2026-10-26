@@ -194,7 +194,11 @@ func Build(s *state.State, opts Options) []byte {
 	}
 
 	cfg := config{
-		Admin: adminConfig{Listen: "0.0.0.0:2019"},
+		Admin: adminConfig{
+			Listen:        "0.0.0.0:2019",
+			EnforceOrigin: true,
+			Origins:       AdminOrigins,
+		},
 		Apps: apps{
 			HTTP: httpApp{
 				Servers: servers,

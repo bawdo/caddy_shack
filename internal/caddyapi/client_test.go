@@ -239,3 +239,49 @@ func TestClientGetConfigErrRejectedOn5xx(t *testing.T) {
 		t.Errorf("status: %d", rej.Status)
 	}
 }
+
+// roundTripFunc is an http.RoundTripper made from a function, so a test can
+// see every request the client sends without binding a port.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestClientSendsAdminOrigin: Caddy's admin API runs with enforce_origin,
+// so every request the client makes must carry an Origin in AdminOrigins.
+// The header is the same whatever host port the admin API is published on
+// (here a non-default 47123): Caddy compares it with its configured origins,
+// which name the container-side 127.0.0.1:2019, not with the port the
+// request arrived on.
+func TestClientSendsAdminOrigin(t *testing.T) {
+	var got []string
+	c := NewClient("http://127.0.0.1:47123", time.Second)
+	c.http.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		got = append(got, r.Method+" "+r.URL.Host+r.URL.Path+" "+r.Header.Get("Origin"))
+		body := ""
+		if r.URL.Path == "/pki/ca/local" {
+			body = `{}`
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	})
+
+	ctx := context.Background()
+	if err := c.Load(ctx, []byte(`{}`)); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := c.GetConfig(ctx); err != nil {
+		t.Fatalf("GetConfig: %v", err)
+	}
+	if _, err := c.LocalCA(ctx); err != nil {
+		t.Fatalf("LocalCA: %v", err)
+	}
+	if !c.Reachable(ctx) {
+		t.Fatal("Reachable: false")
+	}
+
+	const o = "http://127.0.0.1:2019"
+	const h = "127.0.0.1:47123"
+	want := []string{"POST " + h + "/load " + o, "GET " + h + "/config/ " + o, "GET " + h + "/pki/ca/local " + o, "GET " + h + "/config/ " + o}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("requests (method host+path Origin):\n got  %q\n want %q", got, want)
+	}
+}

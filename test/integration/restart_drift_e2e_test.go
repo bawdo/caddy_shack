@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -70,7 +72,7 @@ func mustDocker(t *testing.T, args ...string) {
 func liveConfig(t *testing.T, inst app.Instance) string {
 	t.Helper()
 	WaitForCaddyAdmin(t, inst.AdminURL(), 30*time.Second)
-	resp, err := http.Get(inst.AdminURL() + "/config/")
+	resp, err := adminGet(inst.AdminURL(), "/config/")
 	if err != nil {
 		t.Fatalf("GET /config/: %v", err)
 	}
@@ -117,7 +119,23 @@ func legacyRunArgs(inst app.Instance) []string {
 	}
 }
 
-const bareConfig = `{"admin":{"listen":"0.0.0.0:2019"}}`
+// legacyBareConfig is the live config of a legacy container booted from its
+// bare admin-only Caddyfile.
+const legacyBareConfig = `{"admin":{"listen":"0.0.0.0:2019"}}`
+
+// bareConfig is the live config of a current container booted from its
+// admin-only Caddyfile (no autosave, or an invalid one).
+const bareConfig = `{"admin":{"enforce_origin":true,"listen":"0.0.0.0:2019","origins":["127.0.0.1:2019","localhost:2019"]}}`
+
+// sameJSON reports whether a and b are the same JSON value, whatever their
+// key order.
+func sameJSON(a, b string) bool {
+	var av, bv any
+	if json.Unmarshal([]byte(a), &av) != nil || json.Unmarshal([]byte(b), &bv) != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
+}
 
 // TestRestartDriftE2E reproduces the 2026-10-05 incident against real
 // docker and proves the fix:
@@ -162,7 +180,7 @@ func TestRestartDriftE2E(t *testing.T) {
 	}
 
 	mustDocker(t, "restart", inst.ContainerName)
-	if got := liveConfig(t, inst); got != bareConfig {
+	if got := liveConfig(t, inst); got != legacyBareConfig {
 		t.Fatalf("legacy container should come back bare (the bug), got %s", got)
 	}
 
@@ -190,7 +208,7 @@ func TestRestartDriftE2E(t *testing.T) {
 	// start on a running, drifted Caddy (what a user runs after a reboot)
 	// must restore too, not no-op.
 	mustDocker(t, "restart", inst.ContainerName)
-	if got := liveConfig(t, inst); got != bareConfig {
+	if got := liveConfig(t, inst); got != legacyBareConfig {
 		t.Fatalf("expected bare config again, got %s", got)
 	}
 	if err := a.Start(ctx); err != nil {
@@ -233,7 +251,7 @@ func TestRestartDriftE2E(t *testing.T) {
 
 	mustDocker(t, "exec", inst.ContainerName, "sh", "-c", `echo '{"apps":{"nope":{}}}' > /config/caddy/autosave.json`)
 	mustDocker(t, "restart", inst.ContainerName)
-	if got := liveConfig(t, inst); got != bareConfig {
+	if got := liveConfig(t, inst); !sameJSON(got, bareConfig) {
 		t.Fatalf("an invalid autosave should fall back to the bare config, got %s", got)
 	}
 	if err := a.Start(ctx); err != nil {

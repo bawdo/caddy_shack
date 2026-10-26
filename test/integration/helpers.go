@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/bawdo/caddy_shack/internal/app"
+	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/docker"
 )
 
@@ -43,13 +44,25 @@ func CleanupContainer(t *testing.T) {
 	t.Cleanup(rm)
 }
 
+// adminGet GETs path on the admin API at baseURL with the Origin header
+// caddy_shack's client sends, which Caddy requires once enforce_origin is on
+// (every caddy_shack container, and any Caddy after its first config push).
+func adminGet(baseURL, path string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Origin", "http://"+caddyapi.AdminOrigins[0])
+	return http.DefaultClient.Do(req)
+}
+
 // WaitForCaddyAdmin polls the admin API until /config/ returns 2xx or the
 // deadline expires.
 func WaitForCaddyAdmin(t *testing.T, baseURL string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(baseURL + "/config/")
+		resp, err := adminGet(baseURL, "/config/")
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == 200 {
