@@ -182,9 +182,9 @@ So on native Linux, `caddy_shack install` also runs a small relay:
   (no TCP port, nothing on `0.0.0.0` or the LAN; its admin API is off). It
   forwards each request to `localhost:<port>` (both `127.0.0.1` and `::1`).
 - `caddy_shack` itself is unchanged apart from mounting that volume and
-  `--add-host host.docker.internal:host-gateway`. It stays on the default
-  bridge and the `caddy_shack` network, so `--container` backends work
-  exactly as on macOS.
+  `--add-host host.docker.internal:host-gateway`. As on every engine it lives
+  on the `caddy_shack` network (not the default bridge), so `--container`
+  backends work exactly as on macOS.
 - Host-mode routes dial the socket, naming the backend's port in a header
   Caddy sets (a client can't override it). `state.json` still records
   `host.docker.internal:<port>`, so it means the same thing on every engine.
@@ -206,9 +206,10 @@ Upgrading from an older caddy_shack: `docker run` fixes mounts and extra
 hosts at creation, so the existing `caddy_shack` container has to be
 recreated. Run `caddy_shack install` (or accept the `container-config` fix in
 `doctor --fix`). It reuses the `caddy_shack_data` and `caddy_shack_config`
-volumes - so the local root CA your browser and OS already trust, and the
-issued certificates, are kept - reattaches every Docker network the old
-container was on, and re-pushes every registered backend. `start` and
+volumes (so the local root CA your browser and OS already trust, and the
+issued certificates, are kept), reattaches every Docker network the old
+container was on except the default bridge, and re-pushes every registered
+backend. `start` and
 `register` never recreate; they print this hint instead.
 
 ## Usage
@@ -224,12 +225,18 @@ caddy_shack install
 Pulls `caddy:2`, creates two named volumes (`caddy_shack_data`,
 `caddy_shack_config`), and starts a single container called `caddy_shack`
 listening on `127.0.0.1:80`, `:443`, and `:2019` (admin API). Those host ports
-are published on `127.0.0.1` only, but inside Docker the admin API listens on
-`0.0.0.0:2019`, so it is reachable from any container on the default bridge or
-the shared `caddy_shack` network, including every app registered with
-`--container` (see [Security notes](#security-notes)).
-Idempotent: re-running on an existing install is a no-op. On native Linux it
-also starts the `caddy_shack_relay` container (see
+are published on `127.0.0.1` only. The container lives on the shared
+`caddy_shack` network only, not the default bridge, so a plain `docker run`
+container cannot reach it. Inside Docker the admin API listens on
+`0.0.0.0:2019`, so it is reachable from any container on the `caddy_shack`
+network, including every app registered with `--container`, and on Docker
+Desktop and OrbStack most likely from any container at all (see
+[Security notes](#security-notes)).
+Idempotent: re-running on an up-to-date install is a no-op. A container
+created by an older caddy_shack (for example one still on the default bridge)
+is recreated, keeping the volumes, the local CA, networks and backends;
+`caddy_shack start` tells you when that is needed. On native Linux it also
+starts the `caddy_shack_relay` container (see
 [Host-mode backends on native Linux](#host-mode-backends-on-native-linux)).
 
 To get HTTPS without browser warnings, trust Caddy's internal root CA once:
@@ -278,14 +285,16 @@ caddy_shack status || { [ $? -eq 9 ] && caddy_shack sync; }
 ```
 
 Containers created before this behaviour existed boot without resuming
-their config. `caddy_shack doctor` reports them (`container-config`) and
+their config (and older ones still sit on the default bridge with an admin
+API that does not check `Origin`). `caddy_shack doctor` reports them
+(`container-config`) and
 `caddy_shack install` recreates them once, keeping the volumes, the local CA,
 networks and backends.
 
 `upgrade` re-pulls the `caddy:2` image and, if the digest changed, recreates
 the container against it. Both named volumes are preserved, so certificates
 and ACME state survive, every Docker network the container was attached to
-is reattached, and registered backends are restored from state so every
+(except the default bridge) is reattached, and registered backends are restored from state so every
 `.test` URL keeps working. It is a no-op when already current.
 
 ### Registering a backend
@@ -693,26 +702,70 @@ forwarder state. `caddy_shack doctor` adds `lan-ip-present`, `lan-forwarder`,
 caddy_shack is a local development tool and trusts the containers you run next
 to it. Know where that trust boundary sits:
 
-- **The admin API is open to sibling containers.** Caddy's admin API listens on
-  `0.0.0.0:2019` inside its container, with no authentication, so any container
-  on the default bridge or the `caddy_shack` network (every app registered with
-  `--container` is on it) can call it. A hostile sibling could replace the whole
-  config with `POST /load`, proxy traffic to ports on your host, and read the
-  private keys of loaded certificates. Caddy's `enforce_origin` option does not
-  help here: it is an `Origin` header check, any client can set that header to
-  whatever it likes, and on a wildcard listener such as `0.0.0.0` Caddy skips
-  the `Host` check entirely. The practical guidance is to only attach
-  containers you trust to the `caddy_shack` network. The proper fix, a unix
-  socket or an mTLS remote admin endpoint, is noted for future work.
+- **The admin API is open to sibling containers, and through it the local
+  root CA.** Caddy's admin API listens on `0.0.0.0:2019` inside its container,
+  with no authentication, so any container on the `caddy_shack` network (every
+  app registered with `--container` is on it) can call it. The worst it can do:
+  `POST /load` a config with a `file_server` route rooted at
+  `/data/caddy/pki/authorities/local` and download `root.key`, the private key
+  of the local root CA this README tells you to trust system-wide. As far as we
+  know that root carries no name constraints, so whoever holds the key can
+  mint a certificate for any name that every browser on the host accepts. The
+  same access lets a hostile sibling replace the whole config, proxy traffic to
+  ports on your host, and read the private keys of loaded certificates. To
+  limit the damage:
+  - do not trust the root in the system store on a machine that runs
+    containers you do not trust;
+  - remove it from the store when you stop using caddy_shack. Print its subject
+    with `caddy_shack ca | openssl x509 -noout -subject`, then on macOS run
+    `sudo security delete-certificate -c "Caddy Local Authority - 2024 ECC Root" /Library/Keychains/System.keychain`
+    with the CN it printed in place of the one shown, or on p11-kit systems
+    (Omarchy and most Linux distributions) `sudo trust anchor --remove <file>`
+    with the file you added.
+
+  Only attach containers you trust to the `caddy_shack` network. The proper
+  fix, a unix socket or an mTLS remote admin endpoint, is noted for future
+  work.
+- **The Caddy container is on the `caddy_shack` network only.** It is not
+  attached to the default bridge, so plain `docker run` containers there
+  cannot reach it. On an existing install created by an older caddy_shack,
+  `caddy_shack start` tells you to run `caddy_shack install`, which recreates
+  the container keeping the volumes, the local CA and backends.
+- **On Docker Desktop and OrbStack the admin API is likely reachable from any
+  container.** The published `127.0.0.1:2019` is a listener on the host's
+  loopback, and `host.docker.internal` forwards to it, so the admin API is
+  likely reachable from a container on any network, not only the
+  `caddy_shack` network. To check:
+
+  ```
+  docker run --rm alpine wget -qO- -S http://host.docker.internal:2019/config/ 2>&1 | head -1
+  ```
+
+  A `200` or `403` in that line means it is reachable.
+- **`enforce_origin` is on.** The admin API only accepts requests whose
+  `Origin` header names `127.0.0.1:2019` or `localhost:2019`, and caddy_shack's
+  own client sends `Origin: http://127.0.0.1:2019` on every request. That value
+  is fixed: Caddy checks it against this list, not against the port the request
+  arrived on, so it is the same whatever host port the admin API is published
+  on. This stops
+  a browser DNS-rebinding attack on the host: a web page that rebinds its name
+  to `127.0.0.1` cannot forge `Origin` (and a rebound `GET` carries none), so
+  Caddy refuses it. It does not stop a sibling container, which can set any
+  header it likes, and on a wildcard listener such as `0.0.0.0` Caddy skips
+  the `Host` check, so `Origin` is the only check there is. Requests you run by
+  hand need the header too:
+  `curl -H 'Origin: http://127.0.0.1:2019' http://127.0.0.1:2019/config/`.
 - **Let's Encrypt private keys live in three places.** The key is embedded in
   the config caddy_shack pushes to Caddy, so it sits in the certificate store
   on the host, in Caddy's autosave in the `caddy_shack_config` volume, and is
   readable by anyone who can reach the admin API via `GET /config/`.
 - **The LAN listener trusts any PROXY protocol header.** Its PROXY protocol
   wrapper accepts a header from any sender on the shared network. An `allow`
-  list would not exclude siblings, because the forwarder shares that subnet, so
-  this is documented rather than filtered. The impact is a spoofable client
-  address in Caddy's logs and in the `X-Forwarded-For` header backends see.
+  list naming only the forwarder's own /32 would exclude siblings, but it
+  needs the forwarder pinned to a fixed address and the config re-rendered on
+  every forwarder start. The only impact is a spoofable client address in
+  Caddy's logs and in the `X-Forwarded-For` header backends see during
+  development, so it is not worth it.
 
 ## Development
 
