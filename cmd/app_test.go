@@ -51,6 +51,16 @@ func TestWithAppReturnsConstructorError(t *testing.T) {
 	if called {
 		t.Fatal("run must not be called when app.New fails")
 	}
+	// The constructor's error must come back unchanged (not wrapped or
+	// replaced). app.New builds a fresh error value each call, so compare
+	// with a direct call in the same broken environment by message.
+	_, want := app.New()
+	if want == nil {
+		t.Fatal("app.New succeeded directly but failed under withApp")
+	}
+	if err.Error() != want.Error() {
+		t.Errorf("withApp error = %q, want app.New's error %q unchanged", err, want)
+	}
 }
 
 func TestDoctorFlagValidationBeatsConstructorError(t *testing.T) {
