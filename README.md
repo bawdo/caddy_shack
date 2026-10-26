@@ -779,13 +779,14 @@ Run the local pre-CI gauntlet before pushing:
 make pre-ci
 ```
 
-The script does not run the vulnerability scan or the Docker-backed integration tests. `make vuln` and `make integration` run those two checks, matching the CI jobs.
-
 Auto-fix formatting along the way:
 
 ```
 make pre-ci-fix
 ```
+
+The script skips the vulnerability scan and the Docker-backed integration
+tests; `make vuln` and `make integration` run those, matching the CI jobs.
 
 Install a local build into `$GOBIN`:
 
