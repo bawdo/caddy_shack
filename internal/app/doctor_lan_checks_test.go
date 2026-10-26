@@ -414,3 +414,15 @@ func TestCheckLANFirewall(t *testing.T) {
 		t.Errorf("detail should mention DOCKER-USER: %v", r.Detail)
 	}
 }
+
+func TestCheckLANForwarderRestartingFailsWithRecreateFix(t *testing.T) {
+	a, fake := lanDoctorApp(t, enabledLAN(state.LANModePinned, "192.168.1.12"), nil, docLANStub{ip: "192.168.1.12", present: true})
+	fake.Containers[a.inst.LANContainerName] = docker.StateRestarting
+	r := checkLANForwarder(context.Background(), a)
+	if r.Status != SeverityFail || !strings.Contains(r.Summary, "restarting") {
+		t.Errorf("want fail saying restarting, got %+v", r)
+	}
+	if r.Fix == nil {
+		t.Error("expected recreate fix")
+	}
+}

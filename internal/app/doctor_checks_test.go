@@ -1385,3 +1385,38 @@ func TestCheckBackendsUsesWgetFallbackWhenNcMissing(t *testing.T) {
 		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
 	}
 }
+
+func TestCheckContainerHealthFailWhenRestartingSaysSo(t *testing.T) {
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRestarting
+	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+
+	r := checkContainerHealth(context.Background(), a)
+	if r.Status != SeverityFail {
+		t.Errorf("status: %v", r.Status)
+	}
+	if !strings.Contains(r.Summary, "restarting") || strings.Contains(r.Summary, "admin API") {
+		t.Errorf("summary: %q", r.Summary)
+	}
+	if len(r.Detail) == 0 || !strings.Contains(r.Detail[0], "docker logs "+CaddyContainerName) {
+		t.Errorf("detail: %v", r.Detail)
+	}
+	if r.Fix == nil {
+		t.Fatal("expected restart fix")
+	}
+	if want := "restart container ('caddy_shack restart')"; r.Fix.Label != want {
+		t.Errorf("fix label = %q, want %q", r.Fix.Label, want)
+	}
+}
+
+func TestCheckPortAvailabilityPassWhenContainerRestartingHoldsPorts(t *testing.T) {
+	heldPort, _ := listenLoopback(t)
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRestarting
+	a := NewWithPaths(Paths{}, nil, fake)
+
+	r := checkPortAvailabilityOn(context.Background(), a, []int{heldPort})
+	if r.Status != SeverityPass {
+		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
+	}
+}

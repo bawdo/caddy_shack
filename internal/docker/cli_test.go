@@ -142,3 +142,35 @@ func TestParseContainerInfoPorts(t *testing.T) {
 		t.Errorf("\n got  %+v\n want %+v", got.Ports, want)
 	}
 }
+
+func TestParseContainerStatus(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    ContainerState
+		wantErr bool
+	}{
+		{"running", StateRunning, false},
+		{"running\n", StateRunning, false},
+		{"restarting", StateRestarting, false},
+		{"exited", StateStopped, false},
+		{"created", StateStopped, false},
+		{"paused", StateStopped, false},
+		{"dead", StateStopped, false},
+		{"junk", StateAbsent, true},
+	}
+	for _, c := range cases {
+		got, err := parseContainerStatus(c.in)
+		if (err != nil) != c.wantErr {
+			t.Errorf("parseContainerStatus(%q) err = %v, wantErr %v", c.in, err, c.wantErr)
+		}
+		if got != c.want {
+			t.Errorf("parseContainerStatus(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestContainerStateRestartingString(t *testing.T) {
+	if got := StateRestarting.String(); got != "restarting" {
+		t.Errorf("String() = %q", got)
+	}
+}

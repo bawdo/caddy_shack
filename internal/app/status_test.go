@@ -377,3 +377,25 @@ func TestStatusLANDrift(t *testing.T) {
 		t.Error("drift must not affect Healthy")
 	}
 }
+
+func TestStatusUnhealthyWhenContainerRestarting(t *testing.T) {
+	dir := t.TempDir()
+	fakeDock := docker.NewFake()
+	fakeDock.Containers[CaddyContainerName] = docker.StateRestarting
+
+	a := NewWithPaths(Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  filepath.Join(dir, "state.json.lock"),
+	}, caddyapi.NewClient("http://127.0.0.1:1", 200*time.Millisecond), fakeDock)
+
+	rep, err := a.Status(context.Background())
+	if !errors.Is(err, ErrUnhealthy) {
+		t.Errorf("expected ErrUnhealthy, got %v", err)
+	}
+	if rep.ContainerState != "restarting" {
+		t.Errorf("ContainerState = %q, want restarting", rep.ContainerState)
+	}
+	if rep.Healthy {
+		t.Errorf("expected Healthy=false")
+	}
+}

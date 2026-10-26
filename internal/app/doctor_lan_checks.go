@@ -151,6 +151,8 @@ func checkLANForwarder(_ context.Context, a *App) CheckResult {
 		return CheckResult{Name: name, Status: SeverityFail, Summary: cname + " does not exist", Fix: fix}
 	case docker.StateStopped:
 		return CheckResult{Name: name, Status: SeverityFail, Summary: cname + " is stopped", Fix: fix}
+	case docker.StateRestarting:
+		return CheckResult{Name: name, Status: SeverityFail, Summary: cname + " is restarting (crash-looping)", Fix: fix}
 	}
 	info, err := a.docker.InspectContainer(cname)
 	if err != nil {
