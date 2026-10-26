@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
-  VULN_VERSION: v1.1.4
+  VULN_VERSION: v1.9.0
 
 jobs:
   # Formatting, lint and vulnerability checks are pure Go and OS-independent, so they run once on cheap Linux.

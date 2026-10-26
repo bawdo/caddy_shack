@@ -7,7 +7,7 @@ LDFLAGS := -X github.com/bawdo/caddy_shack/internal/version.Version=$(VERSION) \
            -X github.com/bawdo/caddy_shack/internal/version.Tag=$(TAG) \
            -X github.com/bawdo/caddy_shack/internal/version.Dirty=$(DIRTY)
 
-VULN_VERSION := v1.1.4
+VULN_VERSION := v1.9.0
 
 .DEFAULT_GOAL := help
 
