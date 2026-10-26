@@ -218,3 +218,31 @@ func TestRestartStopsThenStartsAndRestoresBackends(t *testing.T) {
 		t.Errorf("backends not restored to Caddy after restart: %s", f.lastBody)
 	}
 }
+
+func TestStartAndInstallDoNotDockerStartARestartingContainer(t *testing.T) {
+	for name, run := range map[string]func(*App) error{
+		"Start":   func(a *App) error { return a.Start(context.Background()) },
+		"Install": func(a *App) error { return a.Install(context.Background()) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, http.StatusOK)
+			d := f.app.docker.(*docker.Fake)
+			// Install once so the container matches the expected spec (no drift),
+			// then make it crash-loop.
+			if err := f.app.Install(context.Background()); err != nil {
+				t.Fatalf("setup Install: %v", err)
+			}
+			d.Containers[CaddyContainerName] = docker.StateRestarting
+
+			if err := run(f.app); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			// Fake.Start flips the state to running, so an unchanged state
+			// proves docker start was not called.
+			st, _ := d.ContainerState(CaddyContainerName)
+			if st != docker.StateRestarting {
+				t.Errorf("state = %v, want restarting (docker start must not be called)", st)
+			}
+		})
+	}
+}

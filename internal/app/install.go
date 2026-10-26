@@ -95,7 +95,8 @@ func (a *App) Install(ctx context.Context) error {
 	}
 
 	switch state {
-	case docker.StateRunning:
+	case docker.StateRunning, docker.StateRestarting:
+		// A restarting container is left to docker; waitForAdmin bounds the wait.
 		return a.restoreThenRelay(ctx)
 	case docker.StateStopped:
 		if err := a.docker.Start(a.inst.ContainerName); err != nil {

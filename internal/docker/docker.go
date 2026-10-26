@@ -19,6 +19,9 @@ const (
 	StateStopped
 	// StateRunning means a container exists and is running.
 	StateRunning
+	// StateRestarting means a container exists and docker is restarting it,
+	// typically because it is crash-looping. It is not serving.
+	StateRestarting
 )
 
 func (s ContainerState) String() string {
@@ -29,6 +32,8 @@ func (s ContainerState) String() string {
 		return "stopped"
 	case StateRunning:
 		return "running"
+	case StateRestarting:
+		return "restarting"
 	default:
 		return "unknown"
 	}

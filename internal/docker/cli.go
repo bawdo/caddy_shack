@@ -49,7 +49,7 @@ func (CLI) ContainerState(name string) (ContainerState, error) {
 	// --type container: without it docker inspects whatever object has the
 	// name, so a volume or network sharing a container's name would be
 	// inspected instead (and has no .State).
-	cmd := exec.Command("docker", "inspect", "--type", "container", "--format", "{{.State.Running}}", name)
+	cmd := exec.Command("docker", "inspect", "--type", "container", "--format", "{{.State.Status}}", name)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -63,13 +63,26 @@ func (CLI) ContainerState(name string) (ContainerState, error) {
 		}
 		return StateAbsent, fmt.Errorf("docker inspect %s: %w: %s", name, err, stderr.String())
 	}
-	switch strings.TrimSpace(stdout.String()) {
-	case "true":
+	st, err := parseContainerStatus(stdout.String())
+	if err != nil {
+		return StateAbsent, fmt.Errorf("docker inspect %s: %w", name, err)
+	}
+	return st, nil
+}
+
+// parseContainerStatus maps the output of `docker inspect --format
+// {{.State.Status}}` to a ContainerState. Only running and restarting are
+// distinguished; created, exited, paused and dead all read as stopped.
+func parseContainerStatus(s string) (ContainerState, error) {
+	switch strings.TrimSpace(s) {
+	case "running":
 		return StateRunning, nil
-	case "false":
+	case "restarting":
+		return StateRestarting, nil
+	case "created", "exited", "paused", "dead":
 		return StateStopped, nil
 	default:
-		return StateAbsent, fmt.Errorf("docker inspect %s: unexpected output %q", name, stdout.String())
+		return StateAbsent, fmt.Errorf("unexpected container status %q", s)
 	}
 }
 
