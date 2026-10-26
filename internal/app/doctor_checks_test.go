@@ -299,13 +299,8 @@ func fakeRootCert() ([]byte, string) {
 }
 
 func TestCheckTrustStoreDarwinPassWhenSHAFound(t *testing.T) {
-	fake := docker.NewFake()
-	fake.Containers[CaddyContainerName] = docker.StateRunning
 	cert, sha := fakeRootCert()
-	fake.ExecResponses["caddy_shack:cat /data/caddy/pki/authorities/local/root.crt"] = docker.ExecResponse{
-		Stdout: cert,
-	}
-	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+	a := caTestApp(t, caBodyFor(cert))
 
 	sh := func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name == "security" {
@@ -322,13 +317,8 @@ func TestCheckTrustStoreDarwinPassWhenSHAFound(t *testing.T) {
 }
 
 func TestCheckTrustStoreDarwinFailWhenSHAMissing(t *testing.T) {
-	fake := docker.NewFake()
-	fake.Containers[CaddyContainerName] = docker.StateRunning
 	cert, _ := fakeRootCert()
-	fake.ExecResponses["caddy_shack:cat /data/caddy/pki/authorities/local/root.crt"] = docker.ExecResponse{
-		Stdout: cert,
-	}
-	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+	a := caTestApp(t, caBodyFor(cert))
 
 	sh := func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name == "security" {
@@ -356,9 +346,9 @@ func TestCheckTrustStoreDarwinFailWhenSHAMissing(t *testing.T) {
 	for _, want := range []string{
 		"expected SHA-256 not present in System keychain dump",
 		"expected SHA-256 (DER):",
-		"cert source: " + CaddyContainerName + ":/data/caddy/pki/authorities/local/root.crt",
+		"cert source: Caddy admin API (/pki/ca/local)",
 		"to fix manually:",
-		"docker exec " + CaddyContainerName + " cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt",
+		"caddy_shack ca > /tmp/caddy_shack_root.crt",
 		"sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/caddy_shack_root.crt",
 	} {
 		if !strings.Contains(joined, want) {
@@ -368,13 +358,8 @@ func TestCheckTrustStoreDarwinFailWhenSHAMissing(t *testing.T) {
 }
 
 func TestCheckTrustStoreDarwinFailWhenSecurityErrors(t *testing.T) {
-	fake := docker.NewFake()
-	fake.Containers[CaddyContainerName] = docker.StateRunning
 	cert, _ := fakeRootCert()
-	fake.ExecResponses["caddy_shack:cat /data/caddy/pki/authorities/local/root.crt"] = docker.ExecResponse{
-		Stdout: cert,
-	}
-	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+	a := caTestApp(t, caBodyFor(cert))
 
 	sh := func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name == "security" {
@@ -410,10 +395,8 @@ func TestCheckTrustStoreDarwinSkipWhenContainerNotRunning(t *testing.T) {
 }
 
 func TestCheckTrustStoreDarwinWarnWhenCertNotProvisioned(t *testing.T) {
-	fake := docker.NewFake()
-	fake.Containers[CaddyContainerName] = docker.StateRunning
-	// No ExecResponses entry => Fake.Exec returns "no scripted response" error.
-	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+	// Admin API answers but Caddy has not issued a root yet.
+	a := caTestApp(t, `{"root_certificate":"","intermediate_certificate":""}`)
 
 	r := checkTrustStoreDarwin(context.Background(), a, noopShell, noopShell)
 	if r.Status != SeverityWarn {
@@ -528,13 +511,8 @@ func TestApplyDNSFixLinuxRefusesWhenResolvedNotActive(t *testing.T) {
 }
 
 func TestCheckTrustStoreLinuxPassWhenBundleContainsCert(t *testing.T) {
-	fake := docker.NewFake()
-	fake.Containers[CaddyContainerName] = docker.StateRunning
 	cert, _ := fakeRootCert()
-	fake.ExecResponses["caddy_shack:cat /data/caddy/pki/authorities/local/root.crt"] = docker.ExecResponse{
-		Stdout: cert,
-	}
-	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+	a := caTestApp(t, caBodyFor(cert))
 
 	sh := func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name == "test" {
@@ -556,13 +534,8 @@ func TestCheckTrustStoreLinuxPassWhenBundleContainsCert(t *testing.T) {
 }
 
 func TestCheckTrustStoreLinuxFailWhenBundleMissingCert(t *testing.T) {
-	fake := docker.NewFake()
-	fake.Containers[CaddyContainerName] = docker.StateRunning
 	cert, _ := fakeRootCert()
-	fake.ExecResponses["caddy_shack:cat /data/caddy/pki/authorities/local/root.crt"] = docker.ExecResponse{
-		Stdout: cert,
-	}
-	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+	a := caTestApp(t, caBodyFor(cert))
 
 	otherDER := bytes.Repeat([]byte{0xCD}, 200)
 	otherPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: otherDER})
@@ -590,9 +563,11 @@ func TestCheckTrustStoreLinuxFailWhenBundleMissingCert(t *testing.T) {
 	joined := strings.Join(r.Detail, "\n")
 	for _, want := range []string{
 		"expected SHA-256 (DER):",
-		"cert source: " + CaddyContainerName + ":/data/caddy/pki/authorities/local/root.crt",
+		"cert source: Caddy admin API (/pki/ca/local)",
 		"checked bundles: " + linuxCABundlePaths[0],
+		"caddy_shack ca > /tmp/caddy_shack_root.crt",
 		"sudo trust anchor /tmp/caddy_shack_root.crt",
+		"caddy_shack ca | sudo tee /usr/local/share/ca-certificates/caddy_shack.crt",
 		"sudo update-ca-certificates",
 	} {
 		if !strings.Contains(joined, want) {
@@ -611,9 +586,8 @@ func TestCheckTrustStoreLinuxSkipWhenContainerNotRunning(t *testing.T) {
 }
 
 func TestCheckTrustStoreLinuxWarnWhenCertNotProvisioned(t *testing.T) {
-	fake := docker.NewFake()
-	fake.Containers[CaddyContainerName] = docker.StateRunning
-	a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+	// Admin API answers but Caddy has not issued a root yet.
+	a := caTestApp(t, `{"root_certificate":"","intermediate_certificate":""}`)
 
 	r := checkTrustStoreLinux(context.Background(), a, noopShell, noopShell)
 	if r.Status != SeverityWarn {
@@ -1383,5 +1357,59 @@ func TestCheckBackendsUsesWgetFallbackWhenNcMissing(t *testing.T) {
 	r := checkBackends(context.Background(), a)
 	if r.Status != SeverityPass {
 		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
+	}
+}
+
+// caBodyFor builds a /pki/ca/local response body serving root (and an
+// intermediate, so callers can check it is left out of root-only reads).
+func caBodyFor(root []byte) string {
+	return `{"root_certificate":` + quote(string(root)) + `,"intermediate_certificate":` + quote(testIntPEM) + `}`
+}
+
+func TestLocalRootCAFingerprintHashesDER(t *testing.T) {
+	cert, wantSHA := fakeRootCert()
+	a := caTestApp(t, caBodyFor(cert))
+
+	gotPEM, gotSHA, err := a.localRootCAFingerprint(context.Background())
+	if err != nil {
+		t.Fatalf("localRootCAFingerprint: %v", err)
+	}
+	if gotSHA != wantSHA {
+		t.Errorf("sha: got %s, want %s", gotSHA, wantSHA)
+	}
+	if gotSHA != strings.ToUpper(gotSHA) {
+		t.Errorf("sha should be uppercase hex: %s", gotSHA)
+	}
+	if !bytes.Equal(gotPEM, cert) {
+		t.Errorf("pem should be the root only:\ngot  %q\nwant %q", gotPEM, cert)
+	}
+	if strings.Contains(string(gotPEM), "INT") {
+		t.Errorf("root-only pem leaked the intermediate: %q", gotPEM)
+	}
+}
+
+// A running container whose admin API is down is a broken setup, not a CA
+// that has yet to be issued: both trust-store checks must FAIL, not WARN.
+func TestCheckTrustStoreFailWhenAdminAPIUnreachable(t *testing.T) {
+	for name, check := range map[string]func(context.Context, *App, shellExecutor, shellExecutor) CheckResult{
+		"darwin": checkTrustStoreDarwin,
+		"linux":  checkTrustStoreLinux,
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := docker.NewFake()
+			fake.Containers[CaddyContainerName] = docker.StateRunning
+			a := newDoctorApp(t, fake, "http://127.0.0.1:1")
+
+			r := check(context.Background(), a, noopShell, noopShell)
+			if r.Status != SeverityFail {
+				t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
+			}
+			if r.Fix != nil {
+				t.Errorf("no CA to trust, so no fix expected: %+v", r.Fix)
+			}
+			if !strings.Contains(strings.Join(r.Detail, "\n"), "admin API unreachable") {
+				t.Errorf("detail should carry the admin API error: %v", r.Detail)
+			}
+		})
 	}
 }
