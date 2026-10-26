@@ -55,6 +55,9 @@ func (a *App) noteStaleCaddy() {
 //
 // State is loaded under the lock before the container is touched, so a
 // corrupt state.json aborts without any container mutation.
+// The lock is then held across the admin and relay waits (up to 45s) on
+// purpose, so a concurrent command gets exit 8 rather than reconciling
+// against a half-recreated container.
 func (a *App) recreateCaddy(ctx context.Context, image string) error {
 	lock, err := acquireStateLock(a.paths.LockPath)
 	if err != nil {
