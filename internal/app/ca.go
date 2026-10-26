@@ -19,8 +19,8 @@ import (
 // Returns, matching the documented exit codes:
 //   - ErrDockerUnreachable (4) when the docker daemon is down
 //   - ErrNotInstalled     (6) when no caddy container exists
-//   - ErrCaddyNotRunning  (5) when the container is stopped or the admin API
-//     is unreachable
+//   - ErrCaddyNotRunning  (5) when the container is stopped or restarting, or
+//     the admin API is unreachable
 //   - a generic error     (1) when Caddy has not provisioned the CA yet
 func (a *App) ExportCA(ctx context.Context, includeIntermediate bool) (string, error) {
 	if err := a.docker.DaemonReachable(); err != nil {
@@ -34,7 +34,7 @@ func (a *App) ExportCA(ctx context.Context, includeIntermediate bool) (string, e
 	switch st {
 	case docker.StateAbsent:
 		return "", fmt.Errorf("%w: run 'caddy_shack install' first", ErrNotInstalled)
-	case docker.StateStopped:
+	case docker.StateStopped, docker.StateRestarting:
 		return "", fmt.Errorf("%w (state=%s)", ErrCaddyNotRunning, st)
 	}
 

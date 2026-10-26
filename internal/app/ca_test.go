@@ -153,3 +153,21 @@ func TestExportCAErrorsWhenCANotProvisioned(t *testing.T) {
 func quote(s string) string {
 	return `"` + strings.ReplaceAll(s, "\n", `\n`) + `"`
 }
+
+// TestExportCANotRunningWhenRestarting: a crash-looping container is not
+// serving, and must say so by state rather than by an admin API timeout.
+func TestExportCANotRunningWhenRestarting(t *testing.T) {
+	dir := t.TempDir()
+	fakeDock := docker.NewFake()
+	fakeDock.Containers[CaddyContainerName] = docker.StateRestarting
+	a := NewWithPaths(Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  filepath.Join(dir, "state.json.lock"),
+	}, caddyapi.NewClient("http://127.0.0.1:1", time.Second), fakeDock)
+
+	_, err := a.ExportCA(context.Background(), false)
+	if !errors.Is(err, ErrCaddyNotRunning) || !strings.Contains(err.Error(), "(state=restarting)") ||
+		strings.Contains(err.Error(), "unreachable") {
+		t.Errorf("want ErrCaddyNotRunning (state=restarting), got %v", err)
+	}
+}

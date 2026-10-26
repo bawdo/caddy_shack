@@ -154,8 +154,9 @@ func TestParseContainerStatus(t *testing.T) {
 		{"restarting", StateRestarting, false},
 		{"exited", StateStopped, false},
 		{"created", StateStopped, false},
-		{"paused", StateStopped, false},
+		{"paused", StateRunning, false},
 		{"dead", StateStopped, false},
+		{"removing", StateStopped, false},
 		{"junk", StateAbsent, true},
 	}
 	for _, c := range cases {

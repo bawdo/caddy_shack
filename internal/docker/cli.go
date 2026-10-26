@@ -72,14 +72,16 @@ func (CLI) ContainerState(name string) (ContainerState, error) {
 
 // parseContainerStatus maps the output of `docker inspect --format
 // {{.State.Status}}` to a ContainerState. Only running and restarting are
-// distinguished; created, exited, paused and dead all read as stopped.
+// distinguished from stopped. A paused container reads as running, as it did
+// when .State.Running was used: it still holds its ports and `docker stop`
+// works on it. created, exited, dead and removing read as stopped.
 func parseContainerStatus(s string) (ContainerState, error) {
 	switch strings.TrimSpace(s) {
-	case "running":
+	case "running", "paused":
 		return StateRunning, nil
 	case "restarting":
 		return StateRestarting, nil
-	case "created", "exited", "paused", "dead":
+	case "created", "exited", "dead", "removing":
 		return StateStopped, nil
 	default:
 		return StateAbsent, fmt.Errorf("unexpected container status %q", s)
