@@ -706,3 +706,64 @@ func TestCertRemoveHonoursStateLockTimeout(t *testing.T) {
 		t.Fatalf("CertRemove waited %s; stateLockTimeout was not honoured", time.Since(start))
 	}
 }
+
+// TestCertRenewUnreadablePriorKeyFailsBeforeWriting: a prior key the store
+// cannot read is not "no prior material". Treating it so made a failed
+// renewal's undo RemoveAll a directory that was serving traffic. The renewal
+// must stop before the ACME order (so no issuance is spent) and before
+// certs.Save, naming the file, and leave the directory as it was. No admin
+// server is wired: nothing may be pushed.
+func TestCertRenewUnreadablePriorKeyFailsBeforeWriting(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode 000 file")
+	}
+	dir := t.TempDir()
+	fd := docker.NewFake()
+	fd.Containers[CaddyContainerName] = docker.StateRunning
+	a := NewWithPaths(Paths{
+		StatePath:    filepath.Join(dir, "state.json"),
+		LockPath:     filepath.Join(dir, "state.json.lock"),
+		CertStoreDir: dir,
+	}, caddyapi.NewClient("http://127.0.0.1:1", 200*time.Millisecond), fd)
+	iss := acme.NewFakeIssuer(acme.Result{
+		CertPEM:  []byte("-----BEGIN CERTIFICATE-----\nNEWCERT\n-----END CERTIFICATE-----\n"),
+		KeyPEM:   []byte("-----BEGIN EC PRIVATE KEY-----\nNEWKEY\n-----END EC PRIVATE KEY-----\n"),
+		NotAfter: time.Now().Add(90 * 24 * time.Hour),
+	}, nil)
+	a.SetIssuer(iss)
+
+	const domain = "alpha.arrix.dev"
+	s := &state.State{SchemaVersion: state.SchemaVersion, Backends: map[string]state.Backend{}, Certs: map[string]state.Cert{
+		domain: {Domain: domain, Subjects: []string{domain, "*." + domain}, Env: acme.EnvStaging, Email: "k@example.com",
+			IssuedAt: time.Now().Format(time.RFC3339), NotAfter: time.Now().Add(24 * time.Hour).Format(time.RFC3339)},
+	}}
+	if err := state.Save(a.paths.StatePath, s); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	oldCert := []byte("-----BEGIN CERTIFICATE-----\nOLDCERT\n-----END CERTIFICATE-----\n")
+	if err := a.certs.Save(domain, oldCert, []byte("OLDKEY")); err != nil {
+		t.Fatalf("seed material: %v", err)
+	}
+	keyPath := a.certs.KeyPath(domain)
+	if err := os.Chmod(keyPath, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(keyPath, 0o600) })
+
+	renewed, err := a.CertRenew(t.Context(), domain, true, &noopPrompter{})
+	if err == nil || renewed {
+		t.Fatalf("renew with an unreadable prior key: renewed=%v err=%v, want an error", renewed, err)
+	}
+	if !errors.Is(err, os.ErrPermission) || !strings.Contains(err.Error(), keyPath) {
+		t.Errorf("error should be the permission failure naming %s, got %v", keyPath, err)
+	}
+	if got, rerr := os.ReadFile(a.certs.CertPath(domain)); rerr != nil || string(got) != string(oldCert) {
+		t.Errorf("prior cert after failed renew = %q (%v), want it untouched", got, rerr)
+	}
+	if fi, serr := os.Stat(keyPath); serr != nil || fi.Mode().Perm() != 0 {
+		t.Errorf("prior key after failed renew: %v %v, want it untouched", fi, serr)
+	}
+	if len(iss.Calls) != 0 {
+		t.Errorf("an ACME order was placed (%d calls) although the prior material was unreadable; it would spend an issuance", len(iss.Calls))
+	}
+}

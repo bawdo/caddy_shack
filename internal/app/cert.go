@@ -108,6 +108,13 @@ func (a *App) CertRequest(ctx context.Context, in CertRequestInput, prompt acme.
 // write, because buildConfig reads material back off disk; the other order
 // would re-push the new key under the old registry.
 func (a *App) issueAndInstall(ctx context.Context, domain, email, env string, prompt acme.Prompter) error {
+	// Cheap gate before the order: prior material that exists but cannot be
+	// read would fail the install below anyway, after an ACME issuance had
+	// been spent against the rate limits. The read under the lock below
+	// stays the one the undo restores from.
+	if _, err := a.loadPriorMaterial(domain); err != nil {
+		return err
+	}
 	subjects := []string{domain, "*." + domain}
 	res, err := a.issuer.Issue(ctx, acme.Request{
 		Domains:        subjects,
@@ -129,8 +136,10 @@ func (a *App) issueAndInstall(ctx context.Context, domain, email, env string, pr
 		return err
 	}
 
-	prior, priorErr := a.certs.Load(domain)
-	hadPrior := priorErr == nil
+	prior, err := a.loadPriorMaterial(domain)
+	if err != nil {
+		return err
+	}
 	if err := a.certs.Save(domain, res.CertPEM, res.KeyPEM); err != nil {
 		return err
 	}
@@ -144,7 +153,24 @@ func (a *App) issueAndInstall(ctx context.Context, domain, email, env string, pr
 		IssuedAt: time.Now().Format(time.RFC3339),
 		NotAfter: res.NotAfter.Format(time.RFC3339),
 	}
-	return a.commitWith(ctx, s, updated, func() error { return a.restoreMaterialOnly(domain, hadPrior, prior) })
+	return a.commitWith(ctx, s, updated, func() error { return a.restoreMaterialOnly(domain, prior) })
+}
+
+// loadPriorMaterial reads the material already stored for domain. Only
+// certstore.ErrNotFound means there is none (nil, nil). Any other read error
+// (a key with bad permissions, say) means material exists that cannot be
+// backed up, and undoing over it would RemoveAll a certificate that was
+// serving traffic, so it is returned, naming the file, and nothing is
+// written.
+func (a *App) loadPriorMaterial(domain string) (*certstore.Material, error) {
+	prior, err := a.certs.Load(domain)
+	if errors.Is(err, certstore.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read existing certificate material for %s (nothing was changed; fix or remove it, then retry): %w", domain, err)
+	}
+	return &prior, nil
 }
 
 // restoreMaterialOnly undoes the certstore write issueAndInstall made,
@@ -152,9 +178,9 @@ func (a *App) issueAndInstall(ctx context.Context, domain, email, env string, pr
 // material when there was none. issueAndInstall hands it to commitWith as
 // the undo hook, so it runs on every failure after the material is written.
 // Its error reads as the clause commitWith appends after "additionally, ".
-func (a *App) restoreMaterialOnly(domain string, hadPrior bool, prior certstore.Material) error {
+func (a *App) restoreMaterialOnly(domain string, prior *certstore.Material) error {
 	var err error
-	if hadPrior {
+	if prior != nil {
 		err = a.certs.Save(domain, prior.CertPEM, prior.KeyPEM)
 	} else {
 		err = a.certs.Remove(domain)
