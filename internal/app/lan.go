@@ -178,7 +178,7 @@ func (a *App) stopLAN() error {
 	if err != nil {
 		return fmt.Errorf("inspect LAN forwarder: %w", err)
 	}
-	if st == docker.StateRunning {
+	if st.CanStop() {
 		return a.docker.Stop(a.inst.LANContainerName)
 	}
 	return nil

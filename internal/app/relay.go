@@ -213,7 +213,7 @@ func (a *App) stopRelay() error {
 	if err != nil {
 		return fmt.Errorf("inspect relay: %w", err)
 	}
-	if st == docker.StateRunning {
+	if st.CanStop() {
 		return a.docker.Stop(a.inst.RelayContainerName)
 	}
 	return nil

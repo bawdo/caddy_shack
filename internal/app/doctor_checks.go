@@ -90,6 +90,17 @@ func checkContainerHealth(ctx context.Context, a *App) CheckResult {
 				Apply: func(ctx context.Context) error { return a.Install(ctx) },
 			},
 		}
+	case docker.StateRestarting:
+		return CheckResult{
+			Name:    "container-health",
+			Status:  SeverityFail,
+			Summary: "caddy_shack container is restarting (crash-looping)",
+			Detail:  []string{"check 'docker logs " + a.inst.ContainerName + "' for the reason it keeps exiting"},
+			Fix: &FixAction{
+				Label: "start Caddy container ('caddy_shack start')",
+				Apply: func(ctx context.Context) error { return a.Start(ctx) },
+			},
+		}
 	case docker.StateStopped:
 		return CheckResult{
 			Name:    "container-health",

@@ -246,3 +246,16 @@ func TestStartAndInstallDoNotDockerStartARestartingContainer(t *testing.T) {
 		})
 	}
 }
+
+func TestStopStopsARestartingContainer(t *testing.T) {
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRestarting
+	a := NewWithPaths(Paths{}, nil, fake)
+
+	if err := a.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if st, _ := fake.ContainerState(CaddyContainerName); st != docker.StateStopped {
+		t.Errorf("state = %v, want stopped (docker stop must be issued)", st)
+	}
+}

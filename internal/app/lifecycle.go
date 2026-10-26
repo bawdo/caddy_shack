@@ -63,7 +63,7 @@ func (a *App) Stop() error {
 	if err != nil {
 		return fmt.Errorf("inspect container: %w", err)
 	}
-	if st == docker.StateRunning {
+	if st.CanStop() {
 		if err := a.docker.Stop(a.inst.ContainerName); err != nil {
 			return err
 		}

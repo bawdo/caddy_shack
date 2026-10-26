@@ -39,6 +39,12 @@ func (s ContainerState) String() string {
 	}
 }
 
+// CanStop reports whether `docker stop` applies: the container is running or
+// is being restarted by docker (crash-looping).
+func (s ContainerState) CanStop() bool {
+	return s == StateRunning || s == StateRestarting
+}
+
 // ErrDaemonUnreachable indicates the docker CLI could not contact the
 // daemon (not installed, not running).
 var ErrDaemonUnreachable = errors.New("docker: daemon unreachable")
