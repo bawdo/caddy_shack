@@ -1408,3 +1408,15 @@ func TestCheckContainerHealthFailWhenRestartingSaysSo(t *testing.T) {
 		t.Errorf("fix label = %q, want %q", r.Fix.Label, want)
 	}
 }
+
+func TestCheckPortAvailabilityPassWhenContainerRestartingHoldsPorts(t *testing.T) {
+	heldPort, _ := listenLoopback(t)
+	fake := docker.NewFake()
+	fake.Containers[CaddyContainerName] = docker.StateRestarting
+	a := NewWithPaths(Paths{}, nil, fake)
+
+	r := checkPortAvailabilityOn(context.Background(), a, []int{heldPort})
+	if r.Status != SeverityPass {
+		t.Errorf("status: %v summary=%s detail=%v", r.Status, r.Summary, r.Detail)
+	}
+}

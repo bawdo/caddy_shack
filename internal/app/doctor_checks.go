@@ -793,7 +793,7 @@ func checkPortAvailabilityOn(_ context.Context, a *App, ports []int) CheckResult
 	// If our container is running, assume it holds the ports (the spec's
 	// "free or already held by caddy_shack" wording). PASS with a note.
 	state, _ := a.docker.ContainerState(a.inst.ContainerName)
-	if state == docker.StateRunning {
+	if state.CanStop() { // running or restarting: either way it holds the ports
 		return CheckResult{
 			Name:    "port-availability",
 			Status:  SeverityPass,
