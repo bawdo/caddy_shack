@@ -89,6 +89,9 @@ race suite and lint clean at every merge.
     container on Docker Desktop and OrbStack is stated as likely in the
     README with a one-line check; it was not verified here.
   - The integration suite (real Caddy with origin enforcement, real Docker
-    networking) was not run in this session; CI runs it.
+    networking) was not run in the implementation sessions. It was run
+    against Docker afterwards, at the head carrying the pre-origins
+    fallback: 20 pass, 2 skip, 0 fail. That run is what found the lockout
+    described above.
   - Cosmetic: `noteStaleCaddy` and two README sentences still say
     "networks are kept" where the default bridge is now dropped on purpose.
