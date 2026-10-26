@@ -292,7 +292,7 @@ func runTestCaddy(t *testing.T) (adminPort, httpsPort, httpPort int) {
 func startTestCaddy(t *testing.T, adminPort, httpsPort, httpPort int) {
 	t.Helper()
 	caddyfile := filepath.Join(t.TempDir(), "Caddyfile")
-	if err := os.WriteFile(caddyfile, []byte("{\n\tadmin 0.0.0.0:2019\n}\n"), 0o644); err != nil {
+	if err := os.WriteFile(caddyfile, []byte(adminCaddyfile), 0o644); err != nil {
 		t.Fatalf("write Caddyfile: %v", err)
 	}
 	cmd := exec.Command("docker", "run", "-d", "--name", testContainerName,

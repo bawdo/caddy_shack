@@ -26,7 +26,7 @@ func TestDoctorHappyPathAfterInstall(t *testing.T) {
 	httpPort := freePort(t)
 
 	caddyfile := filepath.Join(t.TempDir(), "Caddyfile")
-	if err := os.WriteFile(caddyfile, []byte("{\n\tadmin 0.0.0.0:2019\n}\n"), 0o644); err != nil {
+	if err := os.WriteFile(caddyfile, []byte(adminCaddyfile), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -150,7 +150,7 @@ func TestDoctorBackendsFailWhenUpstreamDead(t *testing.T) {
 
 	adminPort := freePort(t)
 	caddyfile := filepath.Join(t.TempDir(), "Caddyfile")
-	if err := os.WriteFile(caddyfile, []byte("{\n\tadmin 0.0.0.0:2019\n}\n"), 0o644); err != nil {
+	if err := os.WriteFile(caddyfile, []byte(adminCaddyfile), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := exec.Command("docker", "run", "-d", "--name", testContainerName,

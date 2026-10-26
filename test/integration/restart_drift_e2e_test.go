@@ -104,6 +104,13 @@ func serves(t *testing.T, inst app.Instance, host string) {
 // legacyRunArgs is the `docker run` argv caddy_shack used before this fix:
 // the same container, except Caddy boots from the bare admin-only
 // Caddyfile without --resume.
+//
+// Its admin block is the OLD one, with no enforce_origin and no origins, on
+// purpose: it pins the upgrade path. Such a Caddy 403s any request that
+// carries an Origin header, so every call this test makes to it (the first
+// Start and Register, and Status after each out-of-band restart brings the
+// bare config back) only succeeds through the client's fallback to a
+// request without Origin. Do not move it to adminCaddyfile.
 func legacyRunArgs(inst app.Instance) []string {
 	return []string{
 		"run", "-d", "--name", inst.ContainerName, "--restart", "unless-stopped",
