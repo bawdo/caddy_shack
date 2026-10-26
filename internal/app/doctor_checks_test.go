@@ -1402,6 +1402,9 @@ func TestCheckContainerHealthFailWhenRestartingSaysSo(t *testing.T) {
 		t.Errorf("detail: %v", r.Detail)
 	}
 	if r.Fix == nil {
-		t.Error("expected restart fix")
+		t.Fatal("expected restart fix")
+	}
+	if want := "restart container ('caddy_shack restart')"; r.Fix.Label != want {
+		t.Errorf("fix label = %q, want %q", r.Fix.Label, want)
 	}
 }
