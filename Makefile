@@ -7,6 +7,8 @@ LDFLAGS := -X github.com/bawdo/caddy_shack/internal/version.Version=$(VERSION) \
            -X github.com/bawdo/caddy_shack/internal/version.Tag=$(TAG) \
            -X github.com/bawdo/caddy_shack/internal/version.Dirty=$(DIRTY)
 
+VULN_VERSION := v1.1.4
+
 .DEFAULT_GOAL := help
 
 build: ## Build the caddy_shack binary into bin/
@@ -21,6 +23,12 @@ test: ## Run the unit test suite
 lint: ## Run golangci-lint over the whole module
 	golangci-lint run
 
+vuln: ## Run govulncheck over the module
+	go run golang.org/x/vuln/cmd/govulncheck@$(VULN_VERSION) ./...
+
+integration: ## Run the Docker-backed integration tests
+	go test -tags integration -count=1 -timeout 10m -v ./test/integration/...
+
 pre-ci: ## Run the pre-CI checks (gofmt, vet, lint, test)
 	./scripts/pre-ci-check.sh
 
@@ -32,4 +40,4 @@ help: ## List the available make targets and what they do
 		| sort \
 		| awk 'BEGIN {FS = ":.*?## "} {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: build install test lint pre-ci pre-ci-fix help
+.PHONY: build install test lint vuln integration pre-ci pre-ci-fix help
