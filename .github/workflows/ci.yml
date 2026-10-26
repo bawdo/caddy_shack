@@ -5,39 +5,24 @@ permissions:
 
 on:
   push:
-    branches: [ '*' ]
+    branches: [ main ]
+    tags: [ 'v*' ]
   pull_request:
-    branches: [ '*' ]
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+env:
+  VULN_VERSION: v1.1.4
+
 jobs:
-  test:
-    name: Test
-    runs-on: macos-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25.x'
-          check-latest: true
-          cache: true
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Run tests (race detector)
-        run: go test -race ./...
-
-  lint:
-    name: Lint
-    runs-on: macos-latest
+  # Formatting, lint and vulnerability checks are pure Go and OS-independent, so they run once on cheap Linux.
+  static:
+    name: Static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -64,9 +49,18 @@ jobs:
           version: v2.9.0
           args: --timeout=5m
 
-  coverage:
-    name: Coverage
-    runs-on: macos-latest
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@${{ env.VULN_VERSION }} ./...
+
+  # Runs the race-detector suite with coverage on Linux and macOS because the tool targets both, and uploads coverage from Linux only.
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -81,12 +75,11 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Run tests with coverage
-        run: |
-          COVERPKG=$(go list ./... | grep -v testutil | tr '\n' ',' | sed 's/,$//')
-          go test -race -coverprofile=coverage.txt -covermode=atomic -coverpkg="$COVERPKG" ./...
+      - name: Run tests (race detector, coverage)
+        run: go test -race -count=1 -coverprofile=coverage.txt -covermode=atomic -coverpkg=./... ./...
 
       - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -94,26 +87,11 @@ jobs:
           fail_ci_if_error: false
           verbose: true
 
-  vuln:
-    name: Vulnerability Scan
-    runs-on: macos-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25.x'
-          check-latest: true
-          cache: true
-
-      - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-
+  # Exercises the Docker-backed integration suite, which needs a Docker daemon that only the Linux runners provide.
   integration:
-    name: Integration Tests
+    name: Integration tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -129,11 +107,13 @@ jobs:
         run: docker info
 
       - name: Run integration tests
-        run: go test -tags integration -v ./test/integration/...
+        run: go test -tags integration -count=1 -timeout 10m -v ./test/integration/...
 
+  # Builds through the Makefile and smoke-tests the binary on Linux, since the build is platform-independent Go and the Makefile owns the ldflags.
   build:
-    name: Build & Smoke
-    runs-on: macos-latest
+    name: Build and smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -148,16 +128,7 @@ jobs:
           cache: true
 
       - name: Build caddy_shack binary
-        run: |
-          VERSION=$(git describe --tags --always --dirty)
-          COMMIT=$(git rev-parse HEAD)
-          TAG=$(git describe --exact-match --tags HEAD 2>/dev/null || echo "")
-          if [ -n "$(git status --porcelain)" ]; then DIRTY=true; else DIRTY=false; fi
-          LDFLAGS="-X github.com/bawdo/caddy_shack/internal/version.Version=$VERSION \
-          -X github.com/bawdo/caddy_shack/internal/version.Commit=$COMMIT \
-          -X github.com/bawdo/caddy_shack/internal/version.Tag=$TAG \
-          -X github.com/bawdo/caddy_shack/internal/version.Dirty=$DIRTY"
-          go build -ldflags "$LDFLAGS" -o bin/caddy_shack .
+        run: make build
 
       - name: CLI smoke test (caddy_shack version)
         run: |
