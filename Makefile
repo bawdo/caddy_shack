@@ -35,9 +35,16 @@ pre-ci: ## Run the pre-CI checks (gofmt, vet, lint, test)
 pre-ci-fix: ## Run the pre-CI checks, auto-fixing gofmt
 	./scripts/pre-ci-check.sh --fix gofmt
 
+changelog: ## Check CHANGELOG.md is well formed and matches the tags
+	scripts/changelog.sh check
+
+release: ## Tag a release: make release RELEASE_VERSION=X.Y.Z (never pushes)
+	@test -n "$(RELEASE_VERSION)" || { echo "usage: make release RELEASE_VERSION=X.Y.Z"; exit 1; }
+	scripts/release.sh $(RELEASE_VERSION)
+
 help: ## List the available make targets and what they do
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| sort \
 		| awk 'BEGIN {FS = ":.*?## "} {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: build install test lint vuln integration pre-ci pre-ci-fix help
+.PHONY: build install test lint vuln integration changelog release pre-ci pre-ci-fix help
