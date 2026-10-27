@@ -22,8 +22,9 @@ die() {
 
 version="${1:-}"
 commit="${2:-}"
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ "$commit" =~ ^[0-9a-f]+$ ]] \
-    || die "usage: $0 X.Y.Z COMMIT"
+if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || ! [[ "$commit" =~ ^[0-9a-f]+$ ]]; then
+    die "usage: $0 X.Y.Z COMMIT"
+fi
 tag="v$version"
 pkg=github.com/bawdo/caddy_shack/internal/version
 ldflags="-s -w -X $pkg.Version=$tag -X $pkg.Commit=$commit -X $pkg.Tag=$tag -X $pkg.Dirty=false"

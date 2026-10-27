@@ -360,6 +360,9 @@ check_cli_smoke() {
 # CI runs shellcheck on the scripts; without it installed, warn rather than fail.
 lint_scripts() {
     if command -v shellcheck &> /dev/null; then
+        # CI pins shellcheck to the version in .github/workflows/ci.yml; a
+        # different version here can disagree with it, so say which ran.
+        echo "shellcheck $(shellcheck --version | awk '/^version:/ { print $2 }')"
         shellcheck scripts/*.sh
     else
         echo -e "${YELLOW}⚠ shellcheck is not installed; skipping the script lint that CI runs${NC}"

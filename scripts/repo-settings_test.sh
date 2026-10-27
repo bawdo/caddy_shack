@@ -159,7 +159,9 @@ jq '.jobs |= .[0:4]' <<<"$FIVE" > "$dir/jobs.json"
 run "$dir" rulesets
 [ "$CODE" -eq 1 ] || fail "$name" "expected exit 1"
 [ "$ERR" = "repo-settings: expected 5 status check contexts, found 4" ] || fail "$name" "wrong refusal"
-[ "$(count "$dir" POST)" -eq 0 ] && [ "$(count "$dir" "-X PUT")" -eq 0 ] || fail "$name" "wrote a ruleset"
+if [ "$(count "$dir" POST)" -ne 0 ] || [ "$(count "$dir" "-X PUT")" -ne 0 ]; then
+    fail "$name" "wrote a ruleset"
+fi
 echo "ok $name"
 
 name=rulesets_creates_when_absent

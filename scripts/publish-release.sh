@@ -18,7 +18,9 @@ die() {
 
 tag="${1:-}"
 notes="${2:-}"
-[[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ -n "$notes" ] || die "usage: $0 vX.Y.Z NOTES_FILE"
+if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || [ -z "$notes" ]; then
+    die "usage: $0 vX.Y.Z NOTES_FILE"
+fi
 
 draft=$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
 case "$draft" in
