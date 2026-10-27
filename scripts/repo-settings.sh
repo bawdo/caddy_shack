@@ -44,10 +44,14 @@ write() {
         [[ -n "$body" ]] && sed 's/^/    /' "$file"
         return 0
     fi
-    if [[ -n "$body" ]]; then
-        gh api -X "$method" "$path" --input "$file" > /dev/null
-    else
-        gh api -X "$method" "$path" > /dev/null
+    local args=(api -X "$method" "$path") out code=0
+    [[ -n "$body" ]] && args+=(--input "$file")
+    # On failure gh prints the response body (with GitHub's errors array
+    # naming any rejected field) on stdout, so keep it for the stderr report.
+    out=$(gh "${args[@]}") || code=$?
+    if [[ $code -ne 0 ]]; then
+        [[ -n "$out" ]] && echo "$out" >&2
+        die "$method $path failed (exit $code)"
     fi
 }
 

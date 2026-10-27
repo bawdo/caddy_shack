@@ -218,4 +218,5 @@ go install github.com/bawdo/caddy_shack@v0.1.0 && caddy_shack version
 ```
 
 Worked when: the attestation verifies, the checksum line ends in `OK`, and
-`caddy_shack version` reports `v0.1.0`.
+`caddy_shack version` reports `v0.1.0`. The `go install` build reports the
+module version from Go's build info, with no commit line.
