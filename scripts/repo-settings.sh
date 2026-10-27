@@ -9,6 +9,8 @@
 #   scripts/repo-settings.sh post-public   vulnerability reporting, secret
 #                                          scanning, Dependabot alerts and fixes
 #   scripts/repo-settings.sh rulesets      the main and release-tags rulesets
+#   scripts/repo-settings.sh harden        Actions allowlist and SHA pinning,
+#                                          fork approval, merge methods, CodeQL
 #   scripts/repo-settings.sh show          prints the current settings
 #
 # REPO (default bawdo/caddy_shack) names the repository. Every write sends the
@@ -16,11 +18,14 @@
 # place), so any phase can be re-run. Each write prints its method and path
 # before it runs. With DRY_RUN set, writes are printed with their bodies and
 # not sent; reads still run where a phase needs them to work out its writes.
+# WORKFLOWS_DIR (default .github/workflows next to this script's repository)
+# is where the harden phase reads the actions in use.
 
 set -euo pipefail
 
 REPO="${REPO:-bawdo/caddy_shack}"
 R="repos/$REPO"
+WORKFLOWS_DIR="${WORKFLOWS_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/.github/workflows}"
 
 die() {
     echo "repo-settings: $*" >&2
@@ -116,6 +121,7 @@ rulesets() {
         rules: [
             {type: "deletion"},
             {type: "non_fast_forward"},
+            {type: "required_signatures"},
             {type: "pull_request", parameters: {
                 required_approving_review_count: 0,
                 dismiss_stale_reviews_on_push: false,
@@ -137,6 +143,47 @@ rulesets() {
         conditions: {ref_name: {include: ["refs/tags/v*"], exclude: []}},
         rules: [{type: "deletion"}, {type: "non_fast_forward"}, {type: "update"}]
     }')"
+}
+
+# third_party_actions: prints "owner/repo@*" for every action the workflows
+# use that GitHub does not own (actions/* and github/*), one per line, sorted
+# and deduplicated. Local reusable workflows (./...) are not actions. Dies if
+# there are no workflows or an action is not pinned to a 40-hex commit SHA,
+# since the harden phase makes GitHub refuse such a workflow anyway.
+third_party_actions() {
+    local files file ref name
+    files=$(find "$WORKFLOWS_DIR" -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) 2>/dev/null | sort)
+    [[ -n "$files" ]] || die "no workflows found in $WORKFLOWS_DIR"
+    while IFS= read -r file; do
+        while IFS= read -r ref; do
+            [[ "$ref" == ./* ]] && continue
+            [[ "$ref" =~ ^([^@]+)@([0-9a-f]{40})$ ]] \
+                || die "$(basename "$file"): $ref is not pinned to a commit SHA"
+            name="${BASH_REMATCH[1]}"
+            case "$name" in
+                actions/* | github/*) continue ;;
+            esac
+            # owner/repo only: a path inside the repository shares its allowlist entry.
+            echo "$(cut -d/ -f1,2 <<<"$name")@*"
+        done < <(sed -nE 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*([^[:space:]#]+).*/\1/p' "$file")
+    done <<<"$files" | sort -u
+}
+
+harden() {
+    local patterns
+    patterns=$(third_party_actions)
+    # allowed_actions must be "selected" before the selection can be set.
+    write PUT "$R/actions/permissions" '{"enabled":true,"allowed_actions":"selected","sha_pinning_required":true}'
+    write PUT "$R/actions/permissions/selected-actions" "$(jq -n --arg p "$patterns" '{
+        github_owned_allowed: true,
+        verified_allowed: false,
+        patterns_allowed: ($p | split("\n") | map(select(. != "")))
+    }')"
+    write PUT "$R/actions/permissions/fork-pr-contributor-approval" '{"approval_policy":"all_external_contributors"}'
+    # Merge commits only, so every commit on main keeps its author's signature
+    # and the history matches what the release gate checks.
+    write PATCH "$R" '{"allow_merge_commit":true,"allow_squash_merge":false,"allow_rebase_merge":false,"allow_auto_merge":true}'
+    write PATCH "$R/code-scanning/default-setup" '{"state":"configured","query_suite":"default","languages":["actions","go"]}'
 }
 
 # read_api PATH JQ: prints GET PATH filtered by JQ. When the read fails it
@@ -176,6 +223,8 @@ show() {
         "has_projects: \(.has_projects)",
         "has_discussions: \(.has_discussions)",
         "allow_update_branch: \(.allow_update_branch)",
+        "merge_methods: \([["merge", .allow_merge_commit], ["squash", .allow_squash_merge], ["rebase", .allow_rebase_merge]] | map(select(.[1]) | .[0]) | join(" "))",
+        "allow_auto_merge: \(.allow_auto_merge)",
         "topics: \(.topics | join(" "))",
         "secret_scanning: \(.security_and_analysis.secret_scanning.status // "unknown")",
         "secret_scanning_push_protection: \(.security_and_analysis.secret_scanning_push_protection.status // "unknown")"' \
@@ -187,6 +236,10 @@ show() {
     echo "automated_security_fixes: $(get "$R/automated-security-fixes" "$onoff" disabled)"
     value=$(read_api "$R/rulesets" '[.[].name] | join(" ")') || { value=unavailable; failed=1; }
     echo "rulesets: $value"
+    echo "allowed_actions: $(get "$R/actions/permissions" '.allowed_actions' unknown)"
+    echo "sha_pinning_required: $(get "$R/actions/permissions" '.sha_pinning_required' unknown)"
+    echo "fork_pr_approval: $(get "$R/actions/permissions/fork-pr-contributor-approval" '.approval_policy' unknown)"
+    echo "code_scanning_default_setup: $(get "$R/code-scanning/default-setup" '.state' unknown)"
     return "$failed"
 }
 
@@ -195,6 +248,7 @@ case "${1:-}" in
     public) public ;;
     post-public) post_public ;;
     rulesets) rulesets ;;
+    harden) harden ;;
     show) show ;;
-    *) die "usage: repo-settings.sh pre-public|public|post-public|rulesets|show" ;;
+    *) die "usage: repo-settings.sh pre-public|public|post-public|rulesets|harden|show" ;;
 esac
