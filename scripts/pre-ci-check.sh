@@ -139,7 +139,7 @@ check_formatting() {
         if [ -n "$FIXED" ]; then
             gofmt -s -w .
             echo -e "${YELLOW}⚠ Fixed formatting in:${NC}"
-            echo "$FIXED" | sed 's/^/  /'
+            awk '{ print "  " $0 }' <<< "$FIXED"
         fi
     fi
 
@@ -154,7 +154,7 @@ check_formatting() {
         FORMAT_FAILED=true
         record_result "Code Formatting" "FAIL" "Files need formatting"
         echo -e "${RED}✗ The following files need formatting:${NC}"
-        echo "$UNFORMATTED" | sed 's/^/  /'
+        awk '{ print "  " $0 }' <<< "$UNFORMATTED"
         return 1
     fi
 }
@@ -285,7 +285,7 @@ check_build() {
     if go build -ldflags "$LDFLAGS" -o "$TMPBIN/caddy_shack" . 2>&1 | tee coverage/pre-ci-build.txt; then
         record_result "Build" "PASS" ""
         echo -e "${GREEN}✓ Build successful${NC}"
-        echo -e "  Built: $(ls "$TMPBIN" | tr '\n' ' ')"
+        echo -e "  Built: $(find "$TMPBIN" -mindepth 1 -maxdepth 1 -print0 | xargs -0 -n1 basename | tr '\n' ' ')"
     else
         record_result "Build" "FAIL" "Build failed"
         echo -e "${RED}✗ Build failed${NC}"
@@ -410,10 +410,10 @@ generate_report() {
     SUCCESS_RATE=$(echo "scale=0; ($PASSED_CHECKS * 100) / $TOTAL_CHECKS" | bc)
 
     echo ""
-    if [ $SUCCESS_RATE -eq 100 ]; then
+    if [ "$SUCCESS_RATE" -eq 100 ]; then
         echo -e "Build Readiness: ${GREEN}${SUCCESS_RATE}%${NC}"
         echo -e "${GREEN}✓ All checks passed!${NC}"
-    elif [ $SUCCESS_RATE -ge 80 ]; then
+    elif [ "$SUCCESS_RATE" -ge 80 ]; then
         echo -e "Build Readiness: ${YELLOW}${SUCCESS_RATE}%${NC} ⚠"
         echo -e "${YELLOW}⚠ Some checks failed.${NC}"
     else
