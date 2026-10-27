@@ -12,7 +12,9 @@ trap 'rm -rf "$ROOT"' EXIT
 
 G=(git -c commit.gpgsign=false -c user.name=Test -c user.email=test@example.invalid)
 REQUIRED=(LICENSE CHANGELOG.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md
-    .github/PULL_REQUEST_TEMPLATE.md .github/CODEOWNERS)
+    .github/PULL_REQUEST_TEMPLATE.md .github/CODEOWNERS
+    .github/ISSUE_TEMPLATE/bug_report.yml .github/ISSUE_TEMPLATE/feature_request.yml
+    .github/ISSUE_TEMPLATE/config.yml .github/workflows/scorecard.yml .codecov.yml)
 EMDASH="$(printf '\xe2\x80\x94')"
 
 OUT=""
@@ -31,10 +33,13 @@ fail() {
 # with no problems.
 fixture() {
     local dir="$ROOT/$1" f
-    mkdir -p "$dir/scripts" "$dir/.github"
+    mkdir -p "$dir/scripts"
     git init -q -b main "$dir"
     cp "$SCRIPTS/docs-check.sh" "$dir/scripts/"
-    for f in "${REQUIRED[@]}"; do echo "$f" > "$dir/$f"; done
+    for f in "${REQUIRED[@]}"; do
+        mkdir -p "$dir/$(dirname "$f")"
+        echo "$f" > "$dir/$f"
+    done
     echo "plain readme" > "$dir/README.md"
 }
 
@@ -74,6 +79,15 @@ test_fails_on_missing_required() {
     echo "ok fails_on_missing_required"
 }
 
+test_fails_on_missing_issue_form() {
+    fixture form
+    rm "$ROOT/form/.github/ISSUE_TEMPLATE/bug_report.yml"
+    run form
+    [[ $CODE -eq 1 ]] || fail fails_on_missing_issue_form "expected exit 1"
+    [[ "$ERR" == *".github/ISSUE_TEMPLATE/bug_report.yml: required file missing"* ]] || fail fails_on_missing_issue_form "message missing"
+    echo "ok fails_on_missing_issue_form"
+}
+
 test_passes_on_clean_tree() {
     fixture clean
     mkdir -p "$ROOT/clean/docs/superpowers"
@@ -89,4 +103,5 @@ test_passes_on_clean_tree() {
 test_fails_on_em_dash
 test_fails_on_broken_link
 test_fails_on_missing_required
+test_fails_on_missing_issue_form
 test_passes_on_clean_tree

@@ -41,10 +41,11 @@ jobs:
           check-latest: true
           cache: true
 
-      - name: Check CHANGELOG.md
+      - name: Check changelog and docs
         run: |
           scripts/changelog.sh check
-          bash scripts/changelog_test.sh
+          scripts/docs-check.sh
+          make test-scripts
 
       - name: Lint shell scripts
         run: shellcheck scripts/*.sh

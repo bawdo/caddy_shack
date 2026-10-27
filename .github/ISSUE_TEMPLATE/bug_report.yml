@@ -1,0 +1,57 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: The commands you ran.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and version
+      placeholder: macOS 26.1, Omarchy, Ubuntu 26.04
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Docker engine
+      options:
+        - Docker Desktop
+        - OrbStack
+        - Colima
+        - Native Linux Docker
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: version
+    attributes:
+      label: Output of caddy_shack version
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of caddy_shack doctor
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Error output, logs, or anything that seems relevant.
