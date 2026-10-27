@@ -46,7 +46,8 @@ Download the archive for your platform and `checksums.txt` from the Releases
 page, then verify, unpack and install it:
 
 ```
-gh attestation verify caddy_shack_<version>_<os>_<arch>.tar.gz --repo bawdo/caddy_shack
+gh attestation verify caddy_shack_<version>_<os>_<arch>.tar.gz --repo bawdo/caddy_shack \
+  --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml
 sha256sum -c checksums.txt --ignore-missing
 tar -xzf caddy_shack_<version>_<os>_<arch>.tar.gz
 install -m 0755 caddy_shack_<version>_<os>_<arch>/caddy_shack /usr/local/bin/caddy_shack

@@ -257,8 +257,10 @@ run_notes "$dir" 0.1.0
 [ "$CODE" -eq 0 ] || fail "$name" "expected exit 0"
 body=$(cd "$dir" && bash scripts/changelog.sh notes 0.1.0 bawdo/caddy_shack)
 [ "${OUT:0:${#body}}" = "$body" ] || fail "$name" "does not start with the 0.1.0 body"
-grep -qF "gh attestation verify caddy_shack_0.1.0_<os>_<arch>.tar.gz --repo bawdo/caddy_shack" <<<"$OUT" \
+grep -qF "gh attestation verify caddy_shack_0.1.0_<os>_<arch>.tar.gz --repo bawdo/caddy_shack \\" <<<"$OUT" \
     || fail "$name" "no attestation command"
+grep -qxF "  --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml \\" <<<"$OUT" || fail "$name" "no signer workflow"
+grep -qxF "  --source-ref refs/tags/v0.1.0" <<<"$OUT" || fail "$name" "no source ref"
 grep -qF "sha256sum -c checksums.txt --ignore-missing" <<<"$OUT" || fail "$name" "no checksum command"
 ! grep -q "Full Changelog" <<<"$OUT" || fail "$name" "has a Full Changelog line"
 echo "ok $name"

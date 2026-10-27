@@ -46,7 +46,8 @@ confirm a download came from this repository's CI and has not been
 altered, run both against the archive you downloaded:
 
 ```bash
-gh attestation verify caddy_shack_<version>_<os>_<arch>.tar.gz --repo bawdo/caddy_shack
+gh attestation verify caddy_shack_<version>_<os>_<arch>.tar.gz --repo bawdo/caddy_shack \
+  --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml
 sha256sum -c checksums.txt --ignore-missing
 ```
 

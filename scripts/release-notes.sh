@@ -32,7 +32,9 @@ echo
 echo "Verify a downloaded archive with:"
 echo
 echo '```'
-echo "gh attestation verify caddy_shack_${version}_<os>_<arch>.tar.gz --repo bawdo/caddy_shack"
+echo "gh attestation verify caddy_shack_${version}_<os>_<arch>.tar.gz --repo bawdo/caddy_shack \\"
+echo "  --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml \\"
+echo "  --source-ref refs/tags/v${version}"
 echo "sha256sum -c checksums.txt --ignore-missing"
 echo '```'
 if [ -n "$previous" ]; then
