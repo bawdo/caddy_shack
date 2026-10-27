@@ -5,8 +5,11 @@
 #
 #   scripts/verify-tag.sh vX.Y.Z
 #
-# Needs GITHUB_REPOSITORY (owner/repo) and an authenticated gh. No key is
-# imported here: GitHub does the verification and this reads its verdict.
+# Run from a checkout of the tag. Needs GITHUB_REPOSITORY (owner/repo) and an
+# authenticated gh. No key is imported here: GitHub does the verification and
+# this reads its verdict. The tag object on GitHub must be the one checked out
+# locally, so a tag moved after checkout is caught rather than vouching for
+# code that was never built.
 
 set -euo pipefail
 
@@ -23,6 +26,9 @@ ref=$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.type + " " + .object.
     || die "could not read tag $tag from $repo"
 read -r type sha <<<"$ref"
 [ "$type" = "tag" ] || die "$tag is not an annotated tag"
+
+local_sha=$(git rev-parse -q --verify "refs/tags/$tag") || die "$tag is not a local tag"
+[ "$sha" = "$local_sha" ] || die "$tag on GitHub is $sha, not the checked-out tag object $local_sha"
 
 verdict=$(gh api "repos/$repo/git/tags/$sha" --jq '"\(.verification.verified) \(.verification.reason)"') \
     || die "could not read the tag object for $tag"

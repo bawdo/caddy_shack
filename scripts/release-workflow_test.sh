@@ -92,6 +92,7 @@ run_gh() {
     shift 2
     CODE=0
     OUT=$(cd "$dir" && PATH="$ROOT/bin:$PATH" FAKE_GH_DIR="$dir" GITHUB_REPOSITORY=bawdo/caddy_shack \
+        GIT_CEILING_DIRECTORIES="$ROOT" \
         bash "$SCRIPTS/$script" "$@" 2>"$dir/.stderr") || CODE=$?
     ERR=$(cat "$dir/.stderr")
 }
@@ -116,26 +117,65 @@ log_order() {
 
 VALID_TAG='{"verification":{"verified":true,"reason":"valid"}}'
 
+# tagged NAME: a fake directory that is also a git repository with an
+# annotated (unsigned) tag v0.1.0, standing in for the checked-out tag.
+# Prints its path.
+tagged() {
+    local dir
+    dir=$(fake "$1")
+    git init -q -b main "$dir"
+    "${G[@]}" -C "$dir" commit -q --allow-empty -m "Initial"
+    "${G[@]}" -C "$dir" tag -a v0.1.0 -m "v0.1.0"
+    echo "$dir"
+}
+
+# remote_ref DIR TYPE SHA: what GitHub answers for the ref of v0.1.0.
+remote_ref() {
+    printf '{"object":{"type":"%s","sha":"%s"}}\n' "$2" "$3" > "$1/ref.json"
+}
+
+# The accepting case is also the one where the remote tag object matches the
+# local one.
 name=verify_tag_accepts_valid_signed_tag
-dir=$(fake "$name")
-echo '{"object":{"type":"tag","sha":"abc"}}' > "$dir/ref.json"
+dir=$(tagged "$name")
+sha=$(git -C "$dir" rev-parse refs/tags/v0.1.0)
+remote_ref "$dir" tag "$sha"
 echo "$VALID_TAG" > "$dir/tag.json"
 run_gh "$dir" verify-tag.sh v0.1.0
 [ "$CODE" -eq 0 ] || fail "$name" "expected exit 0"
-log_order "$name" "$dir" "api repos/bawdo/caddy_shack/git/ref/tags/v0.1.0" "api repos/bawdo/caddy_shack/git/tags/abc"
+log_order "$name" "$dir" "api repos/bawdo/caddy_shack/git/ref/tags/v0.1.0" "api repos/bawdo/caddy_shack/git/tags/$sha"
 echo "ok $name"
 
 name=verify_tag_rejects_lightweight_tag
-dir=$(fake "$name")
-echo '{"object":{"type":"commit","sha":"abc"}}' > "$dir/ref.json"
+dir=$(tagged "$name")
+remote_ref "$dir" commit "$(git -C "$dir" rev-parse HEAD)"
 echo "$VALID_TAG" > "$dir/tag.json"
 run_gh "$dir" verify-tag.sh v0.1.0
 expect_refusal "$name" "verify-tag: v0.1.0 is not an annotated tag"
 echo "ok $name"
 
-name=verify_tag_rejects_unverified
+name=verify_tag_rejects_tag_moved_since_checkout
+dir=$(tagged "$name")
+sha=$(git -C "$dir" rev-parse refs/tags/v0.1.0)
+remote_ref "$dir" tag 0123456789abcdef0123456789abcdef01234567
+echo "$VALID_TAG" > "$dir/tag.json"
+run_gh "$dir" verify-tag.sh v0.1.0
+expect_refusal "$name" "verify-tag: v0.1.0 on GitHub is 0123456789abcdef0123456789abcdef01234567, not the checked-out tag object $sha"
+! grep -q "git/tags/" "$dir/gh.log" || fail "$name" "read the verification of the wrong tag object"
+echo "ok $name"
+
+name=verify_tag_rejects_missing_local_tag
 dir=$(fake "$name")
-echo '{"object":{"type":"tag","sha":"abc"}}' > "$dir/ref.json"
+git init -q -b main "$dir"
+remote_ref "$dir" tag 0123456789abcdef0123456789abcdef01234567
+echo "$VALID_TAG" > "$dir/tag.json"
+run_gh "$dir" verify-tag.sh v0.1.0
+expect_refusal "$name" "verify-tag: v0.1.0 is not a local tag"
+echo "ok $name"
+
+name=verify_tag_rejects_unverified
+dir=$(tagged "$name")
+remote_ref "$dir" tag "$(git -C "$dir" rev-parse refs/tags/v0.1.0)"
 echo '{"verification":{"verified":false,"reason":"unsigned"}}' > "$dir/tag.json"
 run_gh "$dir" verify-tag.sh v0.1.0
 expect_refusal "$name" "verify-tag: v0.1.0 signature not verified by GitHub (unsigned)"
