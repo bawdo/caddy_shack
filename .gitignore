@@ -29,3 +29,6 @@ coverage/.last-coverage
 # nothing here, but reserved so future provenance/state files do
 # not slip through)
 /.bootstrapper/
+
+# Release archives (scripts/build-release.sh)
+/dist/
