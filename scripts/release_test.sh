@@ -63,7 +63,11 @@ run() {
     local dir="$1"
     shift
     CODE=0
+    # The identity is set here so the annotated tag does not depend on the
+    # host's git config, which CI runners do not have.
     OUT=$(cd "$dir/clone" && RELEASE_SIGN=0 GIT_CEILING_DIRECTORIES="$dir" \
+        GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=test@example.invalid \
+        GIT_COMMITTER_NAME=Test GIT_COMMITTER_EMAIL=test@example.invalid \
         bash scripts/release.sh "$@" 2>"$dir/.stderr") || CODE=$?
     ERR=$(cat "$dir/.stderr")
 }
