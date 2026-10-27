@@ -357,17 +357,17 @@ check_cli_smoke() {
     fi
 }
 
-# Check 10: Changelog (CHANGELOG.md is well formed and matches the tags)
+# Check 10: Changelog and docs (CHANGELOG.md, documents, shell script tests)
 check_changelog() {
-    print_header "Check 10: Changelog (scripts/changelog.sh check and its tests)"
-    print_step "Validating CHANGELOG.md and running its tests..."
+    print_header "Check 10: Changelog and docs (changelog.sh, docs-check.sh, script tests)"
+    print_step "Validating CHANGELOG.md and documents, and running the script tests..."
 
-    if { scripts/changelog.sh check && bash scripts/changelog_test.sh; } 2>&1 | tee coverage/pre-ci-changelog.txt; then
-        record_result "Changelog" "PASS" ""
-        echo -e "${GREEN}✓ CHANGELOG.md is consistent and its tests pass${NC}"
+    if { scripts/changelog.sh check && scripts/docs-check.sh && make test-scripts; } 2>&1 | tee coverage/pre-ci-changelog.txt; then
+        record_result "Changelog and docs" "PASS" ""
+        echo -e "${GREEN}✓ CHANGELOG.md and documents are consistent and the script tests pass${NC}"
     else
-        record_result "Changelog" "FAIL" "changelog check or its tests failed"
-        echo -e "${RED}✗ Changelog check failed${NC}"
+        record_result "Changelog and docs" "FAIL" "changelog, docs check or script tests failed"
+        echo -e "${RED}✗ Changelog and docs check failed${NC}"
         return 1
     fi
 }

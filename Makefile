@@ -35,6 +35,9 @@ pre-ci: ## Run the pre-CI checks (gofmt, vet, lint, test)
 pre-ci-fix: ## Run the pre-CI checks, auto-fixing gofmt
 	./scripts/pre-ci-check.sh --fix gofmt
 
+test-scripts: ## Run the shell script test suites
+	@for t in $$(ls scripts/*_test.sh | sort); do echo "==> $$t"; bash "$$t" || exit 1; done
+
 changelog: ## Check CHANGELOG.md is well formed and matches the tags
 	scripts/changelog.sh check
 
@@ -47,4 +50,4 @@ help: ## List the available make targets and what they do
 		| sort \
 		| awk 'BEGIN {FS = ":.*?## "} {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: build install test lint vuln integration changelog release pre-ci pre-ci-fix help
+.PHONY: build install test test-scripts lint vuln integration changelog release pre-ci pre-ci-fix help

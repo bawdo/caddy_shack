@@ -18,6 +18,11 @@ REQUIRED=(
     CODE_OF_CONDUCT.md
     .github/PULL_REQUEST_TEMPLATE.md
     .github/CODEOWNERS
+    .github/ISSUE_TEMPLATE/bug_report.yml
+    .github/ISSUE_TEMPLATE/feature_request.yml
+    .github/ISSUE_TEMPLATE/config.yml
+    .github/workflows/scorecard.yml
+    .codecov.yml
 )
 
 status=0
