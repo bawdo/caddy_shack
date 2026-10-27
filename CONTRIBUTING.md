@@ -38,6 +38,8 @@ Releases are cut by the maintainer from a signed tag on `main`. To release:
    creates a signed tag. It never pushes.
 5. Push the tag with the `git push origin vX.Y.Z` command it prints.
 
+`scripts/history-scan.sh` is run before anything is pushed to a public remote.
+
 Pushing the tag starts `.github/workflows/release.yml`. It re-runs CI, checks
 the tag is on `main` and signed, builds the four archives (darwin and linux,
 amd64 and arm64), attests the checksums and publishes a GitHub Release with
