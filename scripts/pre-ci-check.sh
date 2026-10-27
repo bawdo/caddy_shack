@@ -2,7 +2,7 @@
 #
 # caddy_shack Local Build Validation
 #
-# Runs the same nine quality checks every developer should run before
+# Runs the same ten quality checks every developer should run before
 # pushing. Adapted from the Jellyfish pre-CI script for caddy_shack's
 # single-binary cobra CLI layout (module root builds ./).
 #
@@ -357,6 +357,21 @@ check_cli_smoke() {
     fi
 }
 
+# Check 10: Changelog (CHANGELOG.md is well formed and matches the tags)
+check_changelog() {
+    print_header "Check 10: Changelog (scripts/changelog.sh check and its tests)"
+    print_step "Validating CHANGELOG.md and running its tests..."
+
+    if { scripts/changelog.sh check && bash scripts/changelog_test.sh; } 2>&1 | tee coverage/pre-ci-changelog.txt; then
+        record_result "Changelog" "PASS" ""
+        echo -e "${GREEN}✓ CHANGELOG.md is consistent and its tests pass${NC}"
+    else
+        record_result "Changelog" "FAIL" "changelog check or its tests failed"
+        echo -e "${RED}✗ Changelog check failed${NC}"
+        return 1
+    fi
+}
+
 # Generate summary report
 generate_report() {
     print_header "Local Build Readiness Report"
@@ -427,7 +442,7 @@ generate_report() {
     fi
 
     echo ""
-    echo "Detailed logs saved in: coverage/pre-ci-*.txt  (checks 1–9)"
+    echo "Detailed logs saved in: coverage/pre-ci-*.txt  (checks 1 to 10)"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
@@ -472,6 +487,7 @@ main() {
     check_build || true
     check_vulnerability_scan || true
     check_cli_smoke || true
+    check_changelog || true
 
     generate_report
 
