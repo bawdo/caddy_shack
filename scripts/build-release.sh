@@ -55,7 +55,7 @@ expect="caddy_shack ${BUILD_RELEASE_EXPECT:-$tag}"
 smoke="$(mktemp -d "${TMPDIR:-/tmp}/build-release.XXXXXX")"
 trap 'rm -rf "$smoke"' EXIT
 tar -C "$smoke" -xzf "dist/$host.tar.gz"
-output=$("$smoke/$host/caddy_shack" version)
+output=$("$smoke/$host/caddy_shack" version) || die "smoke test: caddy_shack version failed"
 echo "$output"
 first=$(head -n 1 <<<"$output")
 [ "$first" = "$expect" ] || die "built binary reports $first, expected $expect"

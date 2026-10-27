@@ -139,8 +139,21 @@ rulesets() {
     }')"
 }
 
+# read_api PATH JQ: prints GET PATH filtered by JQ. When the read fails it
+# says so on stderr and returns 1 (gh prints the error body on stdout, so it
+# is discarded).
+read_api() {
+    local out
+    if out=$(gh api "$1" --jq "$2" 2>/dev/null); then
+        echo "$out"
+    else
+        echo "repo-settings: cannot read $1" >&2
+        return 1
+    fi
+}
+
 # get PATH JQ FALLBACK: prints GET PATH filtered by JQ, or FALLBACK when the
-# read fails (gh prints the error body on stdout, so it is discarded).
+# read fails, for reads where a failure means the feature is off.
 get() {
     local out
     if out=$(gh api "$1" --jq "$2" 2>/dev/null); then echo "$out"; else echo "$3"; fi
@@ -151,8 +164,10 @@ enabled() {
     if gh api "$1" --silent >/dev/null 2>&1; then echo enabled; else echo disabled; fi
 }
 
+# show: prints what it can read, then exits 1 if any read failed.
 show() {
-    get "$R" '
+    local failed=0 value
+    read_api "$R" '
         "visibility: \(.visibility)",
         "description: \(.description)",
         "homepage: \(.homepage)",
@@ -164,12 +179,15 @@ show() {
         "topics: \(.topics | join(" "))",
         "secret_scanning: \(.security_and_analysis.secret_scanning.status // "unknown")",
         "secret_scanning_push_protection: \(.security_and_analysis.secret_scanning_push_protection.status // "unknown")"' \
-        "repo-settings: cannot read $R"
+        || failed=1
     local onoff='if .enabled then "enabled" else "disabled" end'
-    echo "private_vulnerability_reporting: $(get "$R/private-vulnerability-reporting" "$onoff" unknown)"
+    value=$(read_api "$R/private-vulnerability-reporting" "$onoff") || { value=unknown; failed=1; }
+    echo "private_vulnerability_reporting: $value"
     echo "vulnerability_alerts: $(enabled "$R/vulnerability-alerts")"
     echo "automated_security_fixes: $(get "$R/automated-security-fixes" "$onoff" disabled)"
-    echo "rulesets: $(get "$R/rulesets" '[.[].name] | join(" ")' unavailable)"
+    value=$(read_api "$R/rulesets" '[.[].name] | join(" ")') || { value=unavailable; failed=1; }
+    echo "rulesets: $value"
+    return "$failed"
 }
 
 case "${1:-}" in

@@ -201,3 +201,15 @@ run "$dir" DRY_RUN=1 pre-public
 grep -qx "PATCH $R" <<<"$OUT" || fail "$name" "stdout does not list PATCH $R"
 grep -qx "PUT $R/topics" <<<"$OUT" || fail "$name" "stdout does not list PUT $R/topics"
 echo "ok $name"
+
+name=show_fails_on_read_error
+dir=$(fake "$name")
+run "$dir" show
+[ "$CODE" -eq 1 ] || fail "$name" "expected exit 1"
+grep -qx "repo-settings: cannot read $R" <<<"$ERR" || fail "$name" "no read error for $R on stderr"
+grep -qx "repo-settings: cannot read $R/private-vulnerability-reporting" <<<"$ERR" \
+    || fail "$name" "no read error for private-vulnerability-reporting on stderr"
+! grep -q "cannot read" <<<"$OUT" || fail "$name" "read error on stdout"
+grep -qx "private_vulnerability_reporting: unknown" <<<"$OUT" || fail "$name" "no private_vulnerability_reporting line"
+grep -qx "rulesets: " <<<"$OUT" || fail "$name" "did not print the rulesets it could read"
+echo "ok $name"

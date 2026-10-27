@@ -357,16 +357,25 @@ check_cli_smoke() {
     fi
 }
 
+# CI runs shellcheck on the scripts; without it installed, warn rather than fail.
+lint_scripts() {
+    if command -v shellcheck &> /dev/null; then
+        shellcheck scripts/*.sh
+    else
+        echo -e "${YELLOW}⚠ shellcheck is not installed; skipping the script lint that CI runs${NC}"
+    fi
+}
+
 # Check 10: Changelog and docs (CHANGELOG.md, documents, shell script tests)
 check_changelog() {
-    print_header "Check 10: Changelog and docs (changelog.sh, docs-check.sh, script tests)"
-    print_step "Validating CHANGELOG.md and documents, and running the script tests..."
+    print_header "Check 10: Changelog and docs (changelog.sh, docs-check.sh, shellcheck, script tests)"
+    print_step "Validating CHANGELOG.md and documents, linting the scripts and running the script tests..."
 
-    if { scripts/changelog.sh check && scripts/docs-check.sh && make test-scripts; } 2>&1 | tee coverage/pre-ci-changelog.txt; then
+    if { scripts/changelog.sh check && scripts/docs-check.sh && lint_scripts && make test-scripts; } 2>&1 | tee coverage/pre-ci-changelog.txt; then
         record_result "Changelog and docs" "PASS" ""
-        echo -e "${GREEN}✓ CHANGELOG.md and documents are consistent and the script tests pass${NC}"
+        echo -e "${GREEN}✓ CHANGELOG.md and documents are consistent, the scripts lint clean and their tests pass${NC}"
     else
-        record_result "Changelog and docs" "FAIL" "changelog, docs check or script tests failed"
+        record_result "Changelog and docs" "FAIL" "changelog, docs check, shellcheck or script tests failed"
         echo -e "${RED}✗ Changelog and docs check failed${NC}"
         return 1
     fi
