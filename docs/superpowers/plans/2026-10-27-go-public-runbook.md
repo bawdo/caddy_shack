@@ -218,7 +218,8 @@ Then check a download, for example on an Apple silicon Mac:
 
 ```bash
 gh release download v0.1.0 --pattern 'caddy_shack_0.1.0_darwin_arm64.tar.gz' --pattern checksums.txt
-gh attestation verify caddy_shack_0.1.0_darwin_arm64.tar.gz --repo bawdo/caddy_shack
+gh attestation verify caddy_shack_0.1.0_darwin_arm64.tar.gz --repo bawdo/caddy_shack \
+  --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml --source-ref refs/tags/v0.1.0
 shasum -a 256 -c checksums.txt --ignore-missing
 tar -xzf caddy_shack_0.1.0_darwin_arm64.tar.gz && ./caddy_shack_0.1.0_darwin_arm64/caddy_shack version
 go install github.com/bawdo/caddy_shack@v0.1.0 && caddy_shack version
