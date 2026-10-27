@@ -231,7 +231,8 @@ merge; wiki off; projects off; discussions off; then make public; then
 enable private vulnerability reporting, secret scanning, push protection,
 Dependabot alerts and security updates; then a ruleset on `main`: require
 a pull request with zero required approvals, require the CI status checks
-(the four job names), block force pushes, block deletion, allow the
+(all five contexts: the four jobs, with the test matrix contributing the
+Linux and macOS legs), block force pushes, block deletion, allow the
 repository owner to bypass. Tag ruleset on `v*`: block deletion and
 updates. These are run from the plan as `gh api` calls with their exact
 payloads, and the plan records each one so it can be re-run.
@@ -253,17 +254,29 @@ payloads, and the plan records each one so it can be re-run.
 5. Repository settings and going public.
 6. Merge, then cut `v0.1.0` with `make release` as the acceptance test.
 
-## Open decisions at the time of writing
+## Decisions
 
-Two questions from the builder check are the maintainer's to answer
-before the plan is written:
+Two questions from the builder check were the maintainer's to answer.
+Both were answered on 2026-10-27:
 
-1. The gate before the repository goes public: an agent-run history scan
-   (attribution trailers, secrets, absolute home paths) that stops on any
-   hit, followed by an explicit go-ahead for the public switch; or a
-   runbook the maintainer runs by hand.
-2. Required status checks on `main`: all five contexts (four jobs, with
-   the test matrix contributing two), or the Linux leg only.
+1. **Gate before the repository goes public: agent-run history scan plus
+   explicit go-ahead.** A dedicated task in the plan scans the full
+   history of every ref (commit messages, trailers and tree contents at
+   every commit) for agent attribution trailers, `noreply@anthropic.com`,
+   `Claude-Session:` URLs, secrets and credentials, and absolute paths
+   under the maintainer's home directory. The scan is a script committed
+   under `scripts/` so it can be re-run. Any hit stops the work and is
+   reported; the `gh` call that makes the repository public is never run
+   until the scan is clean and the maintainer has given an explicit
+   go-ahead in the session. Every settings call that only works on a
+   public repository is ordered after that go-ahead.
+2. **Required status checks on `main`: all five contexts.** The ruleset
+   requires the four CI jobs, with the test matrix contributing both the
+   Linux and macOS legs, so five status check contexts in total. A macOS
+   runner outage therefore blocks merges until it clears; the maintainer
+   accepts that in exchange for a release that is known to pass on both
+   platforms. The exact context names are read from a completed CI run
+   with `gh api` during the settings task, not guessed.
 
 Builder's calls already folded in: reference files are fetched from the
 maintainer's GitHub repositories (gosbee, jellyfish, go-blinkstick), not
