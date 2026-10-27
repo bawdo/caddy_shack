@@ -91,7 +91,7 @@ func lanContainerSpec(inst Instance, ip string) docker.ContainerSpec {
 // ensureLAN makes the forwarder match the LAN settings in s. Disabled means
 // no forwarder. If the LAN IP is not on any interface Docker is not touched
 // and a wrapped ErrLANDown is returned. The forwarder is stateless, so a
-// mismatched one is replaced.
+// mismatched or restarting (crash-looping) one is replaced.
 func (a *App) ensureLAN(s *state.State) error {
 	if !s.LANEnabled() {
 		return a.removeLAN()
@@ -121,7 +121,9 @@ func (a *App) ensureLAN(s *state.State) error {
 		if err != nil {
 			return fmt.Errorf("inspect LAN forwarder: %w", err)
 		}
-		if len(specDrift(spec, info)) == 0 {
+		// A restarting forwarder is crash-looping whatever its settings, so
+		// it is replaced rather than left to docker.
+		if st != docker.StateRestarting && len(specDrift(spec, info)) == 0 {
 			if st == docker.StateStopped {
 				if err := a.docker.Start(name); err != nil {
 					return a.lanStartError(s.LAN.IP, err)
@@ -178,7 +180,7 @@ func (a *App) stopLAN() error {
 	if err != nil {
 		return fmt.Errorf("inspect LAN forwarder: %w", err)
 	}
-	if st == docker.StateRunning {
+	if st.CanStop() {
 		return a.docker.Stop(a.inst.LANContainerName)
 	}
 	return nil

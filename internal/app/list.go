@@ -2,12 +2,9 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"sort"
 	"time"
-
-	"github.com/bawdo/caddy_shack/internal/state"
 )
 
 // Liveness values for Listing.Live.
@@ -41,11 +38,8 @@ func (a *App) List(ctx context.Context) ([]Listing, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	s, err := state.Load(a.paths.StatePath)
+	s, err := loadState(a.paths.StatePath)
 	if err != nil {
-		if state.IsCorrupt(err) {
-			return nil, fmt.Errorf("%w: %v", ErrStateCorrupt, err)
-		}
 		return nil, err
 	}
 	liveCtx, cancel := context.WithTimeout(ctx, listLiveTimeout)

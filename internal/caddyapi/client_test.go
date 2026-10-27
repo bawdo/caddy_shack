@@ -239,3 +239,178 @@ func TestClientGetConfigErrRejectedOn5xx(t *testing.T) {
 		t.Errorf("status: %d", rej.Status)
 	}
 }
+
+// roundTripFunc is an http.RoundTripper made from a function, so a test can
+// see every request the client sends without binding a port.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestClientSendsAdminOrigin: Caddy's admin API runs with enforce_origin,
+// so every request the client makes must carry an Origin in AdminOrigins.
+// The header is the same whatever host port the admin API is published on
+// (here a non-default 47123): Caddy compares it with its configured origins,
+// which name the container-side 127.0.0.1:2019, not with the port the
+// request arrived on.
+func TestClientSendsAdminOrigin(t *testing.T) {
+	var got []string
+	c := NewClient("http://127.0.0.1:47123", time.Second)
+	c.http.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		got = append(got, r.Method+" "+r.URL.Host+r.URL.Path+" "+r.Header.Get("Origin"))
+		body := ""
+		if r.URL.Path == "/pki/ca/local" {
+			body = `{}`
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	})
+
+	ctx := context.Background()
+	if err := c.Load(ctx, []byte(`{}`)); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := c.GetConfig(ctx); err != nil {
+		t.Fatalf("GetConfig: %v", err)
+	}
+	if _, err := c.LocalCA(ctx); err != nil {
+		t.Fatalf("LocalCA: %v", err)
+	}
+	if !c.Reachable(ctx) {
+		t.Fatal("Reachable: false")
+	}
+
+	const o = "http://127.0.0.1:2019"
+	const h = "127.0.0.1:47123"
+	want := []string{"POST " + h + "/load " + o, "GET " + h + "/config/ " + o, "GET " + h + "/pki/ca/local " + o, "GET " + h + "/config/ " + o}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("requests (method host+path Origin):\n got  %q\n want %q", got, want)
+	}
+}
+
+// originRefusalBody is the body Caddy's admin API returns, with a 403, to a
+// request that carries an Origin header when its running config has no
+// origins list (the pre-origins admin block, {"listen":"0.0.0.0:2019"}).
+const originRefusalBody = `{"error":"client is not allowed to access from origin 'http://127.0.0.1:2019'"}`
+
+// recordingClient returns a Client whose transport answers with respond and
+// records the Origin header (or "-" when absent) of every request it sees.
+func recordingClient(respond func(*http.Request) (int, string)) (*Client, *[]string) {
+	var origins []string
+	c := NewClient("http://127.0.0.1:47123", time.Second)
+	c.http.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		o := r.Header.Get("Origin")
+		if o == "" {
+			o = "-"
+		}
+		origins = append(origins, o)
+		status, body := respond(r)
+		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	})
+	return c, &origins
+}
+
+// callEach returns one call per Client method against c, each named for its
+// method and returning its error (Reachable=false counts as an error).
+func callEach(c *Client) []struct {
+	name string
+	call func() error
+} {
+	ctx := context.Background()
+	return []struct {
+		name string
+		call func() error
+	}{
+		{"Load", func() error { return c.Load(ctx, []byte(`{"apps":{}}`)) }},
+		{"GetConfig", func() error { _, err := c.GetConfig(ctx); return err }},
+		{"LocalCA", func() error { _, err := c.LocalCA(ctx); return err }},
+		{"Reachable", func() error {
+			if !c.Reachable(ctx) {
+				return errors.New("Reachable: false")
+			}
+			return nil
+		}},
+	}
+}
+
+// TestClientFallsBackWithoutOriginOnPreOriginsAdmin: a Caddy resumed on the
+// pre-origins admin block 403s any request carrying Origin but serves one
+// without it. Every method must retry once without the header, and the
+// retried Load must carry the same body.
+func TestClientFallsBackWithoutOriginOnPreOriginsAdmin(t *testing.T) {
+	for _, m := range []string{"Load", "GetConfig", "LocalCA", "Reachable"} {
+		var bodies []string
+		c, origins := recordingClient(func(r *http.Request) (int, string) {
+			if r.Body != nil {
+				b, _ := io.ReadAll(r.Body)
+				bodies = append(bodies, string(b))
+			}
+			if r.Header.Get("Origin") != "" {
+				return http.StatusForbidden, originRefusalBody
+			}
+			return http.StatusOK, `{}`
+		})
+		for _, tc := range callEach(c) {
+			if tc.name != m {
+				continue
+			}
+			if err := tc.call(); err != nil {
+				t.Errorf("%s: %v", m, err)
+			}
+		}
+		want := []string{"http://127.0.0.1:2019", "-"}
+		if strings.Join(*origins, ",") != strings.Join(want, ",") {
+			t.Errorf("%s: Origin per request: got %q want %q", m, *origins, want)
+		}
+		if m == "Load" && strings.Join(bodies, "|") != `{"apps":{}}|{"apps":{}}` {
+			t.Errorf("Load: bodies per request: %q", bodies)
+		}
+	}
+}
+
+// TestClientSendsOnceWhenOriginAccepted: a Caddy on the origins admin block
+// accepts the Origin header, so each method sends exactly one request.
+func TestClientSendsOnceWhenOriginAccepted(t *testing.T) {
+	for _, m := range []string{"Load", "GetConfig", "LocalCA", "Reachable"} {
+		c, origins := recordingClient(func(*http.Request) (int, string) { return http.StatusOK, `{}` })
+		for _, tc := range callEach(c) {
+			if tc.name == m {
+				if err := tc.call(); err != nil {
+					t.Errorf("%s: %v", m, err)
+				}
+			}
+		}
+		if len(*origins) != 1 || (*origins)[0] != "http://127.0.0.1:2019" {
+			t.Errorf("%s: requests: %q, want one with Origin", m, *origins)
+		}
+	}
+}
+
+// TestClientDoesNotRetryOtherForbidden: a 403 for any other reason is
+// surfaced as ErrRejected with its status and body, with no retry.
+func TestClientDoesNotRetryOtherForbidden(t *testing.T) {
+	const refusal = `{"error":"forbidden for some other reason"}`
+	for _, m := range []string{"Load", "GetConfig", "LocalCA", "Reachable"} {
+		c, origins := recordingClient(func(*http.Request) (int, string) { return http.StatusForbidden, refusal })
+		for _, tc := range callEach(c) {
+			if tc.name != m {
+				continue
+			}
+			err := tc.call()
+			if m == "Reachable" {
+				if err == nil {
+					t.Errorf("Reachable: true on 403")
+				}
+				continue
+			}
+			var rej *ErrRejected
+			if !errors.As(err, &rej) {
+				t.Fatalf("%s: expected ErrRejected, got %v", m, err)
+			}
+			if rej.Status != http.StatusForbidden || rej.Body != refusal {
+				t.Errorf("%s: ErrRejected %d %q", m, rej.Status, rej.Body)
+			}
+		}
+		if len(*origins) != 1 {
+			t.Errorf("%s: requests: %q, want exactly one", m, *origins)
+		}
+	}
+}

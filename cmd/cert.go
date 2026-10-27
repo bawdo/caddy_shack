@@ -94,11 +94,7 @@ it is expensive.
 The certificate and key are stored on this machine and re-pushed after an
 upgrade or a container recreate, so they survive both.`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := app.New()
-			if err != nil {
-				return err
-			}
+		RunE: withApp(func(cmd *cobra.Command, args []string, a *app.App) error {
 			if !production {
 				_, _ = fmt.Fprintln(cmd.ErrOrStderr(),
 					"Using the Let's Encrypt staging environment. The certificate will not be\n"+
@@ -116,7 +112,7 @@ upgrade or a container recreate, so they survive both.`,
 				"\nCertificate installed for %s and *.%s.\nYou can now remove the _acme-challenge TXT records.\n",
 				args[0], args[0])
 			return nil
-		},
+		}),
 	}
 	c.Flags().StringVar(&email, "email", "", "ACME account contact address (required)")
 	c.Flags().BoolVar(&production, "production", false,
@@ -132,17 +128,13 @@ func newCertListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List the stored certificates and when they expire",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := app.New()
-			if err != nil {
-				return err
-			}
+		RunE: withApp(func(cmd *cobra.Command, args []string, a *app.App) error {
 			rows, err := a.CertList(cmd.Context())
 			if err != nil {
 				return err
 			}
 			return renderCertList(cmd.OutOrStdout(), rows, asJSON)
-		},
+		}),
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "Emit JSON instead of a table")
 	return c
@@ -160,11 +152,7 @@ func newCertRenewCmd() *cobra.Command {
 Renewal uses the same DNS-01 prompt as request, and renews into whichever
 environment the certificate came from.`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := app.New()
-			if err != nil {
-				return err
-			}
+		RunE: withApp(func(cmd *cobra.Command, args []string, a *app.App) error {
 			prompt := &cliPrompter{in: cmd.InOrStdin(), out: cmd.ErrOrStderr()}
 			renewed, err := a.CertRenew(cmd.Context(), args[0], force, prompt)
 			if err != nil {
@@ -177,7 +165,7 @@ environment the certificate came from.`,
 			}
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Renewed %s.\n", args[0])
 			return nil
-		},
+		}),
 	}
 	c.Flags().BoolVar(&force, "force", false, "Renew even when the certificate is not due")
 	return c
@@ -193,11 +181,7 @@ func newCertRemoveCmd() *cobra.Command {
 Idempotent: removing a domain with no certificate exits 0 with a note on
 stderr. The domain's routes are untouched, use deregister for those.`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := app.New()
-			if err != nil {
-				return err
-			}
+		RunE: withApp(func(cmd *cobra.Command, args []string, a *app.App) error {
 			removed, err := a.CertRemove(cmd.Context(), args[0])
 			if err != nil {
 				return err
@@ -208,7 +192,7 @@ stderr. The domain's routes are untouched, use deregister for those.`,
 			}
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Removed the certificate for %s.\n", args[0])
 			return nil
-		},
+		}),
 	}
 	return c
 }

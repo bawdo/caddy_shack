@@ -33,7 +33,7 @@ func TestRegisterE2EReverseProxiesOverHTTPS(t *testing.T) {
 	// Create a minimal Caddyfile that makes the admin endpoint accessible
 	// from the host (Docker's localhost binding prevents external access by default).
 	caddyfile := filepath.Join(t.TempDir(), "Caddyfile")
-	if err := os.WriteFile(caddyfile, []byte("{\n\tadmin 0.0.0.0:2019\n}\n"), 0o644); err != nil {
+	if err := os.WriteFile(caddyfile, []byte(adminCaddyfile), 0o644); err != nil {
 		t.Fatalf("write Caddyfile: %v", err)
 	}
 

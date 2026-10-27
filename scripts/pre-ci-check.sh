@@ -2,7 +2,7 @@
 #
 # caddy_shack Local Build Validation
 #
-# Runs the same nine quality checks every developer should run before
+# Runs the same ten quality checks every developer should run before
 # pushing. Adapted from the Jellyfish pre-CI script for caddy_shack's
 # single-binary cobra CLI layout (module root builds ./).
 #
@@ -139,7 +139,7 @@ check_formatting() {
         if [ -n "$FIXED" ]; then
             gofmt -s -w .
             echo -e "${YELLOW}⚠ Fixed formatting in:${NC}"
-            echo "$FIXED" | sed 's/^/  /'
+            awk '{ print "  " $0 }' <<< "$FIXED"
         fi
     fi
 
@@ -154,7 +154,7 @@ check_formatting() {
         FORMAT_FAILED=true
         record_result "Code Formatting" "FAIL" "Files need formatting"
         echo -e "${RED}✗ The following files need formatting:${NC}"
-        echo "$UNFORMATTED" | sed 's/^/  /'
+        awk '{ print "  " $0 }' <<< "$UNFORMATTED"
         return 1
     fi
 }
@@ -221,7 +221,7 @@ check_coverage() {
         NO_TESTS_YET=true
         COVERAGE="0.0"
         record_result "Coverage Generation" "PASS" ""
-        echo -e "${YELLOW}⚠ No tests yet — coverage check skipped${NC}"
+        echo -e "${YELLOW}⚠ No tests yet: coverage check skipped${NC}"
         echo -e "  Coverage target gate suppressed for this run."
         return 0
     fi
@@ -285,7 +285,7 @@ check_build() {
     if go build -ldflags "$LDFLAGS" -o "$TMPBIN/caddy_shack" . 2>&1 | tee coverage/pre-ci-build.txt; then
         record_result "Build" "PASS" ""
         echo -e "${GREEN}✓ Build successful${NC}"
-        echo -e "  Built: $(ls "$TMPBIN" | tr '\n' ' ')"
+        echo -e "  Built: $(find "$TMPBIN" -mindepth 1 -maxdepth 1 -print0 | xargs -0 -n1 basename | tr '\n' ' ')"
     else
         record_result "Build" "FAIL" "Build failed"
         echo -e "${RED}✗ Build failed${NC}"
@@ -342,7 +342,7 @@ check_cli_smoke() {
         return 1
     fi
 
-    # First line is "caddy_shack <version>" — assert that shape rather than
+    # First line is "caddy_shack <version>": assert that shape rather than
     # a specific version string so the check survives any tag.
     if head -1 "$TMPBIN/smoke.log" | grep -q '^caddy_shack '; then
         record_result "CLI Smoke" "PASS" ""
@@ -353,6 +353,33 @@ check_cli_smoke() {
         echo -e "${RED}✗ caddy_shack version output did not begin with 'caddy_shack '${NC}"
         echo "Output:"
         sed 's/^/  /' "$TMPBIN/smoke.log"
+        return 1
+    fi
+}
+
+# CI runs shellcheck on the scripts; without it installed, warn rather than fail.
+lint_scripts() {
+    if command -v shellcheck &> /dev/null; then
+        # CI pins shellcheck to the version in .github/workflows/ci.yml; a
+        # different version here can disagree with it, so say which ran.
+        echo "shellcheck $(shellcheck --version | awk '/^version:/ { print $2 }')"
+        shellcheck scripts/*.sh
+    else
+        echo -e "${YELLOW}⚠ shellcheck is not installed; skipping the script lint that CI runs${NC}"
+    fi
+}
+
+# Check 10: Changelog and docs (CHANGELOG.md, documents, shell script tests)
+check_changelog() {
+    print_header "Check 10: Changelog and docs (changelog.sh, docs-check.sh, shellcheck, script tests)"
+    print_step "Validating CHANGELOG.md and documents, linting the scripts and running the script tests..."
+
+    if { scripts/changelog.sh check && scripts/docs-check.sh && lint_scripts && make test-scripts; } 2>&1 | tee coverage/pre-ci-changelog.txt; then
+        record_result "Changelog and docs" "PASS" ""
+        echo -e "${GREEN}✓ CHANGELOG.md and documents are consistent, the scripts lint clean and their tests pass${NC}"
+    else
+        record_result "Changelog and docs" "FAIL" "changelog, docs check, shellcheck or script tests failed"
+        echo -e "${RED}✗ Changelog and docs check failed${NC}"
         return 1
     fi
 }
@@ -395,10 +422,10 @@ generate_report() {
     SUCCESS_RATE=$(echo "scale=0; ($PASSED_CHECKS * 100) / $TOTAL_CHECKS" | bc)
 
     echo ""
-    if [ $SUCCESS_RATE -eq 100 ]; then
+    if [ "$SUCCESS_RATE" -eq 100 ]; then
         echo -e "Build Readiness: ${GREEN}${SUCCESS_RATE}%${NC}"
         echo -e "${GREEN}✓ All checks passed!${NC}"
-    elif [ $SUCCESS_RATE -ge 80 ]; then
+    elif [ "$SUCCESS_RATE" -ge 80 ]; then
         echo -e "Build Readiness: ${YELLOW}${SUCCESS_RATE}%${NC} ⚠"
         echo -e "${YELLOW}⚠ Some checks failed.${NC}"
     else
@@ -427,7 +454,7 @@ generate_report() {
     fi
 
     echo ""
-    echo "Detailed logs saved in: coverage/pre-ci-*.txt  (checks 1–9)"
+    echo "Detailed logs saved in: coverage/pre-ci-*.txt  (checks 1 to 10)"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
@@ -472,6 +499,7 @@ main() {
     check_build || true
     check_vulnerability_scan || true
     check_cli_smoke || true
+    check_changelog || true
 
     generate_report
 

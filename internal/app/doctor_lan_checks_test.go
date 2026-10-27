@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -412,5 +413,35 @@ func TestCheckLANFirewall(t *testing.T) {
 	r := checkLANFirewall(ctx, a, resp("active\n", nil), "linux")
 	if !strings.Contains(strings.Join(r.Detail, " "), "DOCKER-USER") {
 		t.Errorf("detail should mention DOCKER-USER: %v", r.Detail)
+	}
+}
+
+func TestCheckLANForwarderRestartingFailsWithRecreateFix(t *testing.T) {
+	a, fake := lanDoctorApp(t, enabledLAN(state.LANModePinned, "192.168.1.12"), nil, docLANStub{ip: "192.168.1.12", present: true})
+	fake.Containers[a.inst.LANContainerName] = docker.StateRestarting
+	r := checkLANForwarder(context.Background(), a)
+	if r.Status != SeverityFail || !strings.Contains(r.Summary, "restarting") {
+		t.Errorf("want fail saying restarting, got %+v", r)
+	}
+	if r.Fix == nil {
+		t.Fatal("expected recreate fix")
+	}
+	// The forwarder matches its spec, so only its state says it is broken:
+	// the fix must still replace it, not leave it crash-looping.
+	_ = fake.CreateAndStart(lanContainerSpec(a.inst, "192.168.1.12"))
+	fake.Containers[a.inst.LANContainerName] = docker.StateRestarting
+	fake.Removed = nil
+	fake.Specs = map[string]docker.ContainerSpec{}
+	if _, err := a.ApplyFix(context.Background(), r, func(string) bool { return true }); err != nil {
+		t.Fatalf("ApplyFix: %v", err)
+	}
+	if !slices.Contains(fake.Removed, a.inst.LANContainerName) {
+		t.Errorf("fix did not remove the restarting forwarder; removed=%v", fake.Removed)
+	}
+	if _, ok := fake.Specs[a.inst.LANContainerName]; !ok {
+		t.Error("fix did not recreate the forwarder")
+	}
+	if st, _ := fake.ContainerState(a.inst.LANContainerName); st != docker.StateRunning {
+		t.Errorf("forwarder after fix = %v, want running", st)
 	}
 }

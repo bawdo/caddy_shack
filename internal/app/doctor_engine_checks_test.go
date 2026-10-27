@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -148,6 +149,31 @@ func TestCheckContainerConfigNativeRelayStates(t *testing.T) {
 		_, _ = f.app.ApplyFix(context.Background(), r, func(string) bool { return true })
 		if st, _ := fake.ContainerState(RelayContainerName); st != docker.StateRunning {
 			t.Errorf("fix did not start relay: %v", st)
+		}
+	})
+	t.Run("restarting relay", func(t *testing.T) {
+		// No admin server needed: the relay fix only talks to docker.
+		fake := docker.NewFake()
+		useNativeLinux(t, fake)
+		a := NewWithPaths(Paths{}, nil, fake)
+		seedCurrentCaddy(fake)
+		fake.Containers[RelayContainerName] = docker.StateRestarting
+		fake.Specs = map[string]docker.ContainerSpec{}
+		r := checkContainerConfig(context.Background(), a)
+		if r.Status != SeverityFail || r.Fix == nil || !strings.Contains(r.Summary, "restarting") {
+			t.Fatalf("%+v", r)
+		}
+		if _, err := a.ApplyFix(context.Background(), r, func(string) bool { return true }); err != nil {
+			t.Fatalf("ApplyFix: %v", err)
+		}
+		if !slices.Contains(fake.Removed, RelayContainerName) {
+			t.Errorf("fix did not remove the restarting relay; removed=%v", fake.Removed)
+		}
+		if _, ok := fake.Specs[RelayContainerName]; !ok {
+			t.Error("fix did not recreate the relay")
+		}
+		if st, _ := fake.ContainerState(RelayContainerName); st != docker.StateRunning {
+			t.Errorf("relay after fix = %v, want running", st)
 		}
 	})
 	t.Run("misconfigured relay", func(t *testing.T) {

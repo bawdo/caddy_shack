@@ -113,7 +113,7 @@ func TestStatusReportsBackendCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	s, _ := state.Load(statePath)
-	live := caddyapi.Build(s)
+	live := caddyapi.Build(s, caddyapi.Options{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200); _, _ = w.Write(live) }))
 	defer srv.Close()
 	fakeDock := docker.NewFake()
@@ -307,7 +307,7 @@ func statusLANApp(t *testing.T, stateJSON string, r LANResolver, fakeDock *docke
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)
-		_, _ = w.Write(caddyapi.Build(s))
+		_, _ = w.Write(caddyapi.Build(s, caddyapi.Options{}))
 	}))
 	t.Cleanup(srv.Close)
 	fakeDock.Containers[CaddyContainerName] = docker.StateRunning
@@ -375,5 +375,27 @@ func TestStatusLANDrift(t *testing.T) {
 	}
 	if !rep.Healthy {
 		t.Error("drift must not affect Healthy")
+	}
+}
+
+func TestStatusUnhealthyWhenContainerRestarting(t *testing.T) {
+	dir := t.TempDir()
+	fakeDock := docker.NewFake()
+	fakeDock.Containers[CaddyContainerName] = docker.StateRestarting
+
+	a := NewWithPaths(Paths{
+		StatePath: filepath.Join(dir, "state.json"),
+		LockPath:  filepath.Join(dir, "state.json.lock"),
+	}, caddyapi.NewClient("http://127.0.0.1:1", 200*time.Millisecond), fakeDock)
+
+	rep, err := a.Status(context.Background())
+	if !errors.Is(err, ErrUnhealthy) {
+		t.Errorf("expected ErrUnhealthy, got %v", err)
+	}
+	if rep.ContainerState != "restarting" {
+		t.Errorf("ContainerState = %q, want restarting", rep.ContainerState)
+	}
+	if rep.Healthy {
+		t.Errorf("expected Healthy=false")
 	}
 }

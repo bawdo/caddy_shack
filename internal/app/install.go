@@ -5,19 +5,24 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/docker"
 )
 
 // caddyContainerSpec returns the ContainerSpec for the managed Caddy
 // container running the given image on the given engine. Shared by install
-// and upgrade so the two cannot drift. Docker Desktop, VM runtimes, and
-// unclassified engines get exactly the original spec; native Linux adds the
+// and upgrade so the two cannot drift. Every engine runs it on the
+// caddy_shack network. Docker Desktop, VM runtimes, and unclassified
+// engines get nothing more; native Linux adds the
 // host.docker.internal entry Desktop provides for free and the relay socket
 // volume host-mode backends are routed through.
 func caddyContainerSpec(inst Instance, image string, hn HostNetwork) docker.ContainerSpec {
 	spec := docker.ContainerSpec{
 		Name:  inst.ContainerName,
 		Image: image,
+		// The caddy_shack network only, never the default bridge, so a
+		// plain `docker run` container cannot reach the admin API.
+		NetworkMode: inst.NetworkName,
 		PortMappings: []docker.PortMapping{
 			{HostAddr: "127.0.0.1", HostPort: inst.HTTPPort, ContainerPort: 80},
 			{HostAddr: "127.0.0.1", HostPort: inst.HTTPSPort, ContainerPort: 443},
@@ -44,7 +49,9 @@ const caddyAutosavePath = "/config/caddy/autosave.json"
 // caddyBootScript is the Caddy container's command. It writes a minimal
 // Caddyfile that binds the admin endpoint to 0.0.0.0:2019 so the host
 // port-forward can reach it (caddy:2's default binds admin to
-// localhost:2019, invisible from outside the container).
+// localhost:2019, invisible from outside the container), with
+// enforce_origin and the same origins every rendered config carries
+// (caddyapi.AdminOrigins), so the two cannot drift.
 //
 // Caddy is started with --resume so any restart CaddyShack doesn't drive
 // (`docker restart`, a docker daemon restart, a host reboot under the
@@ -56,7 +63,8 @@ const caddyAutosavePath = "/config/caddy/autosave.json"
 // exit, and the restart policy would crash-loop it with the admin API
 // down, so it is validated first and skipped if invalid; CaddyShack's next
 // reconcile then re-pushes the registry.
-const caddyBootScript = "printf '{\\n\\tadmin 0.0.0.0:2019\\n}\\n' > /etc/caddy/Caddyfile && " +
+var caddyBootScript = "printf '{\\n\\tadmin 0.0.0.0:2019 {\\n\\t\\tenforce_origin\\n\\t\\torigins " +
+	strings.Join(caddyapi.AdminOrigins, " ") + "\\n\\t}\\n}\\n' > /etc/caddy/Caddyfile && " +
 	"if caddy validate --config " + caddyAutosavePath + " >/dev/null 2>&1; then " +
 	"exec caddy run --resume --config /etc/caddy/Caddyfile --adapter caddyfile; fi; " +
 	"exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"
@@ -95,7 +103,8 @@ func (a *App) Install(ctx context.Context) error {
 	}
 
 	switch state {
-	case docker.StateRunning:
+	case docker.StateRunning, docker.StateRestarting:
+		// A restarting container is left to docker; waitForAdmin bounds the wait.
 		return a.restoreThenRelay(ctx)
 	case docker.StateStopped:
 		if err := a.docker.Start(a.inst.ContainerName); err != nil {
@@ -112,6 +121,10 @@ func (a *App) Install(ctx context.Context) error {
 	if err := a.ensureCaddyVolumes(); err != nil {
 		return err
 	}
+	// The container is created on this network, so it must exist first.
+	if err := a.docker.EnsureNetwork(a.inst.NetworkName); err != nil {
+		return err
+	}
 	if err := a.docker.PullImage(CaddyImage); err != nil {
 		return err
 	}
@@ -122,7 +135,7 @@ func (a *App) Install(ctx context.Context) error {
 		// from CreateAndStart, and there's nothing actionable for them in a
 		// secondary rm failure.
 		_ = a.docker.Remove(a.inst.ContainerName)
-		if isPortAllocatedErr(err) {
+		if addrInUse.MatchString(err.Error()) {
 			ports := a.inst.publishedPorts()
 			return fmt.Errorf("install: one of ports %d, %d, or %d on 127.0.0.1 is already in use. "+
 				"Check other containers with 'docker ps' or processes with 'sudo lsof -nP -iTCP:%d,%d,%d -sTCP:LISTEN'. "+
@@ -137,11 +150,4 @@ func (a *App) Install(ctx context.Context) error {
 	// removed with `docker rm` and is being reinstalled), so a fresh
 	// container is reconciled too.
 	return a.restoreThenRelay(ctx)
-}
-
-// isPortAllocatedErr returns true when the docker error indicates a host
-// port is already bound. Matches the exact wording in docker daemon's
-// "Bind for <addr>:<port> failed: port is already allocated" message.
-func isPortAllocatedErr(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "port is already allocated")
 }

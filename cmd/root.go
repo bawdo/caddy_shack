@@ -15,12 +15,6 @@ func Execute() int {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	err := newRootCmd().ExecuteContext(ctx)
-	return classifyError(err)
-}
-
-// classifyError maps an error to documented exit codes. Delegates to
-// app.ExitCode so the sentinel-to-code mapping has a single source of truth.
-func classifyError(err error) int {
 	return app.ExitCode(err)
 }
 

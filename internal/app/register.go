@@ -167,25 +167,61 @@ func (a *App) Register(ctx context.Context, in RegisterInput) error {
 // state write then fails, Caddy is rolled back to prev so the two don't
 // diverge; if that rollback fails too, the error says so.
 func (a *App) commit(ctx context.Context, prev, updated *state.State) error {
+	return a.commitWith(ctx, prev, updated, nil)
+}
+
+// commitWith is commit with an undo hook for side effects the caller made
+// outside the registry before calling it (certificate material on disk, for
+// one). undo, when non-nil, runs on every failure path: after a failed build
+// or push, and after a failed state write. On a failed state write it runs
+// BEFORE the rollback config for prev is built, because buildConfig reads
+// material back off disk; building first would re-push the new material
+// under the old registry and defeat the rollback. The returned error is the
+// one commit would return, with " (additionally, <undo error>)" appended when
+// undo itself fails, so undo should describe what it was restoring.
+func (a *App) commitWith(ctx context.Context, prev, updated *state.State, undo func() error) error {
 	cfg, err := a.buildConfig(updated)
 	if err != nil {
-		return err
+		return withUndo(err, undo)
 	}
 	if err := a.caddy.Load(ctx, cfg); err != nil {
 		if errors.Is(err, caddyapi.ErrUnreachable) {
-			return fmt.Errorf("%w: %v", ErrCaddyNotRunning, err)
+			err = fmt.Errorf("%w: %v", ErrCaddyNotRunning, err)
 		}
-		return err
+		return withUndo(err, undo)
 	}
 	if err := state.Save(a.paths.StatePath, updated); err != nil {
-		rbErr := a.loadPrev(ctx, prev)
-		if rbErr != nil {
-			return fmt.Errorf("save state: %w; caddy now serves the change but the registry does not have it, "+
-				"and rolling caddy back failed (%v); fix the state file, then run 'caddy_shack sync'", err, rbErr)
+		var undoErr error
+		if undo != nil {
+			undoErr = undo()
 		}
-		return fmt.Errorf("save state: %w (caddy rolled back to the registry)", err)
+		var saveErr error
+		if rbErr := a.loadPrev(ctx, prev); rbErr != nil {
+			saveErr = fmt.Errorf("save state: %w; caddy now serves the change but the registry does not have it, "+
+				"and rolling caddy back failed (%v); fix the state file, then run 'caddy_shack sync'", err, rbErr)
+		} else {
+			saveErr = fmt.Errorf("save state: %w (caddy rolled back to the registry)", err)
+		}
+		return annotateUndo(saveErr, undoErr)
 	}
 	return nil
+}
+
+// withUndo runs undo, when there is one, and returns cause annotated with
+// any undo failure.
+func withUndo(cause error, undo func() error) error {
+	if undo == nil {
+		return cause
+	}
+	return annotateUndo(cause, undo())
+}
+
+// annotateUndo appends a failed undo to cause, keeping cause wrapped.
+func annotateUndo(cause, undoErr error) error {
+	if undoErr == nil {
+		return cause
+	}
+	return fmt.Errorf("%w (additionally, %v)", cause, undoErr)
 }
 
 // loadPrev pushes the config for prev, for rolling Caddy back.

@@ -49,7 +49,7 @@ func (CLI) ContainerState(name string) (ContainerState, error) {
 	// --type container: without it docker inspects whatever object has the
 	// name, so a volume or network sharing a container's name would be
 	// inspected instead (and has no .State).
-	cmd := exec.Command("docker", "inspect", "--type", "container", "--format", "{{.State.Running}}", name)
+	cmd := exec.Command("docker", "inspect", "--type", "container", "--format", "{{.State.Status}}", name)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -63,13 +63,28 @@ func (CLI) ContainerState(name string) (ContainerState, error) {
 		}
 		return StateAbsent, fmt.Errorf("docker inspect %s: %w: %s", name, err, stderr.String())
 	}
-	switch strings.TrimSpace(stdout.String()) {
-	case "true":
+	st, err := parseContainerStatus(stdout.String())
+	if err != nil {
+		return StateAbsent, fmt.Errorf("docker inspect %s: %w", name, err)
+	}
+	return st, nil
+}
+
+// parseContainerStatus maps the output of `docker inspect --format
+// {{.State.Status}}` to a ContainerState. Only running and restarting are
+// distinguished from stopped. A paused container reads as running, as it did
+// when .State.Running was used: it still holds its ports and `docker stop`
+// works on it. created, exited, dead and removing read as stopped.
+func parseContainerStatus(s string) (ContainerState, error) {
+	switch strings.TrimSpace(s) {
+	case "running", "paused":
 		return StateRunning, nil
-	case "false":
+	case "restarting":
+		return StateRestarting, nil
+	case "created", "exited", "dead", "removing":
 		return StateStopped, nil
 	default:
-		return StateAbsent, fmt.Errorf("docker inspect %s: unexpected output %q", name, stdout.String())
+		return StateAbsent, fmt.Errorf("unexpected container status %q", s)
 	}
 }
 
@@ -134,8 +149,7 @@ func (CLI) Remove(name string) error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// Absent container is a no-op success.
-		if strings.Contains(strings.ToLower(string(out)), "no such object") ||
-			strings.Contains(strings.ToLower(string(out)), "no such container") {
+		if isNoSuchContainer(string(out)) {
 			return nil
 		}
 		return fmt.Errorf("docker rm -f %s: %w: %s", name, err, out)
@@ -200,26 +214,6 @@ func (CLI) ContainerImageID(name string) (string, error) {
 		return "", fmt.Errorf("docker inspect %s image: %w: %s", name, err, stderr.String())
 	}
 	return strings.TrimSpace(stdout.String()), nil
-}
-
-func (CLI) NetworkAttached(network, container string) (bool, error) {
-	cmd := exec.Command("docker", "inspect", "--type", "container", "--format", "{{json .NetworkSettings.Networks}}", container)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && isNoSuchContainer(stderr.String()) {
-			return false, nil
-		}
-		return false, fmt.Errorf("docker inspect %s networks: %w: %s", container, err, stderr.String())
-	}
-	var nets map[string]json.RawMessage
-	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &nets); err != nil {
-		return false, fmt.Errorf("parse networks for %s: %w", container, err)
-	}
-	_, ok := nets[network]
-	return ok, nil
 }
 
 func (CLI) EngineInfo() (EngineInfo, error) {

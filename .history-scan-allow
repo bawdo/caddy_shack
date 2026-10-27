@@ -1,0 +1,13 @@
+# Accepted hits for scripts/history-scan.sh: email:<address> or
+# blob:<path>:<pattern name>. Lines starting with # are ignored.
+email:keith@bawdo.com
+email:keith@arrix.com.au
+# GitHub's committer identity on web-merged pull requests.
+email:noreply@github.com
+# Design documents that quote the scan's patterns.
+blob:docs/superpowers/plans/2026-10-27-releases-and-repo-setup.md:anthropic address
+blob:docs/superpowers/plans/2026-10-27-releases-and-repo-setup.md:session url
+blob:docs/superpowers/plans/2026-10-27-releases-and-repo-setup.md:attribution trailer
+blob:docs/superpowers/plans/2026-10-27-releases-and-repo-setup.md:home path
+blob:docs/superpowers/specs/2026-10-27-releases-and-repo-setup-design.md:anthropic address
+blob:docs/superpowers/specs/2026-10-27-releases-and-repo-setup-design.md:session url

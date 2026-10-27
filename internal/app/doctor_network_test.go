@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/bawdo/caddy_shack/internal/docker"
@@ -48,7 +49,8 @@ func TestSharedNetworkFailsWhenContainerBackendButNotAttached(t *testing.T) {
 	if _, err := a.ApplyFix(context.Background(), r, func(string) bool { return true }); err != nil {
 		t.Fatalf("ApplyFix: %v", err)
 	}
-	attached, _ := fake.NetworkAttached(CaddyNetworkName, CaddyContainerName)
+	info, _ := fake.InspectContainer(CaddyContainerName)
+	attached := slices.Contains(info.Networks, CaddyNetworkName)
 	if !attached {
 		t.Error("fix did not attach caddy to shared network")
 	}
@@ -79,7 +81,7 @@ func TestSharedNetworkSkippedWhenContainerNotRunning(t *testing.T) {
 func TestSharedNetworkWarnsWhenInspectFails(t *testing.T) {
 	fake := docker.NewFake()
 	fake.Containers[CaddyContainerName] = docker.StateRunning
-	fake.NetworkAttachedErr = errors.New("inspect boom")
+	fake.InspectErr = errors.New("inspect boom")
 	a := netDoctorApp(t, fake, map[string]state.Backend{
 		"app": {Domain: "app.test", Upstream: "app:3000"},
 	})

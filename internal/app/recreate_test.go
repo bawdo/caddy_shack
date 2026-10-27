@@ -6,11 +6,13 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/docker"
 	"github.com/bawdo/caddy_shack/internal/state"
 )
@@ -80,8 +82,8 @@ func assertRecreatedForNative(t *testing.T, f *fixture, fake *docker.Fake, befor
 		}
 	}
 	info, _ := fake.InspectContainer(CaddyContainerName)
-	if got := strings.Join(info.Networks, ","); got != "arrix-gamma,bridge,caddy_shack" {
-		t.Errorf("networks after recreate = %q, want every original network reattached", got)
+	if got := strings.Join(info.Networks, ","); got != "arrix-gamma,caddy_shack" {
+		t.Errorf("networks after recreate = %q, want every original network reattached and the default bridge dropped", got)
 	}
 	if st, _ := fake.ContainerState(RelayContainerName); st != docker.StateRunning {
 		t.Errorf("relay not running after recreate: %v", st)
@@ -222,7 +224,7 @@ func TestInstallDesktopRecreatesPreResumeContainer(t *testing.T) {
 		t.Error("desktop must not get a relay")
 	}
 	info, _ = fake.InspectContainer(CaddyContainerName)
-	if got := strings.Join(info.Networks, ","); got != "arrix-gamma,bridge,caddy_shack" {
+	if got := strings.Join(info.Networks, ","); got != "arrix-gamma,caddy_shack" {
 		t.Errorf("networks after recreate = %q", got)
 	}
 	if !strings.Contains(string(f.lastBody), "myapp.test") {
@@ -389,7 +391,7 @@ func TestUpgradeReattachesEveryNetwork(t *testing.T) {
 				t.Fatalf("Upgrade: %v", err)
 			}
 			info, _ := fake.InspectContainer(CaddyContainerName)
-			if got := strings.Join(info.Networks, ","); got != "arrix-gamma,bridge,caddy_shack" {
+			if got := strings.Join(info.Networks, ","); got != "arrix-gamma,caddy_shack" {
 				t.Errorf("networks after upgrade = %q", got)
 			}
 			_, hasRelay := fake.Specs[RelayContainerName]
@@ -422,5 +424,92 @@ func TestStatusDesktopHasNoRelayState(t *testing.T) {
 	rep, _ := f.app.Status(context.Background())
 	if rep.RelayState != "" {
 		t.Errorf("desktop status should not report a relay: %+v", rep)
+	}
+}
+
+// preOriginBootScript is the Caddy container command caddy_shack used before
+// the admin API enforced Origin, copied literally. A container still running
+// it boots (and, on an invalid autosave, falls back to) an admin endpoint
+// any browser page can DNS-rebind to, so it must be recreated.
+const preOriginBootScript = "printf '{\\n\\tadmin 0.0.0.0:2019\\n}\\n' > /etc/caddy/Caddyfile && " +
+	"if caddy validate --config /config/caddy/autosave.json >/dev/null 2>&1; then " +
+	"exec caddy run --resume --config /etc/caddy/Caddyfile --adapter caddyfile; fi; " +
+	"exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"
+
+func TestSpecDriftFlagsPreOriginBootScript(t *testing.T) {
+	for _, hn := range []HostNetwork{{Kind: EngineLoopbackForwarded}, {Kind: EngineNativeLinux, Gateway: testGateway}} {
+		spec := caddyContainerSpec(DefaultInstance(), CaddyImage, hn)
+		info := docker.ContainerInfo{
+			NetworkMode: spec.NetworkMode,
+			ExtraHosts:  spec.ExtraHosts,
+			Mounts:      spec.Volumes,
+			Command:     []string{"sh", "-c", preOriginBootScript},
+			Ports:       spec.PortMappings,
+		}
+		if d := specDrift(spec, info); strings.Join(d, "; ") != "outdated container command" {
+			t.Errorf("%s: drift = %q, want only the outdated command", hn.Kind, d)
+		}
+	}
+}
+
+// TestSpecDriftFlagsCaddyOnDefaultBridge: a Caddy container created on the
+// default bridge (every release before this one) is reachable from any
+// plain `docker run` container, so it reports network drift and install
+// recreates it on the caddy_shack network.
+func TestSpecDriftFlagsCaddyOnDefaultBridge(t *testing.T) {
+	spec := caddyContainerSpec(DefaultInstance(), CaddyImage, HostNetwork{Kind: EngineLoopbackForwarded})
+	info := docker.ContainerInfo{
+		NetworkMode: "bridge",
+		Mounts:      spec.Volumes,
+		Command:     spec.Command,
+		Ports:       spec.PortMappings,
+	}
+	if d := specDrift(spec, info); strings.Join(d, "; ") != "network mode is bridge, want caddy_shack" {
+		t.Errorf("drift = %q", d)
+	}
+}
+
+// noAdminApp is an App over fake whose admin client points at a closed port,
+// for tests that fail before any admin API call and so need no server.
+func noAdminApp(t *testing.T, fake *docker.Fake) *App {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "state.json")
+	return NewWithPaths(Paths{StatePath: p, LockPath: p + ".lock"}, caddyapi.NewClient("http://127.0.0.1:1", 200*time.Millisecond), fake)
+}
+
+// TestInstallEnsuresNetworkBeforeCreatingCaddy: the Caddy container is
+// created on the caddy_shack network, so the network must exist first. The
+// create is made to fail so the later ensureSharedNetwork cannot be what
+// created it.
+func TestInstallEnsuresNetworkBeforeCreatingCaddy(t *testing.T) {
+	fake := docker.NewFake()
+	fake.CreateErrs = map[string]error{CaddyContainerName: errors.New("run")}
+	a := noAdminApp(t, fake)
+	if err := a.Install(context.Background()); err == nil {
+		t.Fatal("expected the injected create error")
+	}
+	if got := fake.Specs[CaddyContainerName].NetworkMode; got != CaddyNetworkName {
+		t.Errorf("caddy created with network mode %q, want %q", got, CaddyNetworkName)
+	}
+	if !fake.Networks[CaddyNetworkName] {
+		t.Error("install created the caddy container before ensuring its network")
+	}
+}
+
+// TestRecreateEnsuresNetworkBeforeCreatingCaddy is the recreate path of the
+// same ordering.
+func TestRecreateEnsuresNetworkBeforeCreatingCaddy(t *testing.T) {
+	fake := docker.NewFake()
+	seedLegacyCaddy(fake, docker.StateRunning)
+	fake.CreateErrs = map[string]error{CaddyContainerName: errors.New("run")}
+	a := noAdminApp(t, fake)
+	if err := a.Install(context.Background()); err == nil {
+		t.Fatal("expected the injected create error")
+	}
+	if !slices.Contains(fake.Removed, CaddyContainerName) {
+		t.Fatalf("legacy container was not recreated; removed=%v", fake.Removed)
+	}
+	if !fake.Networks[CaddyNetworkName] {
+		t.Error("recreate created the caddy container before ensuring its network")
 	}
 }

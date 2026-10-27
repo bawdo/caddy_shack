@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/bawdo/caddy_shack/internal/state"
@@ -76,114 +75,11 @@ type HostRelay struct {
 	PortHeader string
 }
 
-// Build renders the full Caddy admin-API JSON config for the given State.
-// Routes are sorted by domain for deterministic output (important for
-// golden-file tests and predictable Caddy /load behaviour).
-func Build(s *state.State) []byte {
-	return BuildWith(s, Options{})
-}
-
-// BuildWith is Build with Options applied. BuildWith(s, Options{}) is
-// byte-for-byte Build(s).
-func BuildWith(s *state.State, opts Options) []byte {
+// Build renders the full Caddy admin-API JSON config for the given State,
+// with opts applied. Routes are sorted by domain for deterministic output
+// (important for golden-file tests and predictable Caddy /load behaviour).
+func Build(s *state.State, opts Options) []byte {
 	certs := opts.Certs
-	type upstream struct {
-		Dial string `json:"dial"`
-	}
-	type headerOps struct {
-		Set map[string][]string `json:"set"`
-	}
-	type headers struct {
-		Request headerOps `json:"request"`
-	}
-	type handler struct {
-		Handler   string     `json:"handler"`
-		Upstreams []upstream `json:"upstreams"`
-		// Headers is only emitted for relayed host-mode upstreams.
-		Headers *headers `json:"headers,omitempty"`
-	}
-	// staticResponse is Caddy's static_response handler. Abort closes the
-	// connection without writing a response.
-	type staticResponse struct {
-		Handler    string              `json:"handler"`
-		StatusCode int                 `json:"status_code,omitempty"`
-		Headers    map[string][]string `json:"headers,omitempty"`
-		Abort      bool                `json:"abort,omitempty"`
-	}
-	type match struct {
-		Host []string `json:"host"`
-	}
-	type route struct {
-		// Match is omitted only for a catch-all route.
-		Match []match `json:"match,omitempty"`
-		// Handle holds handler or staticResponse values.
-		Handle []any `json:"handle"`
-	}
-	type automaticHTTPS struct {
-		// DisableRedirects is a pointer so srv0 keeps emitting an explicit
-		// false while lan-http omits it.
-		DisableRedirects *bool `json:"disable_redirects,omitempty"`
-		Disable          bool  `json:"disable,omitempty"`
-	}
-	type listenerWrapper struct {
-		Wrapper        string `json:"wrapper"`
-		FallbackPolicy string `json:"fallback_policy,omitempty"`
-	}
-	type sniMatch struct {
-		SNI []string `json:"sni"`
-	}
-	type connectionPolicy struct {
-		Match sniMatch `json:"match"`
-	}
-	type server struct {
-		Listen                []string           `json:"listen"`
-		ListenerWrappers      []listenerWrapper  `json:"listener_wrappers,omitempty"`
-		Protocols             []string           `json:"protocols,omitempty"`
-		Routes                []route            `json:"routes"`
-		TLSConnectionPolicies []connectionPolicy `json:"tls_connection_policies,omitempty"`
-		StrictSNIHost         bool               `json:"strict_sni_host,omitempty"`
-		AutomaticHTTPS        automaticHTTPS     `json:"automatic_https"`
-	}
-	type httpApp struct {
-		Servers map[string]server `json:"servers"`
-	}
-	type issuer struct {
-		Module string `json:"module"`
-	}
-	type policy struct {
-		Subjects []string `json:"subjects"`
-		Issuers  []issuer `json:"issuers"`
-	}
-	type automation struct {
-		Policies []policy `json:"policies"`
-	}
-	type pemPair struct {
-		Certificate string `json:"certificate"`
-		Key         string `json:"key"`
-	}
-	type certificates struct {
-		LoadPEM []pemPair `json:"load_pem"`
-	}
-	type tlsApp struct {
-		Automation   automation    `json:"automation"`
-		Certificates *certificates `json:"certificates,omitempty"`
-	}
-	type apps struct {
-		HTTP httpApp `json:"http"`
-		TLS  tlsApp  `json:"tls"`
-	}
-	type adminConfig struct {
-		Listen string `json:"listen"`
-	}
-	type config struct {
-		// Admin keeps the admin endpoint bound to 0.0.0.0:2019 across
-		// /load swaps. Without it, Caddy reverts admin to its built-in
-		// default (localhost:2019, container-loopback only) and the next
-		// register/deregister can't reach the API from the host.
-		Admin adminConfig `json:"admin"`
-		Apps  apps        `json:"apps"`
-	}
-
 	domains := make([]string, 0, len(s.Backends))
 	byDomain := make(map[string]state.Backend, len(s.Backends))
 	for _, b := range s.Backends {
@@ -266,85 +162,11 @@ func BuildWith(s *state.State, opts Options) []byte {
 	}
 
 	if s.LANEnabled() {
-		lanNames := make([]string, 0, len(s.Backends))
-		byLANName := make(map[string]state.Backend, len(s.Backends))
-		for _, b := range s.Backends {
-			if b.LANDomain == "" {
-				continue
-			}
-			if _, dup := byLANName[b.LANDomain]; !dup {
-				lanNames = append(lanNames, b.LANDomain)
-			}
-			byLANName[b.LANDomain] = b
+		lanSrvs, lanSubjects := lanServers(s, hostRoutes, covered)
+		for name, srv := range lanSrvs {
+			servers[name] = srv
 		}
-		sort.Strings(lanNames)
-
-		// lanHosts is every LAN name and its wildcard. It drives the SNI
-		// policy, the lan-http redirect and the TLS subjects.
-		lanHosts := make([]string, 0, len(lanNames)*2)
-		for _, n := range lanNames {
-			lanHosts = append(lanHosts, n, "*."+n)
-		}
-		for _, h := range lanHosts {
-			if !isSubjectCovered(h, covered) {
-				subjects = append(subjects, h)
-			}
-		}
-
-		// An empty sni list matches every handshake in Caddy, so with no
-		// LAN names the policy matches a name that can never be sent.
-		sni := lanHosts
-		if len(sni) == 0 {
-			sni = []string{"lan.invalid"}
-		}
-
-		// Isolation from .test names on srv-lan has three layers: the SNI
-		// policy (no catch-all, so other handshakes fail), strict_sni_host
-		// (no LAN SNI with a .test Host header) and a terminal abort route.
-		// The PROXY header precedes the TLS handshake, so proxy_protocol
-		// must wrap before tls.
-		//
-		// Protocols is set only on the LAN servers: the forwarder carries
-		// TCP alone, so they must not advertise HTTP/3 on a UDP port nobody
-		// publishes. srv0 omits it and keeps Caddy's defaults.
-		proxyProtocol := listenerWrapper{Wrapper: "proxy_protocol", FallbackPolicy: "require"}
-		lanRoutes := append(hostRoutes(lanNames, byLANName), route{
-			Handle: []any{staticResponse{Handler: "static_response", Abort: true}},
-		})
-		servers["srv-lan"] = server{
-			Listen:                []string{":" + strconv.Itoa(LANHTTPSListenPort)},
-			ListenerWrappers:      []listenerWrapper{proxyProtocol, {Wrapper: "tls"}},
-			Protocols:             []string{"h1", "h2"},
-			Routes:                lanRoutes,
-			TLSConnectionPolicies: []connectionPolicy{{Match: sniMatch{SNI: sni}}},
-			StrictSNIHost:         true,
-			AutomaticHTTPS:        automaticHTTPS{DisableRedirects: boolPtr(true)},
-		}
-
-		// lan-http redirects LAN names to HTTPS and 404s everything else.
-		// Automatic HTTPS is off, or Caddy would enable TLS on this
-		// host-matched server because it is not on the HTTP port.
-		httpRoutes := make([]route, 0, 2)
-		if len(lanHosts) > 0 {
-			httpRoutes = append(httpRoutes, route{
-				Match: []match{{Host: lanHosts}},
-				Handle: []any{staticResponse{
-					Handler:    "static_response",
-					StatusCode: 308,
-					Headers:    map[string][]string{"Location": {"https://{http.request.host}{http.request.uri}"}},
-				}},
-			})
-		}
-		httpRoutes = append(httpRoutes, route{
-			Handle: []any{staticResponse{Handler: "static_response", StatusCode: 404}},
-		})
-		servers["lan-http"] = server{
-			Listen:           []string{":" + strconv.Itoa(LANHTTPListenPort)},
-			ListenerWrappers: []listenerWrapper{proxyProtocol},
-			Protocols:        []string{"h1"},
-			Routes:           httpRoutes,
-			AutomaticHTTPS:   automaticHTTPS{Disable: true},
-		}
+		subjects = append(subjects, lanSubjects...)
 	}
 	sort.Strings(subjects)
 
@@ -372,7 +194,11 @@ func BuildWith(s *state.State, opts Options) []byte {
 	}
 
 	cfg := config{
-		Admin: adminConfig{Listen: "0.0.0.0:2019"},
+		Admin: adminConfig{
+			Listen:        "0.0.0.0:2019",
+			EnforceOrigin: true,
+			Origins:       AdminOrigins,
+		},
 		Apps: apps{
 			HTTP: httpApp{
 				Servers: servers,

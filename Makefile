@@ -7,6 +7,8 @@ LDFLAGS := -X github.com/bawdo/caddy_shack/internal/version.Version=$(VERSION) \
            -X github.com/bawdo/caddy_shack/internal/version.Tag=$(TAG) \
            -X github.com/bawdo/caddy_shack/internal/version.Dirty=$(DIRTY)
 
+VULN_VERSION := v1.9.0
+
 .DEFAULT_GOAL := help
 
 build: ## Build the caddy_shack binary into bin/
@@ -21,15 +23,31 @@ test: ## Run the unit test suite
 lint: ## Run golangci-lint over the whole module
 	golangci-lint run
 
+vuln: ## Run govulncheck over the module
+	go run golang.org/x/vuln/cmd/govulncheck@$(VULN_VERSION) ./...
+
+integration: ## Run the Docker-backed integration tests
+	go test -tags integration -count=1 -timeout 10m -v ./test/integration/...
+
 pre-ci: ## Run the pre-CI checks (gofmt, vet, lint, test)
 	./scripts/pre-ci-check.sh
 
 pre-ci-fix: ## Run the pre-CI checks, auto-fixing gofmt
 	./scripts/pre-ci-check.sh --fix gofmt
 
+test-scripts: ## Run the shell script test suites
+	@for t in $$(ls scripts/*_test.sh | sort); do echo "==> $$t"; bash "$$t" || exit 1; done
+
+changelog: ## Check CHANGELOG.md is well formed and matches the tags
+	scripts/changelog.sh check
+
+release: ## Tag a release: make release RELEASE_VERSION=X.Y.Z (never pushes)
+	@test -n "$(RELEASE_VERSION)" || { echo "usage: make release RELEASE_VERSION=X.Y.Z"; exit 1; }
+	scripts/release.sh $(RELEASE_VERSION)
+
 help: ## List the available make targets and what they do
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| sort \
 		| awk 'BEGIN {FS = ":.*?## "} {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: build install test lint pre-ci pre-ci-fix help
+.PHONY: build install test test-scripts lint vuln integration changelog release pre-ci pre-ci-fix help

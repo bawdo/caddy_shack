@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -88,6 +90,17 @@ func checkContainerHealth(ctx context.Context, a *App) CheckResult {
 			Fix: &FixAction{
 				Label: "install Caddy container ('caddy_shack install')",
 				Apply: func(ctx context.Context) error { return a.Install(ctx) },
+			},
+		}
+	case docker.StateRestarting:
+		return CheckResult{
+			Name:    "container-health",
+			Status:  SeverityFail,
+			Summary: "caddy_shack container is restarting (crash-looping)",
+			Detail:  []string{"check 'docker logs " + a.inst.ContainerName + "' for the reason it keeps exiting"},
+			Fix: &FixAction{
+				Label: "restart container ('caddy_shack restart')",
+				Apply: func(ctx context.Context) error { return a.Restart(ctx) },
 			},
 		}
 	case docker.StateStopped:
@@ -228,6 +241,54 @@ func applyDNSFixDarwin(ctx context.Context, sh, tty shellExecutor) error {
 	return nil
 }
 
+// trustStoreCertSource names where the trust-store checks read the root CA
+// from, for the FAIL detail.
+const trustStoreCertSource = "Caddy admin API (/pki/ca/local), same as 'caddy_shack ca'"
+
+// trustStoreManualExport is the copy-paste command that writes the root CA to
+// the temp path the manual trust commands then read.
+const trustStoreManualExport = "caddy_shack ca > /tmp/caddy_shack_root.crt"
+
+// localRootCAFingerprint fetches the local root CA through ExportCA (root
+// only) and returns its PEM alongside the uppercase hex SHA-256 of its DER
+// bytes, which is what 'security find-certificate -Z' prints and what the
+// Linux bundle scan compares. If the PEM does not decode, the raw bytes are
+// hashed instead so the check still produces a fingerprint. ExportCA's error
+// is returned unchanged so callers can tell the not-provisioned case apart.
+func (a *App) localRootCAFingerprint(ctx context.Context) (pemCert []byte, sha256Hex string, err error) {
+	pemStr, err := a.ExportCA(ctx, false)
+	if err != nil {
+		return nil, "", err
+	}
+	pemCert = []byte(pemStr)
+	der := pemCert
+	if block, _ := pem.Decode(pemCert); block != nil {
+		der = block.Bytes
+	}
+	sum := sha256.Sum256(der)
+	return pemCert, strings.ToUpper(hex.EncodeToString(sum[:])), nil
+}
+
+// trustStoreCAError maps a localRootCAFingerprint failure to a trust-store
+// result: a CA Caddy has not issued yet is a WARN (nothing to trust yet);
+// anything else, including an unreachable admin API, is a FAIL.
+func trustStoreCAError(err error) CheckResult {
+	if errors.Is(err, errLocalCANotProvisioned) {
+		return CheckResult{
+			Name:    "trust-store",
+			Status:  SeverityWarn,
+			Summary: "no root CA yet (register a backend to trigger provisioning)",
+			Detail:  []string{err.Error()},
+		}
+	}
+	return CheckResult{
+		Name:    "trust-store",
+		Status:  SeverityFail,
+		Summary: "cannot read the local root CA",
+		Detail:  []string{err.Error()},
+	}
+}
+
 func checkTrustStoreDarwin(ctx context.Context, a *App, sh shellExecutor, tty shellExecutor) CheckResult {
 	state, _ := a.docker.ContainerState(a.inst.ContainerName)
 	if state != docker.StateRunning {
@@ -237,27 +298,10 @@ func checkTrustStoreDarwin(ctx context.Context, a *App, sh shellExecutor, tty sh
 			Summary: "container not running",
 		}
 	}
-	cert, err := a.docker.Exec(ctx, a.inst.ContainerName, []string{"cat", "/data/caddy/pki/authorities/local/root.crt"})
+	cert, wantSHA, err := a.localRootCAFingerprint(ctx)
 	if err != nil {
-		return CheckResult{
-			Name:    "trust-store",
-			Status:  SeverityWarn,
-			Summary: "no root CA yet (register a backend to trigger provisioning)",
-			Detail:  []string{err.Error()},
-		}
+		return trustStoreCAError(err)
 	}
-	// security find-certificate -Z reports the SHA-256 of the DER-encoded
-	// certificate, not the SHA of whatever file format we read. Decode the
-	// PEM block first; fall back to hashing the raw bytes if it isn't PEM
-	// (Caddy currently writes PEM but the defensive path keeps the check
-	// producing a fingerprint either way).
-	derBytes := cert
-	if block, _ := pem.Decode(cert); block != nil {
-		derBytes = block.Bytes
-	}
-	sum := sha256.Sum256(derBytes)
-	wantSHA := strings.ToUpper(hex.EncodeToString(sum[:]))
-
 	dump, err := sh(ctx, "security", "find-certificate", "-a", "-Z", "/Library/Keychains/System.keychain")
 	if err == nil && strings.Contains(string(dump), wantSHA) {
 		return CheckResult{
@@ -274,9 +318,9 @@ func checkTrustStoreDarwin(ctx context.Context, a *App, sh shellExecutor, tty sh
 	}
 	detail = append(detail,
 		"expected SHA-256 (DER): "+wantSHA,
-		"cert source: "+a.inst.ContainerName+":/data/caddy/pki/authorities/local/root.crt",
+		"cert source: "+trustStoreCertSource,
 		"to fix manually:",
-		"  docker exec "+a.inst.ContainerName+" cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt",
+		"  "+trustStoreManualExport,
 		"  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/caddy_shack_root.crt",
 	)
 	return CheckResult{
@@ -427,7 +471,7 @@ func applyDNSFixLinux(ctx context.Context, sh, tty shellExecutor) error {
 // trusted anchors into a flat PEM bundle at one of a few well-known paths
 // (linuxCABundlePaths). The check reads whichever bundle exists and looks
 // for a certificate block whose SHA-256(DER) matches the CA fetched from
-// the running container.
+// Caddy's admin API.
 func checkTrustStoreLinux(ctx context.Context, a *App, sh shellExecutor, tty shellExecutor) CheckResult {
 	state, _ := a.docker.ContainerState(a.inst.ContainerName)
 	if state != docker.StateRunning {
@@ -437,22 +481,10 @@ func checkTrustStoreLinux(ctx context.Context, a *App, sh shellExecutor, tty she
 			Summary: "container not running",
 		}
 	}
-	cert, err := a.docker.Exec(ctx, a.inst.ContainerName, []string{"cat", "/data/caddy/pki/authorities/local/root.crt"})
+	cert, wantSHA, err := a.localRootCAFingerprint(ctx)
 	if err != nil {
-		return CheckResult{
-			Name:    "trust-store",
-			Status:  SeverityWarn,
-			Summary: "no root CA yet (register a backend to trigger provisioning)",
-			Detail:  []string{err.Error()},
-		}
+		return trustStoreCAError(err)
 	}
-	derBytes := cert
-	if block, _ := pem.Decode(cert); block != nil {
-		derBytes = block.Bytes
-	}
-	sum := sha256.Sum256(derBytes)
-	wantSHA := strings.ToUpper(hex.EncodeToString(sum[:]))
-
 	var checkedPaths []string
 	for _, path := range linuxCABundlePaths {
 		if _, err := sh(ctx, "test", "-f", path); err != nil {
@@ -474,13 +506,13 @@ func checkTrustStoreLinux(ctx context.Context, a *App, sh shellExecutor, tty she
 
 	detail := []string{
 		"expected SHA-256 (DER): " + wantSHA,
-		"cert source: " + a.inst.ContainerName + ":/data/caddy/pki/authorities/local/root.crt",
+		"cert source: " + trustStoreCertSource,
 		"checked bundles: " + strings.Join(checkedPaths, ", "),
 		"to fix manually (Arch/Omarchy/Fedora - p11-kit):",
-		"  docker exec " + a.inst.ContainerName + " cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy_shack_root.crt",
+		"  " + trustStoreManualExport,
 		"  sudo trust anchor /tmp/caddy_shack_root.crt",
 		"to fix manually (Debian/Ubuntu):",
-		"  docker exec " + a.inst.ContainerName + " cat /data/caddy/pki/authorities/local/root.crt | sudo tee /usr/local/share/ca-certificates/caddy_shack.crt",
+		"  caddy_shack ca | sudo tee /usr/local/share/ca-certificates/caddy_shack.crt",
 		"  sudo update-ca-certificates",
 	}
 	return CheckResult{
@@ -580,7 +612,7 @@ func checkSharedNetwork(_ context.Context, a *App) CheckResult {
 			Summary: "no container-mode backends; shared network not required",
 		}
 	}
-	attached, err := a.docker.NetworkAttached(a.inst.NetworkName, a.inst.ContainerName)
+	info, err := a.docker.InspectContainer(a.inst.ContainerName)
 	if err != nil {
 		return CheckResult{
 			Name:    "shared-network",
@@ -589,7 +621,7 @@ func checkSharedNetwork(_ context.Context, a *App) CheckResult {
 			Detail:  []string{err.Error()},
 		}
 	}
-	if attached {
+	if slices.Contains(info.Networks, a.inst.NetworkName) {
 		return CheckResult{
 			Name:    "shared-network",
 			Status:  SeverityPass,
@@ -748,10 +780,6 @@ func checkPortAvailability(ctx context.Context, a *App) CheckResult {
 	return checkPortAvailabilityOn(ctx, a, a.inst.publishedPorts())
 }
 
-// checkPortAvailabilityOn is the test seam. Tests call it with a free
-// ephemeral port so they don't need root for 80/443.
-// Uses DialTimeout rather than net.Listen to avoid EACCES on ports 80/443
-// when running as a non-root user.
 // joinPorts renders ports as "80, 443, 2019".
 func joinPorts(ports []int) string {
 	s := make([]string, len(ports))
@@ -761,6 +789,10 @@ func joinPorts(ports []int) string {
 	return strings.Join(s, ", ")
 }
 
+// checkPortAvailabilityOn is the test seam. Tests call it with a free
+// ephemeral port so they don't need root for 80/443.
+// Uses DialTimeout rather than net.Listen to avoid EACCES on ports 80/443
+// when running as a non-root user.
 func checkPortAvailabilityOn(_ context.Context, a *App, ports []int) CheckResult {
 	var taken []string
 	for _, p := range ports {
@@ -782,7 +814,8 @@ func checkPortAvailabilityOn(_ context.Context, a *App, ports []int) CheckResult
 	// If our container is running, assume it holds the ports (the spec's
 	// "free or already held by caddy_shack" wording). PASS with a note.
 	state, _ := a.docker.ContainerState(a.inst.ContainerName)
-	if state == docker.StateRunning {
+	// Running (paused included) or restarting: either way it holds the ports.
+	if state == docker.StateRunning || state == docker.StateRestarting {
 		return CheckResult{
 			Name:    "port-availability",
 			Status:  SeverityPass,

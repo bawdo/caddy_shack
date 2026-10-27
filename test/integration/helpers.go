@@ -8,8 +8,10 @@
 package integration
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os/exec"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"github.com/bawdo/caddy_shack/internal/app"
+	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/docker"
 )
 
@@ -43,23 +46,61 @@ func CleanupContainer(t *testing.T) {
 	t.Cleanup(rm)
 }
 
-// WaitForCaddyAdmin polls the admin API until /config/ returns 2xx or the
-// deadline expires.
+// adminGet GETs path on the admin API at baseURL with the Origin header
+// caddy_shack's client sends, which Caddy requires once enforce_origin is on
+// (every caddy_shack container, and any Caddy after its first config push).
+// Like the client, if Caddy refuses that origin (a Caddy still on the
+// pre-origins admin block, as restart_drift_e2e_test.go pins) it retries
+// once without the header, so raw assertions see what the client sees.
+func adminGet(baseURL, path string) (*http.Response, error) {
+	get := func(withOrigin bool) (*http.Response, error) {
+		req, err := http.NewRequest(http.MethodGet, baseURL+path, nil)
+		if err != nil {
+			return nil, err
+		}
+		if withOrigin {
+			req.Header.Set("Origin", "http://"+caddyapi.AdminOrigins[0])
+		}
+		return http.DefaultClient.Do(req)
+	}
+	resp, err := get(true)
+	if err != nil || resp.StatusCode != http.StatusForbidden {
+		return resp, err
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	if bytes.Contains(body, []byte("not allowed to access from origin")) {
+		return get(false)
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return resp, nil
+}
+
+// WaitForCaddyAdmin polls the admin API, through caddy_shack's own client
+// (so with its Origin header and its pre-origins fallback), until /config/
+// returns 2xx or the deadline expires.
 func WaitForCaddyAdmin(t *testing.T, baseURL string, timeout time.Duration) {
 	t.Helper()
+	client := caddyapi.NewClient(baseURL, 2*time.Second)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(baseURL + "/config/")
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == 200 {
-				return
-			}
+		if client.Reachable(context.Background()) {
+			return
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 	t.Fatalf("Caddy admin API never came up at %s", baseURL)
 }
+
+// adminCaddyfile is the admin-only Caddyfile the hand-rolled test
+// containers boot from: the same admin block as caddy_shack's own boot
+// Caddyfile, with enforce_origin and origins built from
+// caddyapi.AdminOrigins so the two cannot drift.
+var adminCaddyfile = "{\n\tadmin 0.0.0.0:2019 {\n\t\tenforce_origin\n\t\torigins " +
+	strings.Join(caddyapi.AdminOrigins, " ") + "\n\t}\n}\n"
 
 // MustAppWithTempState builds an App pointed at a tempdir state file. The
 // caller is responsible for ensuring Caddy is running on the admin port the
@@ -95,11 +136,8 @@ func (fakeRunningDocker) Exec(context.Context, string, []string) ([]byte, error)
 // routing own the network lifecycle themselves (attaching their throwaway
 // caddy container directly via `docker run --network`), so App should not try
 // to touch docker networking through this stub.
-func (fakeRunningDocker) EnsureNetwork(string) error          { return nil }
-func (fakeRunningDocker) ConnectNetwork(string, string) error { return nil }
-func (fakeRunningDocker) NetworkAttached(string, string) (bool, error) {
-	return true, nil
-}
+func (fakeRunningDocker) EnsureNetwork(string) error              { return nil }
+func (fakeRunningDocker) ConnectNetwork(string, string) error     { return nil }
 func (fakeRunningDocker) ImageID(string) (string, error)          { return "", nil }
 func (fakeRunningDocker) ContainerImageID(string) (string, error) { return "", nil }
 

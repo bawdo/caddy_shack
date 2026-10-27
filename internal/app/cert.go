@@ -97,10 +97,25 @@ func (a *App) CertRequest(ctx context.Context, in CertRequestInput, prompt acme.
 }
 
 // issueAndInstall runs the order and, only on success, writes material, updates
-// state and pushes the config. Shared by CertRequest and CertRenew.
+// state and pushes the config through commitWith. Shared by CertRequest and
+// CertRenew.
+//
+// The material already on disk is captured before it is overwritten:
+// certstore.Save replaces in place with no backup, so on renewal this is the
+// only record of a certificate that was serving traffic until now. The undo
+// hook restores it (or removes fresh material) on any failure, and commitWith
+// runs that undo BEFORE building the rollback config after a failed state
+// write, because buildConfig reads material back off disk; the other order
+// would re-push the new key under the old registry.
 func (a *App) issueAndInstall(ctx context.Context, domain, email, env string, prompt acme.Prompter) error {
+	// Cheap gate before the order: prior material that exists but cannot be
+	// read would fail the install below anyway, after an ACME issuance had
+	// been spent against the rate limits. The read under the lock below
+	// stays the one the undo restores from.
+	if _, err := a.loadPriorMaterial(domain); err != nil {
+		return err
+	}
 	subjects := []string{domain, "*." + domain}
-
 	res, err := a.issuer.Issue(ctx, acme.Request{
 		Domains:        subjects,
 		Email:          email,
@@ -110,44 +125,27 @@ func (a *App) issueAndInstall(ctx context.Context, domain, email, env string, pr
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrCertIssuance, err)
 	}
-
-	lock, err := state.AcquireLock(a.paths.LockPath, 5*time.Second)
+	lock, err := acquireStateLock(a.paths.LockPath)
 	if err != nil {
-		if errors.Is(err, state.ErrLockTimeout) {
-			return fmt.Errorf("%w: %v", ErrLockContention, err)
-		}
 		return err
 	}
 	defer func() { _ = lock.Release() }()
 
-	s, err := state.Load(a.paths.StatePath)
+	s, err := loadState(a.paths.StatePath)
 	if err != nil {
-		if state.IsCorrupt(err) {
-			return fmt.Errorf("%w: %v", ErrStateCorrupt, err)
-		}
 		return err
 	}
 
-	// Capture what was already there, if anything, before overwriting it.
-	// certstore.Save replaces material in place with no backup of its own,
-	// so on renewal this is the only record of the certificate that was
-	// still working right up until this call. If the push below fails, a
-	// bare "roll back to nothing" would delete a working certificate and
-	// turn a failed renewal into an outage.
-	prior, priorErr := a.certs.Load(domain)
-	hadPrior := priorErr == nil
-
+	prior, err := a.loadPriorMaterial(domain)
+	if err != nil {
+		return err
+	}
 	if err := a.certs.Save(domain, res.CertPEM, res.KeyPEM); err != nil {
 		return err
 	}
 
-	// Capture the state's own pre-change picture of this domain (distinct
-	// from prior/hadPrior above, which track the certstore material) so a
-	// state.Save failure below can rebuild the exact config that was live
-	// before this call and re-push it.
-	priorCertEntry, hadPriorCertEntry := s.Certs[domain]
-
-	s.Certs[domain] = state.Cert{
+	updated := s.Clone()
+	updated.Certs[domain] = state.Cert{
 		Domain:   domain,
 		Subjects: subjects,
 		Env:      env,
@@ -155,95 +153,42 @@ func (a *App) issueAndInstall(ctx context.Context, domain, email, env string, pr
 		IssuedAt: time.Now().Format(time.RFC3339),
 		NotAfter: res.NotAfter.Format(time.RFC3339),
 	}
-
-	cfg, err := a.buildConfig(s)
-	if err != nil {
-		return a.restoreMaterial(domain, hadPrior, prior, err)
-	}
-	if err := a.caddy.Load(ctx, cfg); err != nil {
-		pushErr := err
-		if errors.Is(err, caddyapi.ErrUnreachable) {
-			pushErr = fmt.Errorf("%w: %v", ErrCaddyNotRunning, err)
-		}
-		return a.restoreMaterial(domain, hadPrior, prior, pushErr)
-	}
-
-	if err := state.Save(a.paths.StatePath, s); err != nil {
-		// The push already landed but the state write failed. Left alone,
-		// Caddy would keep serving material that state.json has no record
-		// of: the next register/deregister/doctor --fix rebuilds from
-		// state, drops the load_pem, and hands the domain back to the
-		// internal issuer. Roll the push back using the pre-change state so
-		// Caddy and the store both return to what they were before this
-		// call, then surface both the save failure and whether that
-		// rollback itself succeeded.
-		saveErr := fmt.Errorf("save state: %w", err)
-
-		// Clone, not a hand-built State, so everything else the registry
-		// holds (the LAN settings included) survives into the rollback
-		// config.
-		preChangeState := s.Clone()
-		if hadPriorCertEntry {
-			preChangeState.Certs[domain] = priorCertEntry
-		} else {
-			delete(preChangeState.Certs, domain)
-		}
-
-		// Restore the store material BEFORE rebuilding the rollback config:
-		// loadedCerts reads material back off disk, and the disk still holds
-		// the just-issued bytes at this point. Building the rollback config
-		// first would silently re-push the new material under the old
-		// routing, defeating the rollback.
-		materialErr := a.restoreMaterialOnly(domain, hadPrior, prior)
-
-		var rollbackErr error
-		rollbackCfg, certsErr := a.buildConfig(preChangeState)
-		if certsErr != nil {
-			rollbackErr = fmt.Errorf("rebuild pre-change certificates: %w", certsErr)
-		} else {
-			if loadErr := a.caddy.Load(ctx, rollbackCfg); loadErr != nil {
-				rollbackErr = fmt.Errorf("re-push pre-change config: %w", loadErr)
-			}
-		}
-
-		switch {
-		case rollbackErr != nil && materialErr != nil:
-			return fmt.Errorf("%w (additionally, config rollback failed: %v; material rollback failed: %v)", saveErr, rollbackErr, materialErr)
-		case rollbackErr != nil:
-			return fmt.Errorf("%w (additionally, config rollback failed: %v)", saveErr, rollbackErr)
-		case materialErr != nil:
-			return fmt.Errorf("%w (additionally, material rollback failed: %v)", saveErr, materialErr)
-		default:
-			return fmt.Errorf("%w (config and material rolled back to their pre-request state)", saveErr)
-		}
-	}
-	return nil
+	return a.commitWith(ctx, s, updated, func() error { return a.restoreMaterialOnly(domain, prior) })
 }
 
-// restoreMaterial undoes the certstore write that issueAndInstall made,
-// after a push failure. When there was material for the domain before the
-// order started, it is restored exactly, so a failed renewal is a no-op
-// rather than an outage; when there was none (a fresh request), the new
-// material is removed, same as before. pushErr is the failure that triggered
-// the rollback; if the rollback itself fails, both are surfaced together so
-// the operator knows the store may be in a bad state.
-func (a *App) restoreMaterial(domain string, hadPrior bool, prior certstore.Material, pushErr error) error {
-	if restoreErr := a.restoreMaterialOnly(domain, hadPrior, prior); restoreErr != nil {
-		return fmt.Errorf("%w (additionally, restoring prior certificate material failed: %v)", pushErr, restoreErr)
+// loadPriorMaterial reads the material already stored for domain. Only
+// certstore.ErrNotFound means there is none (nil, nil). Any other read error
+// (a key with bad permissions, say) means material exists that cannot be
+// backed up, and undoing over it would RemoveAll a certificate that was
+// serving traffic, so it is returned, naming the file, and nothing is
+// written.
+func (a *App) loadPriorMaterial(domain string) (*certstore.Material, error) {
+	prior, err := a.certs.Load(domain)
+	if errors.Is(err, certstore.ErrNotFound) {
+		return nil, nil
 	}
-	return pushErr
+	if err != nil {
+		return nil, fmt.Errorf("read existing certificate material for %s (nothing was changed; fix or remove it, then retry): %w", domain, err)
+	}
+	return &prior, nil
 }
 
 // restoreMaterialOnly undoes the certstore write issueAndInstall made,
 // restoring prior material exactly when there was any, or removing the new
-// material when there was none. It is the restore path shared by
-// restoreMaterial (push failure) and the state.Save failure branch of
-// issueAndInstall, which additionally rolls the pushed config back.
-func (a *App) restoreMaterialOnly(domain string, hadPrior bool, prior certstore.Material) error {
-	if hadPrior {
-		return a.certs.Save(domain, prior.CertPEM, prior.KeyPEM)
+// material when there was none. issueAndInstall hands it to commitWith as
+// the undo hook, so it runs on every failure after the material is written.
+// Its error reads as the clause commitWith appends after "additionally, ".
+func (a *App) restoreMaterialOnly(domain string, prior *certstore.Material) error {
+	var err error
+	if prior != nil {
+		err = a.certs.Save(domain, prior.CertPEM, prior.KeyPEM)
+	} else {
+		err = a.certs.Remove(domain)
 	}
-	return a.certs.Remove(domain)
+	if err != nil {
+		return fmt.Errorf("restoring prior certificate material failed: %w", err)
+	}
+	return nil
 }
 
 // daysRemaining returns the whole days remaining until notAfter, an RFC3339
@@ -266,11 +211,8 @@ func (a *App) CertList(ctx context.Context) ([]CertListing, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	s, err := state.Load(a.paths.StatePath)
+	s, err := loadState(a.paths.StatePath)
 	if err != nil {
-		if state.IsCorrupt(err) {
-			return nil, fmt.Errorf("%w: %v", ErrStateCorrupt, err)
-		}
 		return nil, err
 	}
 	domains := make([]string, 0, len(s.Certs))
@@ -306,20 +248,14 @@ func (a *App) CertRemove(ctx context.Context, domain string) (bool, error) {
 	// validation error, matching Deregister.
 	domain = strings.ToLower(domain)
 
-	lock, err := state.AcquireLock(a.paths.LockPath, 5*time.Second)
+	lock, err := acquireStateLock(a.paths.LockPath)
 	if err != nil {
-		if errors.Is(err, state.ErrLockTimeout) {
-			return false, fmt.Errorf("%w: %v", ErrLockContention, err)
-		}
 		return false, err
 	}
 	defer func() { _ = lock.Release() }()
 
-	s, err := state.Load(a.paths.StatePath)
+	s, err := loadState(a.paths.StatePath)
 	if err != nil {
-		if state.IsCorrupt(err) {
-			return false, fmt.Errorf("%w: %v", ErrStateCorrupt, err)
-		}
 		return false, err
 	}
 	if _, present := s.Certs[domain]; !present {
@@ -365,11 +301,8 @@ func (a *App) CertRenew(ctx context.Context, domain string, force bool, prompt a
 	// still finds the record.
 	domain = strings.ToLower(domain)
 
-	s, err := state.Load(a.paths.StatePath)
+	s, err := loadState(a.paths.StatePath)
 	if err != nil {
-		if state.IsCorrupt(err) {
-			return false, fmt.Errorf("%w: %v", ErrStateCorrupt, err)
-		}
 		return false, err
 	}
 	c, present := s.Certs[domain]

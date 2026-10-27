@@ -21,18 +21,14 @@ registered under it (e.g. bar.foo when removing foo) are left in place and
 reported on stderr. Pass --cascade to also remove every subdomain backend
 under the named one.`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := app.New()
-			if err != nil {
-				return err
-			}
+		RunE: withApp(func(cmd *cobra.Command, args []string, a *app.App) error {
 			res, err := a.Deregister(cmd.Context(), args[0], cascade)
 			if err != nil {
 				return err
 			}
 			renderDeregister(cmd.OutOrStdout(), cmd.ErrOrStderr(), args[0], res)
 			return nil
-		},
+		}),
 	}
 	c.Flags().BoolVar(&cascade, "cascade", false,
 		"Also remove subdomain backends registered under <name>")

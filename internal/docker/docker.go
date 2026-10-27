@@ -19,6 +19,9 @@ const (
 	StateStopped
 	// StateRunning means a container exists and is running.
 	StateRunning
+	// StateRestarting means a container exists and docker is restarting it,
+	// typically because it is crash-looping. It is not serving.
+	StateRestarting
 )
 
 func (s ContainerState) String() string {
@@ -29,9 +32,17 @@ func (s ContainerState) String() string {
 		return "stopped"
 	case StateRunning:
 		return "running"
+	case StateRestarting:
+		return "restarting"
 	default:
 		return "unknown"
 	}
+}
+
+// CanStop reports whether `docker stop` applies: the container is running or
+// is being restarted by docker (crash-looping).
+func (s ContainerState) CanStop() bool {
+	return s == StateRunning || s == StateRestarting
 }
 
 // ErrDaemonUnreachable indicates the docker CLI could not contact the
@@ -69,9 +80,6 @@ type Client interface {
 	// ConnectNetwork attaches the named container to the named network.
 	// Idempotent: an already-attached container is success.
 	ConnectNetwork(network, container string) error
-	// NetworkAttached reports whether the named container is attached to
-	// the named network. Returns (false, nil) if the container is absent.
-	NetworkAttached(network, container string) (bool, error)
 	// ImageID returns the local image ID (e.g. "sha256:...") for ref.
 	// Errors if the image is not present locally.
 	ImageID(ref string) (string, error)

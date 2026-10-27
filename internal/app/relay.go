@@ -123,7 +123,7 @@ func (a *App) buildConfig(s *state.State) ([]byte, error) {
 	}
 	opts := a.caddyOptions()
 	opts.Certs = certs
-	return caddyapi.BuildWith(s, opts), nil
+	return caddyapi.Build(s, opts), nil
 }
 
 // relayReadyTimeout and relayReadyInterval bound the wait for a freshly
@@ -136,7 +136,7 @@ var (
 
 // ensureRelay makes the relay container exist, match its spec, and run, on
 // native Linux. A no-op on every other engine. The relay holds no state, so
-// a mismatched one is simply replaced. A relay it starts is waited on until
+// a mismatched or restarting (crash-looping) one is simply replaced. A relay it starts is waited on until
 // it accepts, so callers never hand back a Caddy whose host-mode routes 502.
 func (a *App) ensureRelay(ctx context.Context) error {
 	if a.hostNetwork().Kind != EngineNativeLinux {
@@ -152,7 +152,9 @@ func (a *App) ensureRelay(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("inspect relay: %w", err)
 		}
-		if len(specDrift(spec, info)) == 0 {
+		// A restarting relay is crash-looping whatever its settings, so it
+		// is replaced rather than left to docker.
+		if st != docker.StateRestarting && len(specDrift(spec, info)) == 0 {
 			if st == docker.StateStopped {
 				if err := a.docker.Start(a.inst.RelayContainerName); err != nil {
 					return err
@@ -213,7 +215,7 @@ func (a *App) stopRelay() error {
 	if err != nil {
 		return fmt.Errorf("inspect relay: %w", err)
 	}
-	if st == docker.StateRunning {
+	if st.CanStop() {
 		return a.docker.Stop(a.inst.RelayContainerName)
 	}
 	return nil

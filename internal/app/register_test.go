@@ -609,3 +609,13 @@ func TestRegisterLANDisabledMessageSaysRemedyOnce(t *testing.T) {
 		t.Errorf("remedy appears %d times: %q", n, err)
 	}
 }
+
+func TestRegisterReturnsErrCaddyNotRunningWhenContainerRestarting(t *testing.T) {
+	f := newFixture(t, http.StatusOK)
+	f.app.docker.(*docker.Fake).Containers[CaddyContainerName] = docker.StateRestarting
+
+	err := f.app.Register(context.Background(), RegisterInput{Name: "foo", Port: 3000})
+	if !errors.Is(err, ErrCaddyNotRunning) {
+		t.Errorf("expected ErrCaddyNotRunning, got %v", err)
+	}
+}

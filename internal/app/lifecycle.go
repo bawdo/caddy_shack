@@ -39,6 +39,8 @@ func (a *App) Start(ctx context.Context) error {
 			return fmt.Errorf("attach shared network: %w", err)
 		}
 	}
+	// StateRunning and StateRestarting need no docker start: docker owns the
+	// restart, and waitForAdmin in restoreThenRelay bounds the wait.
 	a.noteStaleCaddy()
 	return a.restoreThenRelay(ctx)
 }
@@ -61,7 +63,7 @@ func (a *App) Stop() error {
 	if err != nil {
 		return fmt.Errorf("inspect container: %w", err)
 	}
-	if st == docker.StateRunning {
+	if st.CanStop() {
 		if err := a.docker.Stop(a.inst.ContainerName); err != nil {
 			return err
 		}
