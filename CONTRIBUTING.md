@@ -1,0 +1,50 @@
+# Contributing
+
+Thanks for taking an interest. caddy_shack is small and maintained by one
+person, so the process is light.
+
+## Before you start
+
+Open an issue for anything bigger than a typo or a small fix, so the
+approach can be agreed before you spend time on it. Security problems go
+through [SECURITY.md](SECURITY.md), not the issue tracker.
+
+## Making a change
+
+1. Fork and branch from `main`.
+2. Run `make pre-ci` before pushing. It mirrors the GitHub Actions checks
+   (format, tests with the race detector, lint, coverage, build, a CLI smoke
+   test and the changelog check).
+3. Add a line under `[Unreleased]` in `CHANGELOG.md` for anything a user
+   would notice. Follow the existing Keep a Changelog headings.
+4. Open a pull request. CI must pass before it can be merged. There is no
+   reviewer requirement, but expect questions.
+
+Commits are signed and written in the past tense, with a subject of 60
+characters or fewer. Use Australian English in prose (licence, behaviour,
+organise).
+
+## How releases happen
+
+Releases are cut by the maintainer from a signed tag on `main`. To release:
+
+1. In `CHANGELOG.md`, rename `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD` and
+   add the `[X.Y.Z]: compare` link at the bottom.
+2. Start a fresh, empty `[Unreleased]` section above it.
+3. Merge to `main`.
+4. On an up-to-date `main` with a clean tree, run
+   `make release RELEASE_VERSION=X.Y.Z`. It refuses unless the newest
+   changelog version matches and the tag does not already exist, then
+   creates a signed tag. It never pushes.
+5. Push the tag with the `git push origin vX.Y.Z` command it prints.
+
+Pushing the tag starts `.github/workflows/release.yml`. It re-runs CI, checks
+the tag is on `main` and signed, builds the four archives (darwin and linux,
+amd64 and arm64), attests the checksums and publishes a GitHub Release with
+the changelog section as the notes. Preview those notes beforehand with
+`scripts/changelog.sh notes X.Y.Z bawdo/caddy_shack`.
+
+If the publish fails, re-run it with
+`gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`. The `--ref` makes
+the called CI run on the tag's commit. A defect in a published release gets a
+new patch version, never a moved tag.
