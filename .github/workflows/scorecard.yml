@@ -16,6 +16,12 @@ jobs:
     permissions:
       security-events: write
       id-token: write
+      # Reads the action's README lists for the default token on a private
+      # repository; without contents: read the checkout reports "not found".
+      contents: read
+      issues: read
+      pull-requests: read
+      checks: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
