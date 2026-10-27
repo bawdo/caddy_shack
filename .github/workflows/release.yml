@@ -49,10 +49,18 @@ jobs:
       id-token: write     # sign the build provenance attestation
       attestations: write # store the attestation
     env:
-      GH_TOKEN: ${{ github.token }}
       TAG: ${{ inputs.tag || github.ref_name }}
 
     steps:
+      # The dispatch input reaches checkout below, so check its shape first.
+      - name: Check the tag name
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::the tag to release is not of the form vX.Y.Z"
+            exit 1
+          fi
+
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -79,6 +87,8 @@ jobs:
           fi
 
       - name: Check the tag is signed
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: scripts/verify-tag.sh "$TAG"
 
       - name: Check the changelog
@@ -94,7 +104,11 @@ jobs:
         with:
           go-version: '1.25.x'
           check-latest: true
-          cache: true
+          # No cache: ci.yml jobs write it after testing every dependency.
+          cache: false
+
+      - name: Verify module checksums
+        run: go mod verify
 
       - name: Build and smoke test the archives
         run: scripts/build-release.sh "${TAG#v}" "$(git rev-parse "refs/tags/$TAG^{commit}")"
@@ -105,4 +119,6 @@ jobs:
           subject-checksums: dist/checksums.txt
 
       - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: scripts/publish-release.sh "$TAG" "$RUNNER_TEMP/notes.md"
