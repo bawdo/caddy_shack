@@ -58,9 +58,15 @@ git checkout main && git pull --ff-only
 
 ## 2. Scan the history
 
+Fetch the pull request heads too, so they are in the scanned history:
+
 ```bash
+git fetch origin '+refs/pull/*/head:refs/remotes/origin/pr/*'
 git fetch --all --tags && scripts/history-scan.sh
 ```
+
+Existing Actions run logs also become public with the repository; delete
+any you don't want seen from the Actions tab before going on.
 
 Worked when: it prints `history-scan: clean (N commits, M blobs)` and exits
 0. Any `history-scan: ...` line on stderr stops the run; decide what to do
@@ -197,7 +203,7 @@ Worked when: the run finishes green and
 and `checksums.txt`. Check the notes match the changelog (empty output):
 
 ```bash
-gh release view v0.1.0 --json body --jq .body | diff - <(scripts/release-notes.sh 0.1.0)
+gh release view v0.1.0 --json body --jq .body | diff - <(GITHUB_REPOSITORY=bawdo/caddy_shack scripts/release-notes.sh 0.1.0)
 ```
 
 If the publish failed part way, fix the cause and run the workflow again
@@ -214,9 +220,20 @@ Then check a download, for example on an Apple silicon Mac:
 gh release download v0.1.0 --pattern 'caddy_shack_0.1.0_darwin_arm64.tar.gz' --pattern checksums.txt
 gh attestation verify caddy_shack_0.1.0_darwin_arm64.tar.gz --repo bawdo/caddy_shack
 shasum -a 256 -c checksums.txt --ignore-missing
+tar -xzf caddy_shack_0.1.0_darwin_arm64.tar.gz && ./caddy_shack_0.1.0_darwin_arm64/caddy_shack version
 go install github.com/bawdo/caddy_shack@v0.1.0 && caddy_shack version
 ```
 
-Worked when: the attestation verifies, the checksum line ends in `OK`, and
-`caddy_shack version` reports `v0.1.0`. The `go install` build reports the
-module version from Go's build info, with no commit line.
+Worked when: the attestation verifies, the checksum line ends in `OK`, the
+unpacked binary's first line is `caddy_shack v0.1.0`, and the `go install`
+binary's `caddy_shack version` reports `v0.1.0`. The `go install` build
+reports the module version from Go's build info, with no commit line.
+
+Proven by tests, not live: once the `release-tags` ruleset exists, two of
+the release workflow's refusals can't be exercised here.
+
+- A tag whose version has no changelog section is refused: the tag loop in
+  `scripts/changelog.sh check` and its cases in `scripts/changelog_test.sh`
+  (`test_check_rejects_tag_without_section`).
+- A tag not on `main` is refused: the `Check the tag is on main` step in
+  `.github/workflows/release.yml`, which has no test.
