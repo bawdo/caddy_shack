@@ -1,5 +1,11 @@
 # caddy_shack
 
+[![CI](https://github.com/bawdo/caddy_shack/actions/workflows/ci.yml/badge.svg)](https://github.com/bawdo/caddy_shack/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/bawdo/caddy_shack/graph/badge.svg)](https://codecov.io/gh/bawdo/caddy_shack)
+[![Go Reference](https://pkg.go.dev/badge/github.com/bawdo/caddy_shack.svg)](https://pkg.go.dev/github.com/bawdo/caddy_shack)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/bawdo/caddy_shack/badge)](https://scorecard.dev/viewer/?uri=github.com/bawdo/caddy_shack)
+
 CaddyShack is a CLI tool that helps to deploy and manage a locally running
 caddy instance.
 
@@ -26,8 +32,42 @@ CaddyShack only manages the locally running caddy server via the API.
 
 ## Install
 
+### From a release
+
+Each [release](https://github.com/bawdo/caddy_shack/releases) ships four
+archives:
+
+- `caddy_shack_<version>_darwin_amd64.tar.gz`
+- `caddy_shack_<version>_darwin_arm64.tar.gz`
+- `caddy_shack_<version>_linux_amd64.tar.gz`
+- `caddy_shack_<version>_linux_arm64.tar.gz`
+
+Download the archive for your platform and `checksums.txt` from the Releases
+page, then verify, unpack and install it:
+
+```
+gh attestation verify caddy_shack_<version>_<os>_<arch>.tar.gz --repo bawdo/caddy_shack
+sha256sum -c checksums.txt --ignore-missing
+tar -xzf caddy_shack_<version>_<os>_<arch>.tar.gz
+install -m 0755 caddy_shack_<version>_<os>_<arch>/caddy_shack /usr/local/bin/caddy_shack
+```
+
+The attestation check needs the [GitHub CLI](https://cli.github.com/); skip it
+if you don't have `gh`, but keep the checksum check. macOS has no `sha256sum`,
+so use `shasum -a 256 -c checksums.txt --ignore-missing` there.
+
+### From source
+
+With Go 1.25 or newer:
+
 ```
 go install github.com/bawdo/caddy_shack@latest
+```
+
+Or from a clone:
+
+```
+make install
 ```
 
 ## Prerequisites: local DNS for `.test`
@@ -793,3 +833,9 @@ Install a local build into `$GOBIN`:
 ```
 make install
 ```
+
+### Releases
+
+Releases are cut from a signed tag by `make release RELEASE_VERSION=X.Y.Z`. The
+release notes come from `CHANGELOG.md`, and `make changelog` checks that it is
+well formed and matches the tags. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full ritual.
