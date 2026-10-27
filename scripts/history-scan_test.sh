@@ -199,6 +199,56 @@ test_flags_pem_with_real_body() {
     echo "ok flags_pem_with_real_body"
 }
 
+test_flags_token_after_invalid_utf8_byte() {
+    fixture latin
+    { printf 'x=caf\xe9 key='; printf 'AKIA%s\n' "$(printf 'A%.0s' {1..16})"; } > "$ROOT/latin/conf.ini"
+    commit latin "Added config"
+    run latin
+    [[ $CODE -eq 1 ]] || fail flags_token_after_invalid_utf8_byte "expected exit 1"
+    [[ "$ERR" == *":conf.ini: aws key: "* ]] || fail flags_token_after_invalid_utf8_byte "message missing"
+    echo "ok flags_token_after_invalid_utf8_byte"
+}
+
+test_flags_pem_in_quoted_lines() {
+    fixture quoted
+    {
+        echo 'KEY = ('
+        printf '    "%s\\n"\n' "$RSA_BEGIN" "$B64_LINE"
+        printf '    "%s\\n" +\n' "$B64_LINE"
+        printf '    "%s\\n"\n' "$RSA_END"
+        echo ')'
+    } > "$ROOT/quoted/key.py"
+    commit quoted "Added a key module"
+    run quoted
+    [[ $CODE -eq 1 ]] || fail flags_pem_in_quoted_lines "expected exit 1"
+    [[ "$ERR" == *":key.py: private key: 2:"* ]] || fail flags_pem_in_quoted_lines "message missing"
+    echo "ok flags_pem_in_quoted_lines"
+}
+
+test_flags_empty_commit_email() {
+    fixture empty
+    (cd "$ROOT/empty" && GIT_AUTHOR_EMAIL='' GIT_COMMITTER_EMAIL='' \
+        "${G[@]}" -c user.email= commit -q --allow-empty -m "Changed nothing")
+    run empty
+    [[ $CODE -eq 1 ]] || fail flags_empty_commit_email "expected exit 1"
+    [[ "$ERR" == *"unlisted email: (empty)"* ]] || fail flags_empty_commit_email "message missing"
+    echo "ok flags_empty_commit_email"
+}
+
+test_ignores_pem_mention_in_code() {
+    fixture mention
+    {
+        echo '    if strings.Contains(d, "BEGIN EC PRIVATE KEY") {'
+        echo 'func TestCheckConfigDriftFailWhenRoutesAndCertsBothDiffer(t *testing.T) {'
+        echo '// A running container whose admin API is down is a broken setup, not a CA'
+        echo '}'
+    } > "$ROOT/mention/doctor_test.go"
+    commit mention "Added a test"
+    run mention
+    [[ $CODE -eq 0 ]] || fail ignores_pem_mention_in_code "expected exit 0"
+    echo "ok ignores_pem_mention_in_code"
+}
+
 test_clean_repo_passes
 test_flags_attribution_trailer
 test_flags_session_url
@@ -211,3 +261,7 @@ test_allow_file_accepts_named_blob
 test_flags_tag_message
 test_ignores_pem_placeholder
 test_flags_pem_with_real_body
+test_flags_token_after_invalid_utf8_byte
+test_flags_pem_in_quoted_lines
+test_flags_empty_commit_email
+test_ignores_pem_mention_in_code

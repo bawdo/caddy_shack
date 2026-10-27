@@ -21,6 +21,11 @@
 
 set -euo pipefail
 
+# Byte semantics for grep and awk: under a UTF-8 locale an invalid byte can
+# hide the rest of a line from BSD grep or make GNU grep treat the whole
+# blob as binary. In the C locale only NUL marks a binary file.
+export LC_ALL=C
+
 die() {
     echo "history-scan: $*" >&2
     exit 2
@@ -144,13 +149,18 @@ done
 
 # Emails: author and committer of every commit, tagger of every tag.
 {
-    git log --all --format='%H %ae%n%H %ce'
-    git for-each-ref refs/tags --format='%(objectname) %(taggeremail)'
+    git log --all --format='c %H %ae%nc %H %ce'
+    git for-each-ref refs/tags --format='t %(objectname) %(taggeremail)'
 } | sort -u > "$work/emails"
-while read -r id email; do
+while read -r kind id email; do
     email="${email#<}"
     email="${email%>}"
-    [[ -n "$email" ]] || continue
+    if [[ -z "$email" ]]; then
+        # A lightweight tag has no tagger; a commit must have an address.
+        [[ "$kind" == t ]] && continue
+        hit "$id" "unlisted email" "(empty)"
+        continue
+    fi
     email="$(printf '%s' "$email" | tr '[:upper:]' '[:lower:]')"
     email_allowed "$email" || hit "$id" "unlisted email" "$email"
 done < "$work/emails"
@@ -167,16 +177,25 @@ PEM_KEY='BEGIN ((RSA|EC|DSA|OPENSSH|PGP|ENCRYPTED) )?PRIVATE KEY'
 PEM_CERT='----*BEGIN CERTIFICATE----*'
 
 # pem_hits REGEX FILE: prints "<line>:<text>" for each BEGIN line matching
-# REGEX whose PEM body holds a base64-looking line of 40 or more characters,
-# as every real key or certificate does. A body is the following lines up
-# to the END line (each trimmed and matched whole), or, when END is on the
-# same line as BEGIN (a quoted string with \n escapes), the text between
-# them (any base64 run of 40 or more). Placeholder bodies such as "KEY" are
-# not reported.
+# REGEX whose PEM body holds base64 of 40 or more characters, as every
+# real key or certificate does. A body is either:
+#   - the following lines up to the END line (or end of file): a line counts
+#     when, after dropping string wrapping (quotes, commas, semicolons,
+#     \n and \r escapes, surrounding whitespace and a + concatenation
+#     operator), it is 40 or more base64 characters and nothing else. So
+#     '"MIIE...\n" +' counts, while prose or code such as a long Go test
+#     function name inside parentheses does not; or
+#   - when END is on the same line as BEGIN (a quoted string with \n
+#     escapes), the text between them, holding any base64 run of 40 or more.
+# Placeholder bodies such as "KEY" are not reported.
 pem_hits() {
-    awk -v re="$1" '
+    awk -v re="$1" -v q="'" '
         function real_line(s) {
-            gsub(/^[ \t]+|[ \t\r]+$/, "", s)
+            gsub(/\\[nr]/, "", s)
+            gsub("[\r\"`,;" q "]", "", s)
+            gsub(/^[ \t]+|[ \t]+$/, "", s)
+            sub(/^\+[ \t]+/, "", s)
+            sub(/[ \t]+\+$/, "", s)
             return length(s) >= 40 && s ~ /^[A-Za-z0-9+\/=]+$/
         }
         function real_run(s,    n, i, parts) {
