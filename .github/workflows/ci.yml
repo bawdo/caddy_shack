@@ -41,7 +41,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           check-latest: true
           cache: true
 
@@ -74,7 +74,10 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.9.0
+          # Must be built with a Go at least as new as the setup-go version
+          # above, or it cannot type-check the standard library. Bump it
+          # with Go. Dependabot does not track this input.
+          version: v2.15.0
           args: --timeout=5m
 
       - name: Run govulncheck
@@ -98,7 +101,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           check-latest: true
           cache: true
 
@@ -131,7 +134,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           check-latest: true
           cache: true
 
@@ -156,7 +159,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           check-latest: true
           cache: true
 
