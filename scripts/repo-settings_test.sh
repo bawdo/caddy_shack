@@ -30,6 +30,7 @@ fail() {
 #   runs.json      what "run list" prints
 #   jobs.json      body of GET .../actions/runs/ID/jobs
 #   rulesets.json  body of GET .../rulesets
+#   repo.json      body of GET repos/OWNER/NAME, when the file exists
 #   secrets.json   what "secret list" prints
 #   gh.log         one line per call, the arguments joined by spaces
 #   bodies.log     one line per --input body: "METHOD PATH <compact json>"
@@ -76,6 +77,10 @@ fi
 case "$path" in
     */actions/runs/*/jobs) answer "$FAKE_GH_DIR/jobs.json" ;;
     */rulesets) answer "$FAKE_GH_DIR/rulesets.json" ;;
+    repos/*/*)
+        [ -f "$FAKE_GH_DIR/repo.json" ] || { echo "fake gh: no repo.json: $*" >&2; exit 2; }
+        answer "$FAKE_GH_DIR/repo.json"
+        ;;
     *)
         echo "fake gh: unexpected read: $*" >&2
         exit 2
@@ -87,26 +92,47 @@ chmod +x "$ROOT/bin/gh"
 FIVE='{"jobs":[{"name":"Static checks"},{"name":"Test (ubuntu-latest)"},{"name":"Test (macos-latest)"},{"name":"Integration tests"},{"name":"Build and smoke"}]}'
 
 # fake NAME: a fresh directory of canned answers (a successful CI run with
-# five jobs, no rulesets, no secrets) and empty logs. Prints its path.
+# five jobs, no rulesets, no secrets) and empty logs, plus a workflows
+# directory using two GitHub-owned actions, a local reusable workflow and
+# two third-party actions (one of them twice). Prints its path.
 fake() {
     local dir="$ROOT/$1"
-    mkdir -p "$dir"
+    mkdir -p "$dir/workflows"
     : > "$dir/gh.log"
     : > "$dir/bodies.log"
     echo '[{"databaseId":42}]' > "$dir/runs.json"
     echo "$FIVE" > "$dir/jobs.json"
     echo '[]' > "$dir/rulesets.json"
     echo '[]' > "$dir/secrets.json"
+    cat > "$dir/workflows/ci.yml" <<'EOF'
+jobs:
+  a:
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+EOF
+    cat > "$dir/workflows/release.yml" <<'EOF'
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+  b:
+    steps:
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      -   uses:   codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5
+EOF
     echo "$dir"
 }
 
 # run DIR [VAR=VALUE...] PHASE: runs repo-settings.sh PHASE with the fake gh
-# first on PATH and any extra environment, capturing OUT, ERR and CODE.
+# first on PATH, the fake workflows directory and any extra environment,
+# capturing OUT, ERR and CODE.
 run() {
     local dir="$1"
     shift
     CODE=0
     OUT=$(env -u DRY_RUN -u GO_PUBLIC -u REPO PATH="$ROOT/bin:$PATH" FAKE_GH_DIR="$dir" \
+        WORKFLOWS_DIR="$dir/workflows" \
         "${@:1:$#-1}" bash "$SCRIPTS/repo-settings.sh" "${!#}" 2>"$dir/.stderr") || CODE=$?
     ERR=$(cat "$dir/.stderr")
 }
@@ -172,10 +198,10 @@ run "$dir" rulesets
 body "$name" "$dir" POST "$R/rulesets" '.name == "main" and .target == "branch" and .enforcement == "active"
     and .conditions.ref_name.include == ["refs/heads/main"]
     and .bypass_actors == [{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]
-    and ([.rules[].type] == ["deletion","non_fast_forward","pull_request","required_status_checks"])
-    and (.rules[2].parameters.required_approving_review_count == 0)
-    and (.rules[3].parameters.strict_required_status_checks_policy == true)
-    and ([.rules[3].parameters.required_status_checks[].context] | length == 5 and index("Build and smoke") != null)'
+    and ([.rules[].type] == ["deletion","non_fast_forward","required_signatures","pull_request","required_status_checks"])
+    and (.rules[3].parameters.required_approving_review_count == 0)
+    and (.rules[4].parameters.strict_required_status_checks_policy == true)
+    and ([.rules[4].parameters.required_status_checks[].context] | length == 5 and index("Build and smoke") != null)'
 tag_body=$(grep '^POST ' "$dir/bodies.log" | sed -n 2p | cut -d' ' -f3-)
 jq -e '.name == "release-tags" and .target == "tag" and .enforcement == "active" and .bypass_actors == []
     and .conditions.ref_name.include == ["refs/tags/v*"]
@@ -193,6 +219,46 @@ run "$dir" rulesets
 [ "$(count "$dir" POST)" -eq 0 ] || fail "$name" "created a ruleset"
 body "$name" "$dir" PUT "$R/rulesets/101" '.name == "main"'
 body "$name" "$dir" PUT "$R/rulesets/202" '.name == "release-tags"'
+echo "ok $name"
+
+name=harden_sends_every_setting_in_order
+dir=$(fake "$name")
+run "$dir" harden
+[ "$CODE" -eq 0 ] || fail "$name" "expected exit 0"
+expected="PUT $R/actions/permissions
+PUT $R/actions/permissions/selected-actions
+PUT $R/actions/permissions/fork-pr-contributor-approval
+PATCH $R
+PATCH $R/code-scanning/default-setup"
+[ "$(cut -d' ' -f1,2 "$dir/bodies.log")" = "$expected" ] || fail "$name" "wrong writes: $(cat "$dir/bodies.log")"
+body "$name" "$dir" PUT "$R/actions/permissions" '.enabled == true and .allowed_actions == "selected"
+    and .sha_pinning_required == true'
+body "$name" "$dir" PUT "$R/actions/permissions/selected-actions" '.github_owned_allowed == true
+    and .verified_allowed == false
+    and .patterns_allowed == ["codecov/codecov-action@*", "golangci/golangci-lint-action@*"]'
+body "$name" "$dir" PUT "$R/actions/permissions/fork-pr-contributor-approval" '.approval_policy == "all_external_contributors"'
+body "$name" "$dir" PATCH "$R" '.allow_merge_commit == true and .allow_squash_merge == false
+    and .allow_rebase_merge == false and .allow_auto_merge == true'
+body "$name" "$dir" PATCH "$R/code-scanning/default-setup" '.state == "configured" and .query_suite == "default"
+    and .languages == ["actions", "go"]'
+echo "ok $name"
+
+name=harden_refuses_an_unpinned_action
+dir=$(fake "$name")
+echo '      - uses: ossf/scorecard-action@v2.5.0' >> "$dir/workflows/ci.yml"
+run "$dir" harden
+[ "$CODE" -eq 1 ] || fail "$name" "expected exit 1"
+[ "$ERR" = "repo-settings: ci.yml: ossf/scorecard-action@v2.5.0 is not pinned to a commit SHA" ] || fail "$name" "wrong refusal"
+[ ! -s "$dir/bodies.log" ] || fail "$name" "wrote a setting: $(cat "$dir/bodies.log")"
+echo "ok $name"
+
+name=harden_needs_a_workflow
+dir=$(fake "$name")
+rm "$dir/workflows"/*.yml
+run "$dir" harden
+[ "$CODE" -eq 1 ] || fail "$name" "expected exit 1"
+[ "$ERR" = "repo-settings: no workflows found in $dir/workflows" ] || fail "$name" "wrong refusal"
+[ ! -s "$dir/bodies.log" ] || fail "$name" "wrote a setting: $(cat "$dir/bodies.log")"
 echo "ok $name"
 
 name=dry_run_runs_nothing
@@ -214,4 +280,26 @@ grep -qx "repo-settings: cannot read $R/private-vulnerability-reporting" <<<"$ER
 ! grep -q "cannot read" <<<"$OUT" || fail "$name" "read error on stdout"
 grep -qx "private_vulnerability_reporting: unknown" <<<"$OUT" || fail "$name" "no private_vulnerability_reporting line"
 grep -qx "rulesets: " <<<"$OUT" || fail "$name" "did not print the rulesets it could read"
+grep -qx "allowed_actions: unknown" <<<"$OUT" || fail "$name" "no allowed_actions line"
+grep -qx "sha_pinning_required: unknown" <<<"$OUT" || fail "$name" "no sha_pinning_required line"
+grep -qx "fork_pr_approval: unknown" <<<"$OUT" || fail "$name" "no fork_pr_approval line"
+grep -qx "code_scanning_default_setup: unknown" <<<"$OUT" || fail "$name" "no code_scanning_default_setup line"
+echo "ok $name"
+
+name=show_prints_repository_settings
+dir=$(fake "$name")
+cat > "$dir/repo.json" <<'EOF'
+{"visibility":"public","description":"d","homepage":"h","delete_branch_on_merge":true,
+ "has_wiki":false,"has_projects":false,"has_discussions":false,"allow_update_branch":true,
+ "allow_merge_commit":true,"allow_squash_merge":false,"allow_rebase_merge":true,"allow_auto_merge":true,
+ "topics":["caddy","go"],
+ "security_and_analysis":{"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"disabled"}}}
+EOF
+run "$dir" show
+! grep -q "cannot read $R\$" <<<"$ERR" || fail "$name" "could not read $R"
+grep -qx "visibility: public" <<<"$OUT" || fail "$name" "no visibility line"
+grep -qx "merge_methods: merge rebase" <<<"$OUT" || fail "$name" "wrong merge_methods line"
+grep -qx "allow_auto_merge: true" <<<"$OUT" || fail "$name" "no allow_auto_merge line"
+grep -qx "topics: caddy go" <<<"$OUT" || fail "$name" "no topics line"
+grep -qx "secret_scanning_push_protection: disabled" <<<"$OUT" || fail "$name" "no push protection line"
 echo "ok $name"

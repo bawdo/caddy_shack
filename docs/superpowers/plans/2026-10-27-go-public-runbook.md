@@ -178,6 +178,46 @@ CI on `main` (step 1) and try again. Nothing is written when it fails.
 
 The Scorecard workflow starts on its next scheduled run or push to `main`.
 
+## 7a. Harden
+
+```bash
+scripts/repo-settings.sh harden && scripts/repo-settings.sh show
+```
+
+Worked when: `harden` prints
+
+```text
+PUT repos/bawdo/caddy_shack/actions/permissions
+PUT repos/bawdo/caddy_shack/actions/permissions/selected-actions
+PUT repos/bawdo/caddy_shack/actions/permissions/fork-pr-contributor-approval
+PATCH repos/bawdo/caddy_shack
+PATCH repos/bawdo/caddy_shack/code-scanning/default-setup
+```
+
+and `show` prints
+
+```text
+merge_methods: merge
+allow_auto_merge: true
+allowed_actions: selected
+sha_pinning_required: true
+fork_pr_approval: all_external_contributors
+code_scanning_default_setup: configured
+```
+
+- Workflows may use only GitHub-owned actions and the third-party actions
+  the workflows already use, read from `.github/workflows/*.yml` as
+  `owner/repo@*`, and every action must be pinned to a commit SHA. Adding a
+  new third-party action means re-running this phase after it is merged
+  (the phase refuses an unpinned action before sending anything).
+- Pull requests from any fork wait for the maintainer's approval before
+  their workflows run.
+- Merge commits are the only merge method, so commits keep their authors'
+  signatures; the `main` ruleset also requires every commit to be signed.
+  Auto-merge is on, for merging a green Dependabot pull request without
+  waiting on it.
+- CodeQL default setup scans Go and the workflows.
+
 ## 8. Release v0.1.0
 
 ```bash
