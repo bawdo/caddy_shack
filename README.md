@@ -5,6 +5,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/bawdo/caddy_shack.svg)](https://pkg.go.dev/github.com/bawdo/caddy_shack)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/bawdo/caddy_shack/badge)](https://scorecard.dev/viewer/?uri=github.com/bawdo/caddy_shack)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16115/badge)](https://www.bestpractices.dev/projects/16115)
 
 CaddyShack is a CLI tool that helps to deploy and manage a locally running
 caddy instance..

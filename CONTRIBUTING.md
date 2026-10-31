@@ -13,14 +13,19 @@ through [SECURITY.md](SECURITY.md), not the issue tracker. Please follow the
 ## Making a change
 
 1. Fork and branch from `main`.
-2. Run `make pre-ci` before pushing. It mirrors the GitHub Actions checks
+2. Add tests for any new functionality or bug fix in the same pull request:
+   unit tests alongside the code, and an integration test under
+   `test/integration` when the change touches Docker or Caddy. Codecov fails
+   a pull request that takes project coverage below 80% or more than 1%
+   below its base.
+3. Run `make pre-ci` before pushing. It mirrors the GitHub Actions checks
    (format, tests with the race detector, lint, coverage, build, a CLI smoke
    test, the changelog check, `govulncheck` and a short fuzz run of 5s per
    target). If you touch code that parses untrusted input or `state.json`,
    run `make fuzz` for longer (15s each by default, or set `FUZZTIME`).
-3. Add a line under `[Unreleased]` in `CHANGELOG.md` for anything a user
+4. Add a line under `[Unreleased]` in `CHANGELOG.md` for anything a user
    would notice. Follow the existing Keep a Changelog headings.
-4. Open a pull request. The `CI result` check and CodeQL must pass before
+5. Open a pull request. The `CI result` check and CodeQL must pass before
    merging, and it lands as a merge commit so signed commits keep their
    signatures. There is no reviewer requirement, but expect questions.
 

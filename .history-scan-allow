@@ -4,6 +4,8 @@ email:keith@bawdo.com
 email:keith@arrix.com.au
 # GitHub's committer identity on web-merged pull requests.
 email:noreply@github.com
+# Dependabot's author identity on dependency update pull requests.
+email:49699333+dependabot[bot]@users.noreply.github.com
 # Design documents that quote the scan's patterns.
 blob:docs/superpowers/plans/2026-10-27-releases-and-repo-setup.md:anthropic address
 blob:docs/superpowers/plans/2026-10-27-releases-and-repo-setup.md:session url
