@@ -8,11 +8,15 @@
 #                                          makes the repository public
 #   scripts/repo-settings.sh post-public   vulnerability reporting, secret
 #                                          scanning, Dependabot alerts and fixes
-#   scripts/repo-settings.sh rulesets      the main and release-tags rulesets;
-#                                          main requires the CI result job and
-#                                          CodeQL results, with no bypass actors
+#   scripts/repo-settings.sh rulesets      the main, release-tags and
+#                                          release-tag-creation rulesets; main
+#                                          requires the CI result job and
+#                                          CodeQL results, with no bypass
+#                                          actors; only admins can create v*
+#                                          tags
 #   scripts/repo-settings.sh harden        Actions allowlist and SHA pinning,
-#                                          fork approval, merge methods, CodeQL
+#                                          fork approval, merge methods, CodeQL,
+#                                          immutable releases
 #   scripts/repo-settings.sh show          prints the current settings
 #
 # REPO (default bawdo/caddy_shack) names the repository. Every write sends the
@@ -156,6 +160,19 @@ rulesets() {
         conditions: {ref_name: {include: ["refs/tags/v*"], exclude: []}},
         rules: [{type: "deletion"}, {type: "non_fast_forward"}, {type: "update"}]
     }')"
+    # Only the admin role (RepositoryRole 5, the same id this repository's
+    # main ruleset used for admin before this branch) can create release
+    # tags, so write access alone cannot start a release from an unmerged
+    # commit. It is a separate ruleset so that update and deletion above keep
+    # no bypass at all.
+    ruleset release-tag-creation "$(jq -n '{
+        name: "release-tag-creation",
+        target: "tag",
+        enforcement: "active",
+        bypass_actors: [{actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always"}],
+        conditions: {ref_name: {include: ["refs/tags/v*"], exclude: []}},
+        rules: [{type: "creation"}]
+    }')"
 }
 
 # third_party_actions: prints "owner/repo@*" for every action the workflows
@@ -197,6 +214,9 @@ harden() {
     # and the history matches what the release gate checks.
     write PATCH "$R" '{"allow_merge_commit":true,"allow_squash_merge":false,"allow_rebase_merge":false,"allow_auto_merge":true}'
     write PATCH "$R/code-scanning/default-setup" '{"state":"configured","query_suite":"extended","languages":["actions","go"]}'
+    # Once published, a release's tag and assets cannot change. The publish
+    # script creates a draft, attaches the assets, then publishes, which fits.
+    write PUT "$R/immutable-releases"
 }
 
 # read_api PATH JQ: prints GET PATH filtered by JQ. When the read fails it
@@ -254,6 +274,9 @@ show() {
     echo "fork_pr_approval: $(get "$R/actions/permissions/fork-pr-contributor-approval" '.approval_policy' unknown)"
     echo "code_scanning_default_setup: $(get "$R/code-scanning/default-setup" '.state' unknown)"
     echo "code_scanning_query_suite: $(get "$R/code-scanning/default-setup" '.query_suite' unknown)"
+    # GET answers 200 with enabled false when off (the docs say 404), so both
+    # fall back to disabled.
+    echo "immutable_releases: $(get "$R/immutable-releases" "$onoff" disabled)"
     return "$failed"
 }
 
