@@ -44,17 +44,26 @@ Every release archive carries a build provenance attestation from the
 release workflow, and a `checksums.txt` lists the archive digests. To
 confirm a download came from this repository's CI and has not been
 altered, first check that the tag is signed and sits on `main`, then run
-the attestation and checksum checks against the archive you downloaded:
+the attestation and checksum checks against the archive you downloaded.
+
+In a clone of this repository:
 
 ```bash
+curl -fsSL https://github.com/bawdo.gpg | gpg --import
 git fetch origin tag v<version>
 git verify-tag v<version>
 git merge-base --is-ancestor v<version> origin/main
 git rev-parse 'v<version>^{commit}'
 ```
 
-The last command prints the commit the tag points at. Pass it as
-`--source-digest`:
+The first command imports the maintainer's public key, which `git
+verify-tag` needs. A good result from `git verify-tag` is a good signature
+from Keith Bawden's key, primary fingerprint
+`661B 030E 1C0F F788 151B  9525 E8C1 84EB 4B8F 82D1` (signing subkey
+`9954 8FCC B94B E845 41E5  73AA 4823 4C2C 292E EE78`). `git merge-base
+--is-ancestor` prints nothing and exits 0 when the tag is on `main`, and
+exits non-zero when it is not. `git rev-parse` prints the commit the tag
+points at. Pass that as `--source-digest`:
 
 ```bash
 gh attestation verify caddy_shack_<version>_<os>_<arch>.tar.gz --repo bawdo/caddy_shack \
