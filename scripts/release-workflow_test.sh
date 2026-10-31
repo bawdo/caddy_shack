@@ -275,6 +275,8 @@ run_notes() {
 
 name=release_notes_first_release
 dir=$(notes_repo "$name")
+"${G[@]}" -C "$dir" tag -a v0.1.0 -m "v0.1.0"
+sha=$(git -C "$dir" rev-parse 'v0.1.0^{commit}')
 run_notes "$dir" 0.1.0
 [ "$CODE" -eq 0 ] || fail "$name" "expected exit 0"
 body=$(cd "$dir" && bash scripts/changelog.sh notes 0.1.0 bawdo/caddy_shack)
@@ -283,8 +285,10 @@ grep -qF "gh attestation verify caddy_shack_0.1.0_<os>_<arch>.tar.gz --repo bawd
     || fail "$name" "no attestation command"
 grep -qxF "  --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml \\" <<<"$OUT" || fail "$name" "no signer workflow"
 grep -qxF "  --source-ref refs/tags/v0.1.0 \\" <<<"$OUT" || fail "$name" "no source ref"
+grep -qxF "  --source-digest $sha \\" <<<"$OUT" || fail "$name" "no source digest in the first command"
 grep -qxF "  --deny-self-hosted-runners" <<<"$OUT" || fail "$name" "no deny self-hosted runners"
 grep -qxF "  --bundle caddy_shack_0.1.0_provenance.intoto.jsonl" <<<"$OUT" || fail "$name" "no bundle variant"
+[ "$(grep -cF -- "--source-digest $sha" <<<"$OUT")" -eq 2 ] || fail "$name" "expected the source digest in both commands"
 [ "$(grep -c 'gh attestation verify' <<<"$OUT")" -eq 2 ] || fail "$name" "expected two verify commands"
 grep -qF "sha256sum -c checksums.txt --ignore-missing" <<<"$OUT" || fail "$name" "no checksum command"
 ! grep -q "Full Changelog" <<<"$OUT" || fail "$name" "has a Full Changelog line"
@@ -293,11 +297,19 @@ echo "ok $name"
 name=release_notes_with_previous_tag
 dir=$(notes_repo "$name")
 "${G[@]}" -C "$dir" tag -a v0.1.0 -m "v0.1.0"
+"${G[@]}" -C "$dir" tag -a v0.2.0 -m "v0.2.0"
 run_notes "$dir" 0.2.0
 [ "$CODE" -eq 0 ] || fail "$name" "expected exit 0"
 grep -qF "https://github.com/bawdo/caddy_shack/blob/v0.2.0/README.md" <<<"$OUT" || fail "$name" "relative link not made absolute"
 [ "$(tail -n 1 <<<"$OUT")" = "**Full Changelog**: https://github.com/bawdo/caddy_shack/compare/v0.1.0...v0.2.0" ] \
     || fail "$name" "last line is not the Full Changelog link"
+echo "ok $name"
+
+name=release_notes_needs_the_tag
+dir=$(notes_repo "$name")
+run_notes "$dir" 0.1.0
+[ "$CODE" -eq 1 ] || fail "$name" "expected exit 1"
+[ "$ERR" = "release-notes: tag v0.1.0 does not exist" ] || fail "$name" "wrong refusal"
 echo "ok $name"
 
 # The build runs in a copy of the committed tree, with the working tree's
