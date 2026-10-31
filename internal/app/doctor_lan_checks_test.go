@@ -232,11 +232,14 @@ var pathBackends = map[string]state.Backend{
 func TestCheckLANPathPass(t *testing.T) {
 	a := lanPathApp(t, pathBackends)
 	seen := stubDial(t, func(_ string, cfg *tls.Config) error {
+		if cfg.RootCAs == nil {
+			t.Errorf("dial for %s has no RootCAs", cfg.ServerName)
+		}
+		if cfg.InsecureSkipVerify {
+			t.Errorf("dial for %s skips certificate verification", cfg.ServerName)
+		}
 		if strings.HasSuffix(cfg.ServerName, ".test") {
 			return tlsAlert()
-		}
-		if cfg.RootCAs == nil {
-			t.Error("positive dial has no RootCAs")
 		}
 		return nil
 	})
@@ -269,6 +272,23 @@ func TestCheckLANPathFailsWhenTestNameServed(t *testing.T) {
 	r := checkLANPath(context.Background(), a)
 	if r.Status != SeverityFail || r.Fix != nil {
 		t.Errorf("want fail without fix, got %+v", r)
+	}
+}
+
+// A listener that answers a .test name with a certificate the local CA does
+// not vouch for has still answered it: the client aborts the handshake
+// itself, but the listener did not refuse the name, so the check fails.
+func TestCheckLANPathFailsWhenTestNameAnsweredWithUnverifiedCert(t *testing.T) {
+	a := lanPathApp(t, pathBackends)
+	stubDial(t, func(_ string, cfg *tls.Config) error {
+		if strings.HasSuffix(cfg.ServerName, ".test") {
+			return &tls.CertificateVerificationError{Err: errors.New("x509: certificate signed by unknown authority")}
+		}
+		return nil
+	})
+	r := checkLANPath(context.Background(), a)
+	if r.Status != SeverityFail || !strings.Contains(strings.Join(r.Detail, "\n"), "answered a.test") {
+		t.Errorf("want fail naming a.test, got %+v", r)
 	}
 }
 
@@ -337,7 +357,11 @@ func TestLANTLSDialClassifiesErrors(t *testing.T) {
 	}
 	closed := ln.Addr().String()
 	_ = ln.Close()
-	cfg := &tls.Config{ServerName: "a.test", InsecureSkipVerify: true, MinVersion: tls.VersionTLS12} //nolint:gosec // test probe
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(testCAPEM(t))) {
+		t.Fatal("test CA is not valid PEM")
+	}
+	cfg := &tls.Config{ServerName: "a.test", RootCAs: pool, MinVersion: tls.VersionTLS12}
 	if err := lanTLSDial(context.Background(), closed, cfg); err == nil || isTLSAlert(err) {
 		t.Errorf("closed port: got %v", err)
 	}
@@ -350,6 +374,16 @@ func TestLANTLSDialClassifiesErrors(t *testing.T) {
 	defer srv.Close()
 	if err := lanTLSDial(context.Background(), srv.Listener.Addr().String(), cfg); !isTLSAlert(err) {
 		t.Errorf("rejecting server: want TLS alert, got %v", err)
+	}
+
+	// A server that completes its side with a certificate outside the pool
+	// is a local verification failure, not a TLS alert.
+	untrusted := httptest.NewTLSServer(http.NotFoundHandler())
+	defer untrusted.Close()
+	err = lanTLSDial(context.Background(), untrusted.Listener.Addr().String(), cfg)
+	var verr *tls.CertificateVerificationError
+	if !errors.As(err, &verr) || isTLSAlert(err) {
+		t.Errorf("untrusted certificate: want *tls.CertificateVerificationError, got %v", err)
 	}
 }
 

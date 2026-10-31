@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `doctor`'s LAN path check now verifies the `.test` refusal probe against the
+  local CA instead of skipping certificate verification, and fails when the
+  LAN listener answers a `.test` name with a certificate the CA does not
+  vouch for.
+
 ## [0.2.1] - 2026-11-01
 
 ### Security
