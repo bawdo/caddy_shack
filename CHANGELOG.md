@@ -13,9 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caddy_shack_<version>_provenance.intoto.jsonl, so an archive can be verified
   without GitHub's attestation API.
 
+- Releases are immutable once published, and only admins can create `v*` tags.
+  `gh release verify` checks GitHub's own release attestation.
+
 ### Changed
 
 - The verification commands in the release notes and SECURITY.md pin the release tag and refuse self-hosted runners, with a variant that checks the attached bundle offline.
+- The verification commands also pin the tag's commit with `--source-digest`,
+  and SECURITY.md shows how to check the tag is signed and on `main`.
 
 ## [0.1.0] - 2026-10-27
 
