@@ -140,3 +140,22 @@ OUT=$(bash "$SCRIPT" --jobs 2>&1) || CODE=$?
 expect_code $t 0
 [ "$OUT" = "$(printf 'static\nvuln\ntest\nintegration\nbuild\nfuzz')" ] || fail $t "wrong job list"
 echo "ok $t"
+
+WORKFLOW="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/.github/workflows/ci.yml"
+
+# The needs list of the ci-result job must name exactly the jobs the script
+# expects, so adding a job to one without the other fails here.
+t=ci_yml_needs_matches_jobs
+CODE=0
+expected=$(bash "$SCRIPT" --jobs | paste -sd, - | sed 's/,/, /g')
+actual=$(sed -n '/^  ci-result:/,$p' "$WORKFLOW" | sed -n 's/^    needs: \[\(.*\)\]$/\1/p')
+[ "[$actual]" = "[$expected]" ] || fail $t "needs is [$actual], script expects [$expected]"
+echo "ok $t"
+
+# A scheduled run needs its own concurrency group so its long fuzz run never
+# queues or cancels a push to main on the same ref.
+t=ci_yml_schedule_has_own_concurrency_group
+CODE=0
+grep -qxF "  group: ci-\${{ github.event_name == 'schedule' && 'schedule-' || '' }}\${{ github.ref }}" "$WORKFLOW" \
+    || fail $t "concurrency group line missing from ci.yml"
+echo "ok $t"
