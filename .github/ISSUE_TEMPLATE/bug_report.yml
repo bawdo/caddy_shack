@@ -2,6 +2,13 @@ name: Bug report
 description: Something does not work as documented.
 labels: [bug]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste private keys or ACME account keys (anything under the
+        certificate store), or internal hostnames or LAN addresses you would
+        rather keep private. Trim `doctor` output to the parts that show the
+        problem.
   - type: textarea
     id: what
     attributes:

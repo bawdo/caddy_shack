@@ -17,6 +17,7 @@ docs/superpowers/*
 !docs/superpowers/specs/
 !docs/superpowers/plans/
 .claude/
+CLAUDE.local.md
 
 # Git worktrees
 .worktrees/

@@ -7,18 +7,22 @@ person, so the process is light.
 
 Open an issue for anything bigger than a typo or a small fix, so the
 approach can be agreed before you spend time on it. Security problems go
-through [SECURITY.md](SECURITY.md), not the issue tracker.
+through [SECURITY.md](SECURITY.md), not the issue tracker. Please follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Making a change
 
 1. Fork and branch from `main`.
 2. Run `make pre-ci` before pushing. It mirrors the GitHub Actions checks
    (format, tests with the race detector, lint, coverage, build, a CLI smoke
-   test and the changelog check).
+   test, the changelog check, `govulncheck` and a short fuzz run of 5s per
+   target). If you touch code that parses untrusted input or `state.json`,
+   run `make fuzz` for longer (15s each by default, or set `FUZZTIME`).
 3. Add a line under `[Unreleased]` in `CHANGELOG.md` for anything a user
    would notice. Follow the existing Keep a Changelog headings.
-4. Open a pull request. CI must pass before it can be merged. There is no
-   reviewer requirement, but expect questions.
+4. Open a pull request. The `CI result` check and CodeQL must pass before
+   merging, and it lands as a merge commit so signed commits keep their
+   signatures. There is no reviewer requirement, but expect questions.
 
 Commits are signed and written in the past tense, with a subject of 60
 characters or fewer. Use Australian English in prose (licence, behaviour,
