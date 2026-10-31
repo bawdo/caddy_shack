@@ -16,6 +16,11 @@
 # optional) holds lines "email:<address>" and "blob:<path>:<pattern name>"
 # for accepted hits. Blank lines and lines starting with # are ignored.
 #
+# References to agent notes files by name (the CLAUDE.md files, paths under
+# .claude/) are permitted in messages: the ban is on attribution, not on the
+# word. They are stripped before the bare-name pattern runs, and a hit still
+# prints the original line.
+#
 # Patterns are written so this file never matches them itself (for example
 # [.] and [:] in place of a literal character).
 
@@ -141,10 +146,27 @@ SOH="$(printf '\001')"
     git for-each-ref refs/tags --format="%01%(objectname)%0a%(contents)"
 } | awk -v m="$SOH" 'index($0, m) == 1 { id = substr($0, 2); next } { print id "\t" $0 }' > "$work/messages"
 
+# msg_matches PATTERN FILE: prints the lines of FILE matching PATTERN. For
+# the bare-name pattern, literal file references (CLAUDE.md, CLAUDE.local.md
+# and .claude/ paths, case-sensitive, with an optional leading path) are
+# removed from the text first, but the original line is what gets printed.
+msg_matches() {
+    if [[ "$2" != "claude" ]]; then
+        grep -iE -e "$2" "$1" || true
+        return
+    fi
+    awk '{
+        s = $0
+        gsub(/([~A-Za-z0-9_.-]*\/)*\.claude\/[^ \t]*/, "", s)
+        gsub(/([~A-Za-z0-9_.-]*\/)?CLAUDE(\.local)?\.md/, "", s)
+        if (tolower(s) ~ /claude/) print
+    }' "$1"
+}
+
 for i in "${!MSG_PATTERNS[@]}"; do
     while IFS=$'\t' read -r id text; do
         hit "$id" "${MSG_NAMES[$i]}" "$text"
-    done < <(grep -iE -e "${MSG_PATTERNS[$i]}" "$work/messages" || true)
+    done < <(msg_matches "$work/messages" "${MSG_PATTERNS[$i]}")
 done
 
 # Emails: author and committer of every commit, tagger of every tag.

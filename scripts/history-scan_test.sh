@@ -249,6 +249,41 @@ test_ignores_pem_mention_in_code() {
     echo "ok ignores_pem_mention_in_code"
 }
 
+test_msg_allows_claude_file_names() {
+    fixture filenames
+    local notes="CLAUDE"".md" local_notes="CLAUDE"".local.md" dot_dir=".cla""ude"
+    commit filenames "Ignored agent notes
+
+Ignored $local_notes and updated docs/$notes, then read ~/$dot_dir/settings.json."
+    run filenames
+    [[ $CODE -eq 0 ]] || fail msg_allows_claude_file_names "expected exit 0"
+    [[ "$OUT" == "history-scan: clean"* ]] || fail msg_allows_claude_file_names "stdout mismatch"
+    [[ -z "$ERR" ]] || fail msg_allows_claude_file_names "unexpected stderr"
+    echo "ok msg_allows_claude_file_names"
+}
+
+test_msg_flags_claude_beside_file_name() {
+    fixture beside
+    local notes="CLAUDE"".md" line
+    line="Ignored $notes, written by $BOT_NAME"
+    commit beside "Changed a thing
+
+$line"
+    run beside
+    [[ $CODE -eq 1 ]] || fail msg_flags_claude_beside_file_name "expected exit 1"
+    [[ "$ERR" == *": claude: $line"* ]] || fail msg_flags_claude_beside_file_name "original line missing"
+    echo "ok msg_flags_claude_beside_file_name"
+}
+
+test_msg_flags_bare_name() {
+    fixture bare
+    commit bare "$BOT_NAME"
+    run bare
+    [[ $CODE -eq 1 ]] || fail msg_flags_bare_name "expected exit 1"
+    [[ "$ERR" == *": claude: $BOT_NAME"* ]] || fail msg_flags_bare_name "message missing"
+    echo "ok msg_flags_bare_name"
+}
+
 test_clean_repo_passes
 test_flags_attribution_trailer
 test_flags_session_url
@@ -265,3 +300,6 @@ test_flags_token_after_invalid_utf8_byte
 test_flags_pem_in_quoted_lines
 test_flags_empty_commit_email
 test_ignores_pem_mention_in_code
+test_msg_allows_claude_file_names
+test_msg_flags_claude_beside_file_name
+test_msg_flags_bare_name
