@@ -158,7 +158,7 @@ echo "ok $t"
 t=ci_yml_jobs_match_gate
 CODE=0
 expected=$(bash "$SCRIPT" --jobs)
-actual=$(sed -n '/^jobs:/,$p' "$WORKFLOW" | sed -n 's/^  \([a-z][a-z0-9_-]*\):$/\1/p' | grep -vx ci-result)
+actual=$(sed -n '/^jobs:/,$p' "$WORKFLOW" | sed -n 's/^  \([A-Za-z_][A-Za-z0-9_-]*\):[[:space:]]*\(#.*\)\{0,1\}$/\1/p' | grep -vx ci-result)
 [ "$actual" = "$expected" ] || fail $t "ci.yml defines [$(paste -sd, - <<<"$actual")], script expects [$(paste -sd, - <<<"$expected")]"
 echo "ok $t"
 
