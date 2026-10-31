@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-31
+
 ### Added
 
 - Releases attach their build provenance as a Sigstore bundle,
@@ -18,7 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The verification commands in the release notes and SECURITY.md pin the release tag and refuse self-hosted runners, with a variant that checks the attached bundle offline.
+- The verification commands in the release notes and SECURITY.md pin the
+  release tag and refuse self-hosted runners, with a variant that checks the
+  attached bundle offline.
 - The verification commands also pin the tag's commit with `--source-digest`,
   and SECURITY.md shows how to check the tag is signed and on `main`.
 
@@ -41,5 +45,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`caddy_shack cert`).
 - `version`, which prints the build identity.
 
-[Unreleased]: https://github.com/bawdo/caddy_shack/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/bawdo/caddy_shack/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/bawdo/caddy_shack/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bawdo/caddy_shack/releases/tag/v0.1.0
