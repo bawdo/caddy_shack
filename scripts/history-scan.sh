@@ -148,8 +148,9 @@ SOH="$(printf '\001')"
 
 # msg_matches PATTERN FILE: prints the lines of FILE matching PATTERN. For
 # the bare-name pattern, literal file references (CLAUDE.md, CLAUDE.local.md
-# and .claude/ paths, case-sensitive, with an optional leading path) are
-# removed from the text first, but the original line is what gets printed.
+# and .claude/ paths, case-sensitive) are removed from the text first, leaving
+# any leading path such as ~/ or docs/ behind so a bare name before a slash
+# is still caught, but the original line is what gets printed.
 msg_matches() {
     if [[ "$2" != "claude" ]]; then
         grep -iE -e "$2" "$1" || true
@@ -157,8 +158,8 @@ msg_matches() {
     fi
     awk '{
         s = $0
-        gsub(/([~A-Za-z0-9_.-]*\/)*\.claude\/[^ \t]*/, "", s)
-        gsub(/([~A-Za-z0-9_.-]*\/)?CLAUDE(\.local)?\.md/, "", s)
+        gsub(/\.claude\/[^ \t]*/, "", s)
+        gsub(/CLAUDE(\.local)?\.md/, "", s)
         if (tolower(s) ~ /claude/) print
     }' "$1"
 }

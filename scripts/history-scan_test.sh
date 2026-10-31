@@ -284,6 +284,19 @@ test_msg_flags_bare_name() {
     echo "ok msg_flags_bare_name"
 }
 
+test_msg_flags_claude_as_path_segment() {
+    fixture segment
+    local notes="CLAUDE"".md" line
+    line="Written by $BOT_NAME/$notes"
+    commit segment "Changed a thing
+
+$line"
+    run segment
+    [[ $CODE -eq 1 ]] || fail msg_flags_claude_as_path_segment "expected exit 1"
+    [[ "$ERR" == *": claude: $line"* ]] || fail msg_flags_claude_as_path_segment "original line missing"
+    echo "ok msg_flags_claude_as_path_segment"
+}
+
 test_clean_repo_passes
 test_flags_attribution_trailer
 test_flags_session_url
@@ -303,3 +316,4 @@ test_ignores_pem_mention_in_code
 test_msg_allows_claude_file_names
 test_msg_flags_claude_beside_file_name
 test_msg_flags_bare_name
+test_msg_flags_claude_as_path_segment
