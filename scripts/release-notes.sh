@@ -20,11 +20,11 @@ die() {
 version="${1:-}"
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "usage: $0 X.Y.Z"
 repo="${GITHUB_REPOSITORY:?release-notes: GITHUB_REPOSITORY is not set}"
-sha=$(git rev-parse --verify --quiet "v$version^{commit}") || die "tag v$version does not exist"
+sha=$(git rev-parse --verify --quiet "refs/tags/v$version^{commit}") || die "tag v$version does not exist"
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# The highest tag below this version, whether or not this version is tagged
-# yet. Sorted on the numbers, so v1.x orders after v0.x.
+# The highest tag below this version (this version's own tag is required
+# above, and is skipped here). Sorted on the numbers, so v1.x orders after v0.x.
 previous=$( { git tag -l 'v[0-9]*' | sed 's/^v//'; echo "$version"; } \
     | sort -u -t. -k1,1n -k2,2n -k3,3n \
     | grep -B1 -x "$version" | sed -n '1p' | grep -v -x "$version" \
