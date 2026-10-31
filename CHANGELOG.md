@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Building from source now needs Go 1.26 or newer. Every fixed release of
+  golang.org/x/net and golang.org/x/crypto requires it, and Go 1.25 is no
+  longer supported upstream.
+
+### Security
+
+- Updated the indirect golang.org/x modules (net 0.62.0, crypto 0.58.0,
+  text 0.43.0, mod 0.41.0, plus sync, sys and tools) past 13 advisories.
+  govulncheck found none of them reachable. The one remaining advisory,
+  GO-2026-5932 for the unmaintained x/crypto/openpgp package, has no fix and
+  is not imported; osv-scanner.toml records it as accepted until 2027-05-01.
+
 ## [0.2.1] - 2026-11-01
 
 ### Security

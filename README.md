@@ -61,7 +61,7 @@ so use `shasum -a 256 -c checksums.txt --ignore-missing` there.
 
 ### From source
 
-With Go 1.25 or newer:
+With Go 1.26 or newer:
 
 ```
 go install github.com/bawdo/caddy_shack@latest
