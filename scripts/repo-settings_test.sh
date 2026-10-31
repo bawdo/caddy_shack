@@ -89,10 +89,10 @@ esac
 EOF
 chmod +x "$ROOT/bin/gh"
 
-FIVE='{"jobs":[{"name":"Static checks"},{"name":"Test (ubuntu-latest)"},{"name":"Test (macos-latest)"},{"name":"Integration tests"},{"name":"Build and smoke"}]}'
+JOBS='{"jobs":[{"name":"Static checks"},{"name":"Vulnerability scan"},{"name":"Test (ubuntu-latest)"},{"name":"Test (macos-latest)"},{"name":"Integration tests"},{"name":"Build and smoke"},{"name":"CI result"}]}'
 
 # fake NAME: a fresh directory of canned answers (a successful CI run with
-# five jobs, no rulesets, no secrets) and empty logs, plus a workflows
+# the CI jobs, no rulesets, no secrets) and empty logs, plus a workflows
 # directory using two GitHub-owned actions, a local reusable workflow and
 # two third-party actions (one of them twice). Prints its path.
 fake() {
@@ -101,7 +101,7 @@ fake() {
     : > "$dir/gh.log"
     : > "$dir/bodies.log"
     echo '[{"databaseId":42}]' > "$dir/runs.json"
-    echo "$FIVE" > "$dir/jobs.json"
+    echo "$JOBS" > "$dir/jobs.json"
     echo '[]' > "$dir/rulesets.json"
     echo '[]' > "$dir/secrets.json"
     cat > "$dir/workflows/ci.yml" <<'EOF'
@@ -179,12 +179,12 @@ run "$dir" GO_PUBLIC=yes public
 body "$name" "$dir" PATCH "$R" '.visibility == "public"'
 echo "ok $name"
 
-name=rulesets_needs_five_contexts
+name=rulesets_needs_ci_result_job
 dir=$(fake "$name")
-jq '.jobs |= .[0:4]' <<<"$FIVE" > "$dir/jobs.json"
+jq '.jobs |= map(select(.name != "CI result"))' <<<"$JOBS" > "$dir/jobs.json"
 run "$dir" rulesets
 [ "$CODE" -eq 1 ] || fail "$name" "expected exit 1"
-[ "$ERR" = "repo-settings: expected 5 status check contexts, found 4" ] || fail "$name" "wrong refusal"
+[ "$ERR" = "repo-settings: no CI result job in the latest successful CI run on main; merge the CI gate first" ] || fail "$name" "wrong refusal"
 if [ "$(count "$dir" POST)" -ne 0 ] || [ "$(count "$dir" "-X PUT")" -ne 0 ]; then
     fail "$name" "wrote a ruleset"
 fi
@@ -196,12 +196,15 @@ run "$dir" rulesets
 [ "$CODE" -eq 0 ] || fail "$name" "expected exit 0"
 [ "$(count "$dir" "api -X POST $R/rulesets --input")" -eq 2 ] || fail "$name" "expected two POSTs"
 body "$name" "$dir" POST "$R/rulesets" '.name == "main" and .target == "branch" and .enforcement == "active"
-    and .conditions.ref_name.include == ["refs/heads/main"]
-    and .bypass_actors == [{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]
-    and ([.rules[].type] == ["deletion","non_fast_forward","required_signatures","pull_request","required_status_checks"])
+    and .conditions.ref_name.include == ["~DEFAULT_BRANCH"]
+    and .bypass_actors == []
+    and ([.rules[].type] == ["deletion","non_fast_forward","required_signatures","pull_request","required_status_checks","code_scanning"])
     and (.rules[3].parameters.required_approving_review_count == 0)
+    and (.rules[3].parameters.required_review_thread_resolution == true)
+    and (.rules[3].parameters.allowed_merge_methods == ["merge"])
     and (.rules[4].parameters.strict_required_status_checks_policy == true)
-    and ([.rules[4].parameters.required_status_checks[].context] | length == 5 and index("Build and smoke") != null)'
+    and (.rules[4].parameters.required_status_checks == [{"context":"CI result","integration_id":15368}])
+    and (.rules[5].parameters.code_scanning_tools == [{"tool":"CodeQL","security_alerts_threshold":"high_or_higher","alerts_threshold":"errors"}])'
 tag_body=$(grep '^POST ' "$dir/bodies.log" | sed -n 2p | cut -d' ' -f3-)
 jq -e '.name == "release-tags" and .target == "tag" and .enforcement == "active" and .bypass_actors == []
     and .conditions.ref_name.include == ["refs/tags/v*"]
@@ -239,7 +242,7 @@ body "$name" "$dir" PUT "$R/actions/permissions/selected-actions" '.github_owned
 body "$name" "$dir" PUT "$R/actions/permissions/fork-pr-contributor-approval" '.approval_policy == "all_external_contributors"'
 body "$name" "$dir" PATCH "$R" '.allow_merge_commit == true and .allow_squash_merge == false
     and .allow_rebase_merge == false and .allow_auto_merge == true'
-body "$name" "$dir" PATCH "$R/code-scanning/default-setup" '.state == "configured" and .query_suite == "default"
+body "$name" "$dir" PATCH "$R/code-scanning/default-setup" '.state == "configured" and .query_suite == "extended"
     and .languages == ["actions", "go"]'
 echo "ok $name"
 
@@ -284,6 +287,7 @@ grep -qx "allowed_actions: unknown" <<<"$OUT" || fail "$name" "no allowed_action
 grep -qx "sha_pinning_required: unknown" <<<"$OUT" || fail "$name" "no sha_pinning_required line"
 grep -qx "fork_pr_approval: unknown" <<<"$OUT" || fail "$name" "no fork_pr_approval line"
 grep -qx "code_scanning_default_setup: unknown" <<<"$OUT" || fail "$name" "no code_scanning_default_setup line"
+grep -qx "code_scanning_query_suite: unknown" <<<"$OUT" || fail "$name" "no code_scanning_query_suite line"
 echo "ok $name"
 
 name=show_prints_repository_settings
