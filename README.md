@@ -7,7 +7,7 @@
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/bawdo/caddy_shack/badge)](https://scorecard.dev/viewer/?uri=github.com/bawdo/caddy_shack)
 
 CaddyShack is a CLI tool that helps to deploy and manage a locally running
-caddy instance.
+caddy instance..
 
 The purpose of this is so an engineer can easily spin up a local project and
 register that project with caddy and have https and stable/distinct local URLs
