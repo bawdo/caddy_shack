@@ -8,7 +8,9 @@
 #                                          makes the repository public
 #   scripts/repo-settings.sh post-public   vulnerability reporting, secret
 #                                          scanning, Dependabot alerts and fixes
-#   scripts/repo-settings.sh rulesets      the main and release-tags rulesets
+#   scripts/repo-settings.sh rulesets      the main and release-tags rulesets;
+#                                          main requires the CI result job and
+#                                          CodeQL results, with no bypass actors
 #   scripts/repo-settings.sh harden        Actions allowlist and SHA pinning,
 #                                          fork approval, merge methods, CodeQL
 #   scripts/repo-settings.sh show          prints the current settings
@@ -104,20 +106,23 @@ ruleset() {
 }
 
 rulesets() {
-    local run_id contexts n
+    local run_id jobs
     run_id=$(gh run list --repo "$REPO" --workflow ci.yml --branch main --status success --limit 1 \
         --json databaseId --jq '.[0].databaseId // empty')
     [[ -n "$run_id" ]] || die "no successful CI run on main yet; merge and let CI pass first"
-    contexts=$(gh api "$R/actions/runs/$run_id/jobs" --jq '.jobs[].name' | sort -u)
-    n=$(grep -c . <<<"$contexts" || true)
-    [[ "$n" -eq 5 ]] || die "expected 5 status check contexts, found $n"
+    jobs=$(gh api "$R/actions/runs/$run_id/jobs" --jq '.jobs[].name')
+    grep -qxF 'CI result' <<<"$jobs" \
+        || die "no CI result job in the latest successful CI run on main; merge the CI gate first"
 
-    ruleset main "$(jq -n --arg contexts "$contexts" '{
+    # Only the CI result job is required: it fails unless every other job
+    # passed. integration_id 15368 is the GitHub Actions app, so only Actions
+    # can report that check.
+    ruleset main "$(jq -n '{
         name: "main",
         target: "branch",
         enforcement: "active",
-        bypass_actors: [{actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always"}],
-        conditions: {ref_name: {include: ["refs/heads/main"], exclude: []}},
+        bypass_actors: [],
+        conditions: {ref_name: {include: ["~DEFAULT_BRANCH"], exclude: []}},
         rules: [
             {type: "deletion"},
             {type: "non_fast_forward"},
@@ -127,11 +132,19 @@ rulesets() {
                 dismiss_stale_reviews_on_push: false,
                 require_code_owner_review: false,
                 require_last_push_approval: false,
-                required_review_thread_resolution: false
+                required_review_thread_resolution: true,
+                allowed_merge_methods: ["merge"]
             }},
             {type: "required_status_checks", parameters: {
                 strict_required_status_checks_policy: true,
-                required_status_checks: ($contexts | split("\n") | map({context: .}))
+                required_status_checks: [{context: "CI result", integration_id: 15368}]
+            }},
+            {type: "code_scanning", parameters: {
+                code_scanning_tools: [{
+                    tool: "CodeQL",
+                    security_alerts_threshold: "high_or_higher",
+                    alerts_threshold: "errors"
+                }]
             }}
         ]
     }')"
@@ -183,7 +196,7 @@ harden() {
     # Merge commits only, so every commit on main keeps its author's signature
     # and the history matches what the release gate checks.
     write PATCH "$R" '{"allow_merge_commit":true,"allow_squash_merge":false,"allow_rebase_merge":false,"allow_auto_merge":true}'
-    write PATCH "$R/code-scanning/default-setup" '{"state":"configured","query_suite":"default","languages":["actions","go"]}'
+    write PATCH "$R/code-scanning/default-setup" '{"state":"configured","query_suite":"extended","languages":["actions","go"]}'
 }
 
 # read_api PATH JQ: prints GET PATH filtered by JQ. When the read fails it
@@ -240,6 +253,7 @@ show() {
     echo "sha_pinning_required: $(get "$R/actions/permissions" '.sha_pinning_required' unknown)"
     echo "fork_pr_approval: $(get "$R/actions/permissions/fork-pr-contributor-approval" '.approval_policy' unknown)"
     echo "code_scanning_default_setup: $(get "$R/code-scanning/default-setup" '.state' unknown)"
+    echo "code_scanning_query_suite: $(get "$R/code-scanning/default-setup" '.query_suite' unknown)"
     return "$failed"
 }
 
