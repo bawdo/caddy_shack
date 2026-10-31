@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caddy_shack_<version>_provenance.intoto.jsonl, so an archive can be verified
   without GitHub's attestation API.
 
+### Changed
+
+- The verification commands in the release notes and SECURITY.md pin the release tag and refuse self-hosted runners, with a variant that checks the attached bundle offline.
+
 ## [0.1.0] - 2026-10-27
 
 ### Added

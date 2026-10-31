@@ -47,9 +47,44 @@ altered, run both against the archive you downloaded:
 
 ```bash
 gh attestation verify caddy_shack_<version>_<os>_<arch>.tar.gz --repo bawdo/caddy_shack \
-  --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml
+  --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml \
+  --source-ref refs/tags/v<version> \
+  --deny-self-hosted-runners
 sha256sum -c checksums.txt --ignore-missing
 ```
 
 On macOS, use `shasum -a 256 -c checksums.txt --ignore-missing` for the
 second command.
+
+`--repo` on its own only proves that some workflow in this repository, run
+from any ref, signed the archive. The other three flags pin it to the
+release workflow running from that release's tag on a GitHub-hosted runner,
+which rules out an attestation made from a throwaway branch, by any other
+workflow file or on a self-hosted runner.
+
+Releases after v0.1.0 also carry the attestation as a Sigstore bundle,
+`caddy_shack_<version>_provenance.intoto.jsonl` (v0.1.0 predates it).
+Download it next to the archive to verify without querying GitHub's
+attestation API:
+
+```bash
+gh attestation verify caddy_shack_<version>_<os>_<arch>.tar.gz --repo bawdo/caddy_shack \
+  --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml \
+  --source-ref refs/tags/v<version> \
+  --deny-self-hosted-runners \
+  --bundle caddy_shack_<version>_provenance.intoto.jsonl
+```
+
+On a machine with no network access at all, `gh` cannot fetch the Sigstore
+trusted root itself. Save it on a connected machine, copy it across and
+pass it in:
+
+```bash
+gh attestation trusted-root > trusted_root.jsonl
+gh attestation verify caddy_shack_<version>_<os>_<arch>.tar.gz --repo bawdo/caddy_shack \
+  --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml \
+  --source-ref refs/tags/v<version> \
+  --deny-self-hosted-runners \
+  --bundle caddy_shack_<version>_provenance.intoto.jsonl \
+  --custom-trusted-root trusted_root.jsonl
+```
