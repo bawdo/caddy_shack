@@ -4,18 +4,37 @@ permissions:
   contents: read
 
 # Releases are triggered by release.yml, which calls this workflow.
+#
+# Which events run which jobs:
+#   pull_request: every job except fuzz.
+#   push to main (also release.yml via workflow_call, where the event is
+#     push): every job except fuzz, so random fuzzing never gates a merge
+#     or a release. The seed corpus still runs in the test job.
+#   schedule (weekly, on main): only vuln and fuzz, so a new advisory or a
+#     fuzz crash surfaces without a code change.
+#   workflow_dispatch: every job, fuzz included, with a short 15s fuzz run.
+#     A release re-run through release.yml arrives as workflow_dispatch, so
+#     it fuzzes for 15s on purpose.
+# The ci-result job gates all of the above; scripts/ci-result.sh holds the
+# table of permitted skips.
 on:
   push:
     branches: [ main ]
   pull_request:
+  schedule:
+    - cron: '23 4 * * 1'
   workflow_dispatch:
   workflow_call:
     secrets:
       CODECOV_TOKEN:
         required: false
 
+# The prefix is a literal, not github.workflow: when this file runs as a
+# reusable workflow that context names the caller, which would put caller
+# and callee in one group and deadlock the run. A scheduled run gets a group
+# of its own so its long fuzz run never holds up the CI of a push to main.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'schedule' && 'schedule-' || '' }}${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
@@ -26,9 +45,10 @@ env:
   SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
 
 jobs:
-  # Formatting, lint and vulnerability checks are pure Go and OS-independent, so they run once on cheap Linux.
+  # Formatting and lint checks are pure Go and OS-independent, so they run once on cheap Linux.
   static:
     name: Static checks
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -80,12 +100,32 @@ jobs:
           version: v2.15.0
           args: --timeout=5m
 
+  # Runs on every trigger, the weekly schedule included, so a new advisory
+  # is caught without waiting for a code change.
+  vuln:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.x'
+          check-latest: true
+          cache: true
+
       - name: Run govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@${{ env.VULN_VERSION }} ./...
 
   # Runs the race-detector suite with coverage on Linux and macOS because the tool targets both, and uploads coverage from Linux only.
   test:
     name: Test (${{ matrix.os }})
+    if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -123,6 +163,7 @@ jobs:
   # Exercises the Docker-backed integration suite, which needs a Docker daemon that only the Linux runners provide.
   integration:
     name: Integration tests
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -147,6 +188,7 @@ jobs:
   # Builds through the Makefile and smoke-tests the binary on Linux, since the build is platform-independent Go and the Makefile owns the ldflags.
   build:
     name: Build and smoke
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -174,3 +216,64 @@ jobs:
             echo "Smoke test failed: 'caddy_shack version' did not print build identity"
             exit 1
           fi
+
+  # A short fuzz run by hand, a longer one on the weekly schedule. Skipped on
+  # pull requests and pushes so fuzzing never gates a merge or a release. It
+  # is listed by the triggers that run it, so a new trigger does not fuzz by
+  # default. A release re-run (workflow_dispatch through release.yml) fuzzes
+  # for 15s on purpose. A failing input is kept as an artifact so it can be
+  # reproduced locally.
+  fuzz:
+    name: Fuzz
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ github.event_name == 'schedule' && 60 || 15 }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.x'
+          check-latest: true
+          cache: true
+
+      - name: Run fuzz targets
+        env:
+          FUZZTIME: ${{ github.event_name == 'schedule' && '5m' || '15s' }}
+        run: make fuzz FUZZTIME="$FUZZTIME"
+
+      - name: Keep failing fuzz inputs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-failures
+          path: internal/*/testdata/fuzz/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # One stable check name for the main ruleset to require, so adding or
+  # renaming a job above does not mean editing the ruleset as well. Every
+  # job in needs must pass except those the event skips on purpose, which
+  # scripts/ci-result.sh decides. A failed, cancelled or wrongly skipped job
+  # fails the gate. EVENT and NEEDS go in through env, never into the script.
+  ci-result:
+    name: CI result
+    if: always()
+    needs: [static, vuln, test, integration, build, fuzz]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fail unless every expected job passed
+        env:
+          EVENT: ${{ github.event_name }}
+          NEEDS: ${{ toJSON(needs) }}
+        run: scripts/ci-result.sh

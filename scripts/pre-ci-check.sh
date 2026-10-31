@@ -2,9 +2,9 @@
 #
 # caddy_shack Local Build Validation
 #
-# Runs the same ten quality checks every developer should run before
-# pushing. Adapted from the Jellyfish pre-CI script for caddy_shack's
-# single-binary cobra CLI layout (module root builds ./).
+# Runs the quality checks every developer should run before pushing.
+# Adapted from the Jellyfish pre-CI script for caddy_shack's single-binary
+# cobra CLI layout (module root builds ./).
 #
 # Usage: ./scripts/pre-ci-check.sh [--fix gofmt]
 #
@@ -384,6 +384,22 @@ check_changelog() {
     fi
 }
 
+# Check 11: Fuzz (every fuzz target, a few seconds each)
+check_fuzz() {
+    print_header "Check 11: Fuzz (make fuzz, 5s per target)"
+    print_step "Running every fuzz target for 5s each..."
+
+    if make fuzz FUZZTIME=5s 2>&1 | tee coverage/pre-ci-fuzz.txt; then
+        record_result "Fuzz" "PASS" ""
+        echo -e "${GREEN}✓ Every fuzz target held its properties${NC}"
+    else
+        record_result "Fuzz" "FAIL" "a fuzz target failed; any crasher is in internal/*/testdata/fuzz/"
+        echo -e "${RED}✗ Fuzz check failed${NC}"
+        echo -e "  Crashing inputs are saved under internal/*/testdata/fuzz/; reproduce with go test, fix the bug, then keep the file as a regression seed."
+        return 1
+    fi
+}
+
 # Generate summary report
 generate_report() {
     print_header "Local Build Readiness Report"
@@ -454,7 +470,7 @@ generate_report() {
     fi
 
     echo ""
-    echo "Detailed logs saved in: coverage/pre-ci-*.txt  (checks 1 to 10)"
+    echo "Detailed logs saved in: coverage/pre-ci-*.txt  (checks 1 to 11)"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
@@ -500,6 +516,7 @@ main() {
     check_vulnerability_scan || true
     check_cli_smoke || true
     check_changelog || true
+    check_fuzz || true
 
     generate_report
 

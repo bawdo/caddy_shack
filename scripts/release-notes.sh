@@ -6,7 +6,9 @@
 #
 #   scripts/release-notes.sh X.Y.Z
 #
-# Needs GITHUB_REPOSITORY (owner/repo). Run from the repository root.
+# Needs GITHUB_REPOSITORY (owner/repo) and the tag vX.Y.Z in the repository,
+# whose commit the verify commands pin with --source-digest. Run from the
+# repository root.
 
 set -euo pipefail
 
@@ -18,10 +20,11 @@ die() {
 version="${1:-}"
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "usage: $0 X.Y.Z"
 repo="${GITHUB_REPOSITORY:?release-notes: GITHUB_REPOSITORY is not set}"
+sha=$(git rev-parse --verify --quiet "refs/tags/v$version^{commit}") || die "tag v$version does not exist"
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# The highest tag below this version, whether or not this version is tagged
-# yet. Sorted on the numbers, so v1.x orders after v0.x.
+# The highest tag below this version (this version's own tag is required
+# above, and is skipped here). Sorted on the numbers, so v1.x orders after v0.x.
 previous=$( { git tag -l 'v[0-9]*' | sed 's/^v//'; echo "$version"; } \
     | sort -u -t. -k1,1n -k2,2n -k3,3n \
     | grep -B1 -x "$version" | sed -n '1p' | grep -v -x "$version" \
@@ -34,8 +37,22 @@ echo
 echo '```'
 echo "gh attestation verify caddy_shack_${version}_<os>_<arch>.tar.gz --repo bawdo/caddy_shack \\"
 echo "  --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml \\"
-echo "  --source-ref refs/tags/v${version}"
+echo "  --source-ref refs/tags/v${version} \\"
+echo "  --source-digest ${sha} \\"
+echo "  --deny-self-hosted-runners"
 echo "sha256sum -c checksums.txt --ignore-missing"
+echo '```'
+echo
+echo "To verify without GitHub's attestation API, download the attached bundle"
+echo "next to the archive and add it:"
+echo
+echo '```'
+echo "gh attestation verify caddy_shack_${version}_<os>_<arch>.tar.gz --repo bawdo/caddy_shack \\"
+echo "  --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml \\"
+echo "  --source-ref refs/tags/v${version} \\"
+echo "  --source-digest ${sha} \\"
+echo "  --deny-self-hosted-runners \\"
+echo "  --bundle caddy_shack_${version}_provenance.intoto.jsonl"
 echo '```'
 if [ -n "$previous" ]; then
     echo

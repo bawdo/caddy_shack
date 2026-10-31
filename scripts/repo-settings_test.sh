@@ -30,10 +30,13 @@ fail() {
 #   runs.json      what "run list" prints
 #   jobs.json      body of GET .../actions/runs/ID/jobs
 #   rulesets.json  body of GET .../rulesets
+#   immutable.json body of GET .../immutable-releases, when the file exists
+#                  (otherwise that read fails, as a 404 does)
 #   repo.json      body of GET repos/OWNER/NAME, when the file exists
 #   secrets.json   what "secret list" prints
 #   gh.log         one line per call, the arguments joined by spaces
-#   bodies.log     one line per --input body: "METHOD PATH <compact json>"
+#   bodies.log     one line per write: "METHOD PATH <compact json>", or just
+#                  "METHOD PATH" for a write without a body
 mkdir -p "$ROOT/bin"
 cat > "$ROOT/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -70,6 +73,8 @@ esac
 if [ "$method" != GET ]; then
     if [ -n "$input" ]; then
         echo "$method $path $(jq -c . "$input")" >> "$FAKE_GH_DIR/bodies.log"
+    else
+        echo "$method $path" >> "$FAKE_GH_DIR/bodies.log"
     fi
     echo '{}'
     exit 0
@@ -77,6 +82,10 @@ fi
 case "$path" in
     */actions/runs/*/jobs) answer "$FAKE_GH_DIR/jobs.json" ;;
     */rulesets) answer "$FAKE_GH_DIR/rulesets.json" ;;
+    */immutable-releases)
+        [ -f "$FAKE_GH_DIR/immutable.json" ] || exit 1
+        answer "$FAKE_GH_DIR/immutable.json"
+        ;;
     repos/*/*)
         [ -f "$FAKE_GH_DIR/repo.json" ] || { echo "fake gh: no repo.json: $*" >&2; exit 2; }
         answer "$FAKE_GH_DIR/repo.json"
@@ -89,10 +98,10 @@ esac
 EOF
 chmod +x "$ROOT/bin/gh"
 
-FIVE='{"jobs":[{"name":"Static checks"},{"name":"Test (ubuntu-latest)"},{"name":"Test (macos-latest)"},{"name":"Integration tests"},{"name":"Build and smoke"}]}'
+JOBS='{"jobs":[{"name":"Static checks"},{"name":"Vulnerability scan"},{"name":"Test (ubuntu-latest)"},{"name":"Test (macos-latest)"},{"name":"Integration tests"},{"name":"Build and smoke"},{"name":"CI result"}]}'
 
 # fake NAME: a fresh directory of canned answers (a successful CI run with
-# five jobs, no rulesets, no secrets) and empty logs, plus a workflows
+# the CI jobs, no rulesets, no secrets) and empty logs, plus a workflows
 # directory using two GitHub-owned actions, a local reusable workflow and
 # two third-party actions (one of them twice). Prints its path.
 fake() {
@@ -101,7 +110,7 @@ fake() {
     : > "$dir/gh.log"
     : > "$dir/bodies.log"
     echo '[{"databaseId":42}]' > "$dir/runs.json"
-    echo "$FIVE" > "$dir/jobs.json"
+    echo "$JOBS" > "$dir/jobs.json"
     echo '[]' > "$dir/rulesets.json"
     echo '[]' > "$dir/secrets.json"
     cat > "$dir/workflows/ci.yml" <<'EOF'
@@ -179,12 +188,12 @@ run "$dir" GO_PUBLIC=yes public
 body "$name" "$dir" PATCH "$R" '.visibility == "public"'
 echo "ok $name"
 
-name=rulesets_needs_five_contexts
+name=rulesets_needs_ci_result_job
 dir=$(fake "$name")
-jq '.jobs |= .[0:4]' <<<"$FIVE" > "$dir/jobs.json"
+jq '.jobs |= map(select(.name != "CI result"))' <<<"$JOBS" > "$dir/jobs.json"
 run "$dir" rulesets
 [ "$CODE" -eq 1 ] || fail "$name" "expected exit 1"
-[ "$ERR" = "repo-settings: expected 5 status check contexts, found 4" ] || fail "$name" "wrong refusal"
+[ "$ERR" = "repo-settings: no CI result job in the latest successful CI run on main; merge the CI gate first" ] || fail "$name" "wrong refusal"
 if [ "$(count "$dir" POST)" -ne 0 ] || [ "$(count "$dir" "-X PUT")" -ne 0 ]; then
     fail "$name" "wrote a ruleset"
 fi
@@ -194,31 +203,44 @@ name=rulesets_creates_when_absent
 dir=$(fake "$name")
 run "$dir" rulesets
 [ "$CODE" -eq 0 ] || fail "$name" "expected exit 0"
-[ "$(count "$dir" "api -X POST $R/rulesets --input")" -eq 2 ] || fail "$name" "expected two POSTs"
+grep -q -- "^run list .*--branch main --event push " "$dir/gh.log" \
+    || fail "$name" "run list did not filter on --event push: $(cat "$dir/gh.log")"
+[ "$(count "$dir" "api -X POST $R/rulesets --input")" -eq 3 ] || fail "$name" "expected three POSTs"
 body "$name" "$dir" POST "$R/rulesets" '.name == "main" and .target == "branch" and .enforcement == "active"
-    and .conditions.ref_name.include == ["refs/heads/main"]
-    and .bypass_actors == [{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]
-    and ([.rules[].type] == ["deletion","non_fast_forward","required_signatures","pull_request","required_status_checks"])
+    and .conditions.ref_name.include == ["~DEFAULT_BRANCH"]
+    and .bypass_actors == []
+    and ([.rules[].type] == ["deletion","non_fast_forward","required_signatures","pull_request","required_status_checks","code_scanning"])
     and (.rules[3].parameters.required_approving_review_count == 0)
+    and (.rules[3].parameters.required_review_thread_resolution == true)
+    and (.rules[3].parameters.allowed_merge_methods == ["merge"])
     and (.rules[4].parameters.strict_required_status_checks_policy == true)
-    and ([.rules[4].parameters.required_status_checks[].context] | length == 5 and index("Build and smoke") != null)'
+    and (.rules[4].parameters.required_status_checks == [{"context":"CI result","integration_id":15368}])
+    and (.rules[5].parameters.code_scanning_tools == [{"tool":"CodeQL","security_alerts_threshold":"high_or_higher","alerts_threshold":"errors"}])'
 tag_body=$(grep '^POST ' "$dir/bodies.log" | sed -n 2p | cut -d' ' -f3-)
 jq -e '.name == "release-tags" and .target == "tag" and .enforcement == "active" and .bypass_actors == []
     and .conditions.ref_name.include == ["refs/tags/v*"]
     and ([.rules[].type] == ["deletion","non_fast_forward","update"])' <<<"$tag_body" >/dev/null \
     || fail "$name" "wrong tag ruleset: $tag_body"
+create_body=$(grep '^POST ' "$dir/bodies.log" | sed -n 3p | cut -d' ' -f3-)
+jq -e '.name == "release-tag-creation" and .target == "tag" and .enforcement == "active"
+    and .bypass_actors == [{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]
+    and .conditions.ref_name == {"include":["refs/tags/v*"],"exclude":[]}
+    and .rules == [{"type":"creation"}]' <<<"$create_body" >/dev/null \
+    || fail "$name" "wrong tag creation ruleset: $create_body"
 echo "ok $name"
 
 name=rulesets_updates_when_present
 dir=$(fake "$name")
-echo '[{"id":101,"name":"main","target":"branch"},{"id":202,"name":"release-tags","target":"tag"}]' > "$dir/rulesets.json"
+echo '[{"id":101,"name":"main","target":"branch"},{"id":202,"name":"release-tags","target":"tag"},{"id":303,"name":"release-tag-creation","target":"tag"}]' > "$dir/rulesets.json"
 run "$dir" rulesets
 [ "$CODE" -eq 0 ] || fail "$name" "expected exit 0"
 [ "$(count "$dir" "api -X PUT $R/rulesets/101 --input")" -eq 1 ] || fail "$name" "main not updated in place"
 [ "$(count "$dir" "api -X PUT $R/rulesets/202 --input")" -eq 1 ] || fail "$name" "release-tags not updated in place"
+[ "$(count "$dir" "api -X PUT $R/rulesets/303 --input")" -eq 1 ] || fail "$name" "release-tag-creation not updated in place"
 [ "$(count "$dir" POST)" -eq 0 ] || fail "$name" "created a ruleset"
 body "$name" "$dir" PUT "$R/rulesets/101" '.name == "main"'
 body "$name" "$dir" PUT "$R/rulesets/202" '.name == "release-tags"'
+body "$name" "$dir" PUT "$R/rulesets/303" '.name == "release-tag-creation"'
 echo "ok $name"
 
 name=harden_sends_every_setting_in_order
@@ -229,7 +251,8 @@ expected="PUT $R/actions/permissions
 PUT $R/actions/permissions/selected-actions
 PUT $R/actions/permissions/fork-pr-contributor-approval
 PATCH $R
-PATCH $R/code-scanning/default-setup"
+PATCH $R/code-scanning/default-setup
+PUT $R/immutable-releases"
 [ "$(cut -d' ' -f1,2 "$dir/bodies.log")" = "$expected" ] || fail "$name" "wrong writes: $(cat "$dir/bodies.log")"
 body "$name" "$dir" PUT "$R/actions/permissions" '.enabled == true and .allowed_actions == "selected"
     and .sha_pinning_required == true'
@@ -239,7 +262,7 @@ body "$name" "$dir" PUT "$R/actions/permissions/selected-actions" '.github_owned
 body "$name" "$dir" PUT "$R/actions/permissions/fork-pr-contributor-approval" '.approval_policy == "all_external_contributors"'
 body "$name" "$dir" PATCH "$R" '.allow_merge_commit == true and .allow_squash_merge == false
     and .allow_rebase_merge == false and .allow_auto_merge == true'
-body "$name" "$dir" PATCH "$R/code-scanning/default-setup" '.state == "configured" and .query_suite == "default"
+body "$name" "$dir" PATCH "$R/code-scanning/default-setup" '.state == "configured" and .query_suite == "extended"
     and .languages == ["actions", "go"]'
 echo "ok $name"
 
@@ -284,6 +307,15 @@ grep -qx "allowed_actions: unknown" <<<"$OUT" || fail "$name" "no allowed_action
 grep -qx "sha_pinning_required: unknown" <<<"$OUT" || fail "$name" "no sha_pinning_required line"
 grep -qx "fork_pr_approval: unknown" <<<"$OUT" || fail "$name" "no fork_pr_approval line"
 grep -qx "code_scanning_default_setup: unknown" <<<"$OUT" || fail "$name" "no code_scanning_default_setup line"
+grep -qx "code_scanning_query_suite: unknown" <<<"$OUT" || fail "$name" "no code_scanning_query_suite line"
+grep -qx "immutable_releases: disabled" <<<"$OUT" || fail "$name" "no immutable_releases line"
+echo "ok $name"
+
+name=show_reads_immutable_releases_off
+dir=$(fake "$name")
+echo '{"enabled":false,"enforced_by_owner":false}' > "$dir/immutable.json"
+run "$dir" show
+grep -qx "immutable_releases: disabled" <<<"$OUT" || fail "$name" "200 with enabled false is not disabled"
 echo "ok $name"
 
 name=show_prints_repository_settings
@@ -295,6 +327,7 @@ cat > "$dir/repo.json" <<'EOF'
  "topics":["caddy","go"],
  "security_and_analysis":{"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"disabled"}}}
 EOF
+echo '{"enabled":true,"enforced_by_owner":false}' > "$dir/immutable.json"
 run "$dir" show
 ! grep -q "cannot read $R\$" <<<"$ERR" || fail "$name" "could not read $R"
 grep -qx "visibility: public" <<<"$OUT" || fail "$name" "no visibility line"
@@ -302,4 +335,5 @@ grep -qx "merge_methods: merge rebase" <<<"$OUT" || fail "$name" "wrong merge_me
 grep -qx "allow_auto_merge: true" <<<"$OUT" || fail "$name" "no allow_auto_merge line"
 grep -qx "topics: caddy go" <<<"$OUT" || fail "$name" "no topics line"
 grep -qx "secret_scanning_push_protection: disabled" <<<"$OUT" || fail "$name" "no push protection line"
+grep -qx "immutable_releases: enabled" <<<"$OUT" || fail "$name" "no immutable_releases line"
 echo "ok $name"
