@@ -34,8 +34,20 @@ echo
 echo '```'
 echo "gh attestation verify caddy_shack_${version}_<os>_<arch>.tar.gz --repo bawdo/caddy_shack \\"
 echo "  --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml \\"
-echo "  --source-ref refs/tags/v${version}"
+echo "  --source-ref refs/tags/v${version} \\"
+echo "  --deny-self-hosted-runners"
 echo "sha256sum -c checksums.txt --ignore-missing"
+echo '```'
+echo
+echo "To verify without GitHub's attestation API, download the attached bundle"
+echo "next to the archive and add it:"
+echo
+echo '```'
+echo "gh attestation verify caddy_shack_${version}_<os>_<arch>.tar.gz --repo bawdo/caddy_shack \\"
+echo "  --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml \\"
+echo "  --source-ref refs/tags/v${version} \\"
+echo "  --deny-self-hosted-runners \\"
+echo "  --bundle caddy_shack_${version}_provenance.intoto.jsonl"
 echo '```'
 if [ -n "$previous" ]; then
     echo
