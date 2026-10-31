@@ -107,7 +107,7 @@ ruleset() {
 
 rulesets() {
     local run_id jobs
-    run_id=$(gh run list --repo "$REPO" --workflow ci.yml --branch main --status success --limit 1 \
+    run_id=$(gh run list --repo "$REPO" --workflow ci.yml --branch main --event push --status success --limit 1 \
         --json databaseId --jq '.[0].databaseId // empty')
     [[ -n "$run_id" ]] || die "no successful CI run on main yet; merge and let CI pass first"
     jobs=$(gh api "$R/actions/runs/$run_id/jobs" --jq '.jobs[].name')

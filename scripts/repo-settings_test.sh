@@ -194,6 +194,8 @@ name=rulesets_creates_when_absent
 dir=$(fake "$name")
 run "$dir" rulesets
 [ "$CODE" -eq 0 ] || fail "$name" "expected exit 0"
+grep -q -- "^run list .*--branch main --event push " "$dir/gh.log" \
+    || fail "$name" "run list did not filter on --event push: $(cat "$dir/gh.log")"
 [ "$(count "$dir" "api -X POST $R/rulesets --input")" -eq 2 ] || fail "$name" "expected two POSTs"
 body "$name" "$dir" POST "$R/rulesets" '.name == "main" and .target == "branch" and .enforcement == "active"
     and .conditions.ref_name.include == ["~DEFAULT_BRANCH"]
