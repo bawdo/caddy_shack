@@ -6,8 +6,7 @@ name: Release
 # be consistent. The release notes are the version's changelog section, never
 # written by hand. Archives for linux and darwin on amd64 and arm64 are built,
 # smoke tested, attested with build provenance and attached with a checksums
-# file, so anyone can run:
-#   gh attestation verify <archive> --repo bawdo/caddy_shack
+# file. SECURITY.md ("Verifying a release") has the commands to check them.
 # The attestation's Sigstore bundle is attached too, as
 # caddy_shack_<version>_provenance.intoto.jsonl, so --bundle can check it
 # without the attestation API.

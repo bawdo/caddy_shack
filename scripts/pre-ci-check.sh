@@ -2,9 +2,9 @@
 #
 # caddy_shack Local Build Validation
 #
-# Runs the same ten quality checks every developer should run before
-# pushing. Adapted from the Jellyfish pre-CI script for caddy_shack's
-# single-binary cobra CLI layout (module root builds ./).
+# Runs the quality checks every developer should run before pushing.
+# Adapted from the Jellyfish pre-CI script for caddy_shack's single-binary
+# cobra CLI layout (module root builds ./).
 #
 # Usage: ./scripts/pre-ci-check.sh [--fix gofmt]
 #

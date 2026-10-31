@@ -53,4 +53,5 @@ the changelog section as the notes. Preview those notes beforehand with
 If the publish fails, re-run it with
 `gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`. The `--ref` makes
 the called CI run on the tag's commit. A defect in a published release gets a
-new patch version, never a moved tag.
+new patch version, never a moved tag. Published releases are immutable, so
+a release cannot be patched or have assets replaced.

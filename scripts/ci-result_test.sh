@@ -152,6 +152,16 @@ actual=$(sed -n '/^  ci-result:/,$p' "$WORKFLOW" | sed -n 's/^    needs: \[\(.*\
 [ "[$actual]" = "[$expected]" ] || fail $t "needs is [$actual], script expects [$expected]"
 echo "ok $t"
 
+# Every job defined in ci.yml (bar the gate itself) must be one the script
+# expects, in file order, so a job added to ci.yml alone is not invisible to
+# the CI result gate.
+t=ci_yml_jobs_match_gate
+CODE=0
+expected=$(bash "$SCRIPT" --jobs)
+actual=$(sed -n '/^jobs:/,$p' "$WORKFLOW" | sed -n 's/^  \([A-Za-z_][A-Za-z0-9_-]*\):[[:space:]]*\(#.*\)\{0,1\}$/\1/p' | grep -vx ci-result)
+[ "$actual" = "$expected" ] || fail $t "ci.yml defines [$(paste -sd, - <<<"$actual")], script expects [$(paste -sd, - <<<"$expected")]"
+echo "ok $t"
+
 # A scheduled run needs its own concurrency group so its long fuzz run never
 # queues or cancels a push to main on the same ref.
 t=ci_yml_schedule_has_own_concurrency_group

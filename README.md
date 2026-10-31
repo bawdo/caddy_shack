@@ -43,18 +43,19 @@ archives:
 - `caddy_shack_<version>_linux_arm64.tar.gz`
 
 Download the archive for your platform and `checksums.txt` from the Releases
-page, then verify, unpack and install it:
+page, then verify, unpack and install it. The full verification commands (tag
+signature, attestation pinned to the release commit, checksums) are in
+[SECURITY.md](SECURITY.md#verifying-a-release). At minimum, check the
+checksum:
 
 ```
-gh attestation verify caddy_shack_<version>_<os>_<arch>.tar.gz --repo bawdo/caddy_shack \
-  --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml
 sha256sum -c checksums.txt --ignore-missing
 tar -xzf caddy_shack_<version>_<os>_<arch>.tar.gz
 install -m 0755 caddy_shack_<version>_<os>_<arch>/caddy_shack /usr/local/bin/caddy_shack
 ```
 
-The attestation check needs the [GitHub CLI](https://cli.github.com/); skip it
-if you don't have `gh`, but keep the checksum check. macOS has no `sha256sum`,
+The attestation check in SECURITY.md needs the [GitHub CLI](https://cli.github.com/);
+skip it if you don't have `gh`, but keep the checksum check. macOS has no `sha256sum`,
 so use `shasum -a 256 -c checksums.txt --ignore-missing` there.
 
 ### From source
@@ -826,8 +827,9 @@ Auto-fix formatting along the way:
 make pre-ci-fix
 ```
 
-The script skips the vulnerability scan and the Docker-backed integration
-tests; `make vuln` and `make integration` run those, matching the CI jobs.
+The script runs `govulncheck` and a short fuzz pass (5 seconds per target)
+along with the other checks. It does not run the Docker-backed integration
+tests; `make integration` runs those, matching the CI job.
 
 Install a local build into `$GOBIN`:
 
@@ -839,4 +841,6 @@ make install
 
 Releases are cut from a signed tag by `make release RELEASE_VERSION=X.Y.Z`. The
 release notes come from `CHANGELOG.md`, and `make changelog` checks that it is
-well formed and matches the tags. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full ritual.
+well formed and matches the tags. A published release is immutable and cannot
+be patched: a bad release means cutting a new version. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the full ritual.

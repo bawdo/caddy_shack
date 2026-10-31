@@ -43,12 +43,33 @@ you ask otherwise.
 Every release archive carries a build provenance attestation from the
 release workflow, and a `checksums.txt` lists the archive digests. To
 confirm a download came from this repository's CI and has not been
-altered, run both against the archive you downloaded:
+altered, first check that the tag is signed and sits on `main`, then run
+the attestation and checksum checks against the archive you downloaded.
+
+In a clone of this repository:
+
+```bash
+curl -fsSL https://github.com/bawdo.gpg | gpg --import
+git fetch origin tag v<version>
+git verify-tag v<version>
+git merge-base --is-ancestor v<version> origin/main
+git rev-parse 'v<version>^{commit}'
+```
+
+The first command imports the maintainer's public key, which `git
+verify-tag` needs. A good result from `git verify-tag` is a good signature
+from Keith Bawden's key, primary fingerprint
+`661B 030E 1C0F F788 151B  9525 E8C1 84EB 4B8F 82D1` (signing subkey
+`9954 8FCC B94B E845 41E5  73AA 4823 4C2C 292E EE78`). `git merge-base
+--is-ancestor` prints nothing and exits 0 when the tag is on `main`, and
+exits non-zero when it is not. `git rev-parse` prints the commit the tag
+points at. Pass that as `--source-digest`:
 
 ```bash
 gh attestation verify caddy_shack_<version>_<os>_<arch>.tar.gz --repo bawdo/caddy_shack \
   --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml \
   --source-ref refs/tags/v<version> \
+  --source-digest <commit sha> \
   --deny-self-hosted-runners
 sha256sum -c checksums.txt --ignore-missing
 ```
@@ -56,11 +77,28 @@ sha256sum -c checksums.txt --ignore-missing
 On macOS, use `shasum -a 256 -c checksums.txt --ignore-missing` for the
 second command.
 
-`--repo` on its own only proves that some workflow in this repository, run
-from any ref, signed the archive. The other three flags pin it to the
-release workflow running from that release's tag on a GitHub-hosted runner,
-which rules out an attestation made from a throwaway branch, by any other
-workflow file or on a self-hosted runner.
+An attestation is not a guarantee that an archive is secure. It links the
+archive to the source and build instructions that produced it. With these
+flags it proves the archive was built by `release.yml` as it stands at that
+tag's commit, on a GitHub-hosted runner, from that tag and commit. It does
+not say the commit was reviewed: a `v*` tag pushed at an unmerged commit
+would run that commit's own `release.yml` and pass the same attestation
+check. The three git commands above close that gap, because they show the
+tag is signed and its commit is on `main`.
+
+Two server-side controls back this up. A tag ruleset lets only admins create
+`v*` tags and blocks moving or deleting them, so write access alone cannot
+start a release from an unmerged commit. Releases are immutable once
+published, so the tag cannot move and the assets cannot change. A stolen
+admin token still defeats both.
+
+For releases published after immutability was turned on (v0.1.0 predates
+it), GitHub's own release attestation can be checked as well:
+
+```bash
+gh release verify v<version>
+gh release verify-asset v<version> caddy_shack_<version>_<os>_<arch>.tar.gz
+```
 
 Releases after v0.1.0 also carry the attestation as a Sigstore bundle,
 `caddy_shack_<version>_provenance.intoto.jsonl` (v0.1.0 predates it).
@@ -71,6 +109,7 @@ attestation API:
 gh attestation verify caddy_shack_<version>_<os>_<arch>.tar.gz --repo bawdo/caddy_shack \
   --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml \
   --source-ref refs/tags/v<version> \
+  --source-digest <commit sha> \
   --deny-self-hosted-runners \
   --bundle caddy_shack_<version>_provenance.intoto.jsonl
 ```
@@ -84,6 +123,7 @@ gh attestation trusted-root > trusted_root.jsonl
 gh attestation verify caddy_shack_<version>_<os>_<arch>.tar.gz --repo bawdo/caddy_shack \
   --signer-workflow bawdo/caddy_shack/.github/workflows/release.yml \
   --source-ref refs/tags/v<version> \
+  --source-digest <commit sha> \
   --deny-self-hosted-runners \
   --bundle caddy_shack_<version>_provenance.intoto.jsonl \
   --custom-trusted-root trusted_root.jsonl
