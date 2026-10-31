@@ -76,12 +76,14 @@ EOF
 chmod +x "$ROOT/bin/gh"
 
 # fake NAME: makes a fresh directory for one case's canned answers, with a
-# dist/ holding stand-in release assets, and prints its path.
+# dist/ holding stand-in release assets and a bundle.json (a two-line pretty
+# JSON object), and prints its path.
 fake() {
     local dir="$ROOT/$1"
     mkdir -p "$dir/dist"
     : > "$dir/gh.log"
     touch "$dir/dist/caddy_shack_0.1.0_linux_amd64.tar.gz" "$dir/dist/checksums.txt"
+    printf '{\n  "mediaType": "bundle"\n}\n' > "$dir/bundle.json"
     echo "$dir"
 }
 
@@ -184,7 +186,7 @@ echo "ok $name"
 name=publish_stops_on_published_release
 dir=$(fake "$name")
 echo false > "$dir/is_draft"
-run_gh "$dir" publish-release.sh v0.1.0 "$dir/notes.md"
+run_gh "$dir" publish-release.sh v0.1.0 "$dir/notes.md" "$dir/bundle.json"
 expect_refusal "$name" "publish-release: v0.1.0 is already published"
 ! grep -q "release create" "$dir/gh.log" || fail "$name" "created a release"
 echo "ok $name"
@@ -192,7 +194,7 @@ echo "ok $name"
 name=publish_replaces_draft
 dir=$(fake "$name")
 echo true > "$dir/is_draft"
-run_gh "$dir" publish-release.sh v0.1.0 "$dir/notes.md"
+run_gh "$dir" publish-release.sh v0.1.0 "$dir/notes.md" "$dir/bundle.json"
 [ "$CODE" -eq 0 ] || fail "$name" "expected exit 0"
 log_order "$name" "$dir" "release delete v0.1.0 --yes" "release create v0.1.0 --draft --verify-tag" \
     "release edit v0.1.0 --draft=false --latest"
@@ -201,13 +203,33 @@ echo "ok $name"
 
 name=publish_creates_when_missing
 dir=$(fake "$name")
-run_gh "$dir" publish-release.sh v0.1.0 "$dir/notes.md"
+run_gh "$dir" publish-release.sh v0.1.0 "$dir/notes.md" "$dir/bundle.json"
 [ "$CODE" -eq 0 ] || fail "$name" "expected exit 0"
 ! grep -q "release delete" "$dir/gh.log" || fail "$name" "deleted a release"
 log_order "$name" "$dir" "release create v0.1.0 --draft --verify-tag --title v0.1.0 --notes-file $dir/notes.md" \
     "release edit v0.1.0 --draft=false --latest"
-grep -q "release create .* dist/caddy_shack_0.1.0_linux_amd64.tar.gz dist/checksums.txt" "$dir/gh.log" \
+grep -q "release create .* dist/caddy_shack_0.1.0_linux_amd64.tar.gz dist/checksums.txt dist/caddy_shack_0.1.0_provenance.intoto.jsonl$" "$dir/gh.log" \
     || fail "$name" "assets not attached"
+bundle="$dir/dist/caddy_shack_0.1.0_provenance.intoto.jsonl"
+[ "$(wc -l < "$bundle" | tr -d ' ')" = 1 ] || fail "$name" "bundle is not one line"
+[ "$(cat "$bundle")" = "$(jq -c . "$dir/bundle.json")" ] || fail "$name" "bundle is not the compacted input"
+echo "ok $name"
+
+name=publish_refuses_bad_bundle_before_touching_draft
+dir=$(fake "$name")
+echo true > "$dir/is_draft"
+echo "not json" > "$dir/bundle.json"
+run_gh "$dir" publish-release.sh v0.1.0 "$dir/notes.md" "$dir/bundle.json"
+expect_refusal "$name" "publish-release: BUNDLE_FILE is not a single JSON document"
+! grep -q "release delete" "$dir/gh.log" || fail "$name" "deleted the draft"
+! grep -q "release create" "$dir/gh.log" || fail "$name" "created a release"
+[ "$(cat "$dir/is_draft")" = true ] || fail "$name" "the draft is gone"
+echo "ok $name"
+
+name=publish_needs_a_bundle
+dir=$(fake "$name")
+run_gh "$dir" publish-release.sh v0.1.0 "$dir/notes.md"
+expect_refusal "$name" "publish-release: usage: $SCRIPTS/publish-release.sh vX.Y.Z NOTES_FILE BUNDLE_FILE"
 echo "ok $name"
 
 # notes_repo NAME: a git repository holding CHANGELOG.md with 0.1.0 and 0.2.0

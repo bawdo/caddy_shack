@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Releases attach their build provenance as a Sigstore bundle,
+  caddy_shack_<version>_provenance.intoto.jsonl, so an archive can be verified
+  without GitHub's attestation API.
+
 ## [0.1.0] - 2026-10-27
 
 ### Added
