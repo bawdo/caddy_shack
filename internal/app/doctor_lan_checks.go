@@ -202,15 +202,19 @@ func checkLANPath(ctx context.Context, a *App) CheckResult {
 	addr := net.JoinHostPort(s.LAN.IP, strconv.Itoa(a.inst.LANHTTPSPort))
 	var failures, warnings, passes []string
 
+	// Both probes verify against the local CA: the LAN names because they
+	// must be served, the .test names because a listener that serves one
+	// would present a certificate from this CA.
+	pemStr, err := a.ExportCA(ctx, true)
+	if err != nil {
+		return CheckResult{Name: name, Status: SeverityFail, Summary: "cannot read the local CA", Detail: []string{err.Error()}}
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(pemStr)) {
+		return CheckResult{Name: name, Status: SeverityFail, Summary: "local CA is not valid PEM"}
+	}
+
 	if len(names) > 0 {
-		pemStr, err := a.ExportCA(ctx, true)
-		if err != nil {
-			return CheckResult{Name: name, Status: SeverityFail, Summary: "cannot read the local CA", Detail: []string{err.Error()}}
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM([]byte(pemStr)) {
-			return CheckResult{Name: name, Status: SeverityFail, Summary: "local CA is not valid PEM"}
-		}
 		cfg := &tls.Config{ServerName: names[0], RootCAs: pool, MinVersion: tls.VersionTLS12}
 		if err := lanTLSDial(ctx, addr, cfg); err != nil {
 			failures = append(failures, fmt.Sprintf("%s did not verify for %s: %v", addr, names[0], err))
@@ -219,14 +223,17 @@ func checkLANPath(ctx context.Context, a *App) CheckResult {
 		}
 	}
 	if len(tests) > 0 {
-		// Verification is off on purpose: any completed handshake means
-		// the LAN listener answers for a .test name.
-		cfg := &tls.Config{ServerName: tests[0], InsecureSkipVerify: true, MinVersion: tls.VersionTLS12} //nolint:gosec // probing for a handshake, not trust
-		// Only a TLS alert counts as a refusal: a failed dial or a dropped
-		// connection says nothing about how .test names are handled.
+		cfg := &tls.Config{ServerName: tests[0], RootCAs: pool, MinVersion: tls.VersionTLS12}
+		// Only a TLS alert counts as a refusal. A completed handshake, or a
+		// certificate this client rejects, means the listener answered the
+		// name. A failed dial or a dropped connection says nothing about
+		// how .test names are handled.
+		var verr *tls.CertificateVerificationError
 		switch err := lanTLSDial(ctx, addr, cfg); {
 		case err == nil:
 			failures = append(failures, fmt.Sprintf("%s completed a handshake for %s: the LAN listener must refuse .test names", addr, tests[0]))
+		case errors.As(err, &verr):
+			failures = append(failures, fmt.Sprintf("%s answered %s with a certificate the local CA does not vouch for: the LAN listener must refuse .test names", addr, tests[0]))
 		case isTLSAlert(err):
 			passes = append(passes, tests[0]+" is refused")
 		default:
