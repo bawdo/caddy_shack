@@ -1,0 +1,12 @@
+# Accepted findings for osv-scanner, which OpenSSF Scorecard's Vulnerabilities
+# check runs against go.mod. Keep each entry narrow and dated, and re-check it
+# when it expires.
+
+[[IgnoredVulns]]
+id = "GO-2026-5932"
+ignoreUntil = 2027-05-01
+reason = """
+golang.org/x/crypto/openpgp is deprecated and unmaintained, and the advisory \
+has no fixed version. caddy_shack never imports it (go list -deps ./... has \
+no openpgp package); x/crypto is only an indirect requirement.\
+"""
