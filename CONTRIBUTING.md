@@ -16,7 +16,7 @@ through [SECURITY.md](SECURITY.md), not the issue tracker. Please follow the
 2. Add tests for any new functionality or bug fix in the same pull request:
    unit tests alongside the code, and an integration test under
    `test/integration` when the change touches Docker or Caddy. Codecov fails
-   a pull request that takes project coverage below 80% or more than 1%
+   a pull request that takes project coverage below 85% or more than 1%
    below its base.
 3. Run `make pre-ci` before pushing. It mirrors the GitHub Actions checks
    (format, tests with the race detector, lint, coverage, build, a CLI smoke
