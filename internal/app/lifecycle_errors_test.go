@@ -541,3 +541,25 @@ func TestEnsureRelayFailures(t *testing.T) {
 		})
 	}
 }
+
+// An unreachable daemon is exit 4 from start and stop alike, before either
+// touches Caddy or the forwarder.
+func TestStartAndStopDaemonUnreachableIsExit4(t *testing.T) {
+	for name, run := range map[string]func(a *App) error{
+		"start": func(a *App) error { return a.Start(context.Background()) },
+		"stop":  func(a *App) error { return a.Stop() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, http.StatusOK)
+			d := f.app.docker.(*docker.Fake)
+			d.DaemonErr = docker.ErrDaemonUnreachable
+			err := run(f.app)
+			if !errors.Is(err, ErrDockerUnreachable) || ExitCode(err) != 4 {
+				t.Fatalf("err = %v (exit %d), want ErrDockerUnreachable (exit 4)", err, ExitCode(err))
+			}
+			if f.loads() != 0 || d.Containers[CaddyContainerName] != docker.StateRunning {
+				t.Errorf("caddy touched: loads=%d state=%v", f.loads(), d.Containers[CaddyContainerName])
+			}
+		})
+	}
+}
