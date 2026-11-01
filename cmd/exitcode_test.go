@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"errors"
+	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 
 	"github.com/bawdo/caddy_shack/internal/acme"
 	"github.com/bawdo/caddy_shack/internal/app"
@@ -45,6 +48,46 @@ func TestExitCodeContract(t *testing.T) {
 			code: 2,
 			want: app.ErrInvalidArgs,
 			args: []string{"doctor", "--yes"},
+		},
+		{
+			name: "2 invalid arguments (unknown command)",
+			code: 2,
+			want: app.ErrInvalidArgs,
+			args: []string{"nosuchcmd"},
+		},
+		{
+			name: "2 invalid arguments (missing positional argument)",
+			code: 2,
+			want: app.ErrInvalidArgs,
+			args: []string{"register"},
+		},
+		{
+			name: "2 invalid arguments (missing required flag)",
+			code: 2,
+			want: app.ErrInvalidArgs,
+			args: []string{"register", "myapp"},
+		},
+		{
+			name: "2 invalid arguments (cert request without --email)",
+			code: 2,
+			want: app.ErrInvalidArgs,
+			args: []string{"cert", "request", "alpha.arrix.dev"},
+		},
+		{
+			name: "2 invalid arguments (unknown flag)",
+			code: 2,
+			want: app.ErrInvalidArgs,
+			args: []string{"status", "--bogus"},
+		},
+		{
+			// An error from inside a command body is not a usage error, even
+			// a plain one cobra could not tell apart from its own.
+			name: "1 command body failure is not reclassified as 2",
+			code: 1,
+			setup: func(t *testing.T, e *testEnv) {
+				newApp = func() (*app.App, error) { return nil, errors.New("config dir unavailable") }
+			},
+			args: []string{"status"},
 		},
 		{
 			name: "3 domain conflict",
@@ -134,5 +177,35 @@ func TestExitCodeContract(t *testing.T) {
 			r := e.run(t, tc.stdin, tc.args...)
 			wantCode(t, r, tc.code, tc.want)
 		})
+	}
+}
+
+// TestNoCommandHasPreRunHooks guards the assumption execute relies on: an
+// error returned before any RunE starts came from cobra's own validation. A
+// PreRun hook that fails would break that and exit 2 for a non-usage error.
+func TestNoCommandHasPreRunHooks(t *testing.T) {
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		if c.PreRun != nil || c.PreRunE != nil || c.PersistentPreRun != nil || c.PersistentPreRunE != nil {
+			t.Errorf("%q has a PreRun hook; execute would report its errors as exit 2", c.CommandPath())
+		}
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+	}
+	walk(newRootCmd())
+}
+
+// TestUsageErrorKeepsCobrasMessage checks that classifying a usage error as
+// exit 2 changes only the code: the user still sees cobra's own message, once.
+func TestUsageErrorKeepsCobrasMessage(t *testing.T) {
+	e := newInstalledEnv(t)
+	r := e.run(t, "", "status", "--bogus")
+	wantCode(t, r, 2, app.ErrInvalidArgs)
+	if got := strings.Count(r.stderr, "unknown flag: --bogus"); got != 1 {
+		t.Errorf("stderr mentions the unknown flag %d times, want once:\n%s", got, r.stderr)
+	}
+	if strings.Contains(r.stderr, app.ErrInvalidArgs.Error()) {
+		t.Errorf("stderr leaks the internal sentinel text:\n%s", r.stderr)
 	}
 }

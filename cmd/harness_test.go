@@ -209,7 +209,7 @@ func (e *testEnv) run(t *testing.T, stdin string, args ...string) result {
 	root.SetIn(strings.NewReader(stdin))
 	root.SetOut(&out)
 	root.SetErr(&errOut)
-	err := root.ExecuteContext(t.Context())
+	err := execute(t.Context(), root)
 	return result{stdout: out.String(), stderr: errOut.String(), err: err, code: app.ExitCode(err)}
 }
 
