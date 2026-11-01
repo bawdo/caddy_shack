@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -26,10 +27,19 @@ import (
 
 const testContainerName = "caddy_shack_it"
 
-// SkipUnlessDocker skips the test if `docker info` doesn't succeed.
+// requireDockerEnv, when set to a non-empty value, makes SkipUnlessDocker
+// fail instead of skip. CI sets it: a silent skip there would pass the job
+// and quietly drop the suite's coverage upload.
+const requireDockerEnv = "CADDY_SHACK_REQUIRE_DOCKER"
+
+// SkipUnlessDocker skips the test if `docker info` doesn't succeed, or fails
+// it when requireDockerEnv is set.
 func SkipUnlessDocker(t *testing.T) {
 	t.Helper()
 	if err := exec.Command("docker", "info").Run(); err != nil {
+		if os.Getenv(requireDockerEnv) != "" {
+			t.Fatalf("docker unavailable and %s is set: %v", requireDockerEnv, err)
+		}
 		t.Skipf("docker unavailable: %v", err)
 	}
 }
