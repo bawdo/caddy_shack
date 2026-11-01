@@ -40,6 +40,7 @@ func newDoctorCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "doctor",
 		Short: "Diagnose CaddyShack prerequisites; --fix to remediate",
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Validate flags before constructing the App so invalid
 			// arguments (exit 2) win over a construction failure.

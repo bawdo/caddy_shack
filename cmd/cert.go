@@ -54,6 +54,8 @@ func newCertCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "cert",
 		Short: "Manage Let's Encrypt certificates for public domains",
+		Args:  noArgs,
+		RunE:  showHelp,
 		Long: `Obtain and manage publicly trusted Let's Encrypt certificates for domains
 you control, alongside the internal CA that serves .test.
 

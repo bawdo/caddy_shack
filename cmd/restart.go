@@ -10,6 +10,7 @@ func newRestartCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "restart",
 		Short: "Stop then start the Caddy container",
+		Args:  noArgs,
 		RunE: withApp(func(cmd *cobra.Command, _ []string, a *app.App) error {
 			return a.Restart(cmd.Context())
 		}),

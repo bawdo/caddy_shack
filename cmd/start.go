@@ -10,6 +10,7 @@ func newStartCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "start",
 		Short: "Start the existing Caddy container",
+		Args:  noArgs,
 		RunE: withApp(func(cmd *cobra.Command, _ []string, a *app.App) error {
 			return a.Start(cmd.Context())
 		}),

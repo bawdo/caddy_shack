@@ -14,6 +14,8 @@ func newLANCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "lan",
 		Short: "Expose registered backends to the local network",
+		Args:  noArgs,
+		RunE:  showHelp,
 	}
 	c.AddCommand(newLANEnableCmd(), newLANDisableCmd())
 	return c

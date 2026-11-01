@@ -19,6 +19,7 @@ internal-CA certs survive, and registered backends are restored from state (the
 registry is the source of truth, so routes it doesn't know about are not
 carried over). Let's Encrypt certs survive separately, being stored on the
 host and re-pushed from state. No-op when already up to date.`,
+		Args: noArgs,
 		RunE: withApp(func(cmd *cobra.Command, _ []string, a *app.App) error {
 			rep, err := a.Upgrade(cmd.Context())
 			if err != nil {

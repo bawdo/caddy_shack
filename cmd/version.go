@@ -16,6 +16,7 @@ func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Print the caddy_shack version, commit, and tag",
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			info := version.Resolve()
 			w := cmd.OutOrStdout()

@@ -107,6 +107,25 @@ full design.`,
 	return root
 }
 
+// noArgs is the Args validator for every command that takes no positional
+// arguments. Without one, cobra accepts and ignores stray arguments, so
+// "stop now" would stop Caddy and exit 0. A lone "help" is let through
+// because applyHelpBareword turns it into the command's help.
+func noArgs(cmd *cobra.Command, args []string) error {
+	if len(args) == 1 && args[0] == "help" {
+		return nil
+	}
+	return cobra.NoArgs(cmd, args)
+}
+
+// showHelp is the RunE of a command that only groups subcommands. Without a
+// RunE cobra prints the help for any arguments at all and exits 0, so an
+// unknown subcommand such as "lan bogus" would look like success. With one,
+// noArgs rejects the unknown name and a bare "lan" still prints the help.
+func showHelp(cmd *cobra.Command, _ []string) error {
+	return cmd.Help()
+}
+
 func applyHelpBareword(cmd *cobra.Command) {
 	orig := cmd.RunE
 	if orig != nil {

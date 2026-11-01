@@ -16,6 +16,7 @@ func newListCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List registered backends and whether Caddy is serving them",
+		Args:  noArgs,
 		RunE: withApp(func(cmd *cobra.Command, _ []string, a *app.App) error {
 			items, err := a.List(cmd.Context())
 			if err != nil {

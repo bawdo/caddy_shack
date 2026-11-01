@@ -7,12 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Commands that take no arguments now reject stray ones with exit code 2
+  instead of ignoring them: `caddy_shack stop now` used to stop Caddy and
+  exit 0. A lone `help`, as in `caddy_shack status help`, still prints the
+  command's help.
+
 ### Fixed
 
 - Usage errors now exit with code 2 (invalid arguments), as the help has
   always documented, instead of 1: an unknown command or flag, a missing
   argument such as `register` without a name, and a missing required flag
   such as `--port` or `--email`. The message printed is unchanged.
+- An unknown subcommand of `lan` or `cert`, such as `caddy_shack lan bogus`,
+  now exits 2 with an error instead of printing help and exiting 0.
 
 ## [0.2.2] - 2026-11-01
 
