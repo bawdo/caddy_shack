@@ -47,6 +47,9 @@ comment:
 ignore:
   - "**/*_test.go"
   - "**/testdata"
+  # Integration helpers live in non-_test.go files behind a build tag, so
+  # -coverpkg=./... instruments them. They are test code, not product.
+  - "test/**"
 
 github_checks:
   annotations: true
