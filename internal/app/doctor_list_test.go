@@ -76,19 +76,20 @@ func TestBuildCheckListPerOS(t *testing.T) {
 		goos string
 		// extra sits between the .test DNS check and the trust store.
 		extra []string
-		// ran and notRan are command prefixes the fake shell must and must
-		// not have seen.
+		// ran and notRan are the tools the fake shell must and must not
+		// have seen. Only the tool is pinned, not its arguments, which
+		// belong to the individual checks rather than to the list.
 		ran, notRan []string
 	}{
 		{
 			goos:   "linux",
 			extra:  []string{"dns-negative-lookups"},
-			ran:    []string{"getent ahosts", "systemctl is-active ufw"},
+			ran:    []string{"getent", "systemctl"},
 			notRan: []string{"dscacheutil", "brew", "/usr/libexec/ApplicationFirewall/socketfilterfw"},
 		},
 		{
 			goos:   "darwin",
-			ran:    []string{"dscacheutil -q host", "/usr/libexec/ApplicationFirewall/socketfilterfw --getblockall"},
+			ran:    []string{"dscacheutil", "/usr/libexec/ApplicationFirewall/socketfilterfw"},
 			notRan: []string{"getent", "systemctl"},
 		},
 	}

@@ -209,3 +209,26 @@ func TestUsageErrorKeepsCobrasMessage(t *testing.T) {
 		t.Errorf("stderr leaks the internal sentinel text:\n%s", r.stderr)
 	}
 }
+
+// failingWriter refuses every write, standing in for a full disk or a
+// closed pipe.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("no space left on device") }
+
+// TestCompletionWriteFailureIsNotAUsageError covers the completion commands
+// cobra adds itself during Execute. Their RunE must count as a command body
+// starting, so a failed write exits 1, not 2.
+func TestCompletionWriteFailureIsNotAUsageError(t *testing.T) {
+	root := newRootCmd()
+	root.SetArgs([]string{"completion", "zsh"})
+	root.SetOut(failingWriter{})
+	root.SetErr(&strings.Builder{})
+	err := execute(t.Context(), root)
+	if err == nil {
+		t.Fatal("completion zsh to a failing writer returned nil")
+	}
+	if code := app.ExitCode(err); code != 1 {
+		t.Errorf("exit code = %d, want 1 (err: %v)", code, err)
+	}
+}

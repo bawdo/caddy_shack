@@ -830,7 +830,9 @@ make pre-ci-fix
 
 The script runs `govulncheck` and a short fuzz pass (5 seconds per target)
 along with the other checks. It does not run the Docker-backed integration
-tests; `make integration` runs those, matching the CI job.
+tests; `make integration` runs the same tests as the CI job. CI also sets
+`CADDY_SHACK_REQUIRE_DOCKER=1`, which fails the suite instead of skipping it
+when Docker is unavailable, and uploads the suite's coverage to Codecov.
 
 Install a local build into `$GOBIN`:
 

@@ -30,6 +30,11 @@ func Execute() int {
 // PersistentPreRunE would also read as a usage error.
 // TestNoCommandHasPreRunHooks guards that.
 func execute(ctx context.Context, root *cobra.Command) error {
+	// Cobra adds its completion commands, which use RunE, only inside
+	// ExecuteContext. Adding them first (cobra skips the step once they
+	// exist) puts them in the tree markRunStart walks. A hook cannot do this
+	// job: PersistentPreRun runs before cobra checks required flags.
+	root.InitDefaultCompletionCmd()
 	started := false
 	markRunStart(root, &started)
 	err := root.ExecuteContext(ctx)
