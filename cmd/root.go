@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os/signal"
 	"syscall"
 
@@ -14,8 +16,40 @@ import (
 func Execute() int {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	err := newRootCmd().ExecuteContext(ctx)
-	return app.ExitCode(err)
+	return app.ExitCode(execute(ctx, newRootCmd()))
+}
+
+// execute runs root and reports any error cobra raised before a command body
+// started as a usage error, so it exits 2 as the help promises. Cobra checks
+// the command name, flags, positional arguments and required flags itself and
+// returns plain errors with no sentinel, so "no RunE started" is the one
+// signal that covers all of them. Cobra has already printed its own message
+// by the time it returns, so only the exit code changes.
+//
+// This holds while no command has a PreRun hook: an error from a PreRunE or
+// PersistentPreRunE would also read as a usage error.
+// TestNoCommandHasPreRunHooks guards that.
+func execute(ctx context.Context, root *cobra.Command) error {
+	started := false
+	markRunStart(root, &started)
+	err := root.ExecuteContext(ctx)
+	if err != nil && !started && !errors.Is(err, app.ErrInvalidArgs) {
+		return fmt.Errorf("%w: %w", app.ErrInvalidArgs, err)
+	}
+	return err
+}
+
+// markRunStart wraps every RunE in the tree so it sets *started on entry.
+func markRunStart(cmd *cobra.Command, started *bool) {
+	if run := cmd.RunE; run != nil {
+		cmd.RunE = func(c *cobra.Command, args []string) error {
+			*started = true
+			return run(c, args)
+		}
+	}
+	for _, sub := range cmd.Commands() {
+		markRunStart(sub, started)
+	}
 }
 
 func newRootCmd() *cobra.Command {

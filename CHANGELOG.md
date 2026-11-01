@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Usage errors now exit with code 2 (invalid arguments), as the help has
+  always documented, instead of 1: an unknown command or flag, a missing
+  argument such as `register` without a name, and a missing required flag
+  such as `--port` or `--email`. The message printed is unchanged.
+
 ## [0.2.2] - 2026-11-01
 
 ### Changed
