@@ -18,9 +18,10 @@ coverage:
       # uploads, where a partly run line (usually an untested error branch)
       # counts as a miss. It reads lower than `go tool cover`'s statement
       # figure: on 2026-11-01 Codecov showed 77.54% for 79.9% of statements
-      # (Linux unit tests only). After the integration upload and the error
-      # path tests, statements measured 92.3% locally, so 85% leaves headroom
-      # until the first merged Codecov report confirms the real line figure.
+      # (Linux unit tests only). The first merged report with all three
+      # uploads, on main at a4c6111 (PR #19, 2026-11-01), showed 90.24%
+      # (3,758 of 4,164 lines hit, 146 partial), so 85% leaves about five
+      # points of headroom.
       default:
         target: 85%
         threshold: 1%
