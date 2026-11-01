@@ -10,6 +10,7 @@ func newStopCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "stop",
 		Short: "Stop the Caddy container",
+		Args:  noArgs,
 		RunE: withApp(func(cmd *cobra.Command, _ []string, a *app.App) error {
 			return a.Stop()
 		}),

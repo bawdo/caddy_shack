@@ -153,3 +153,46 @@ func TestApplyFixAppliedAndFailedPaths(t *testing.T) {
 		t.Errorf("fail path err: %v", err)
 	}
 }
+
+// TestRunChecksMarksAnInterruptedRunIncomplete cancels partway through the
+// list: the checks that finished are kept, the rest never run, and the
+// report says it is incomplete rather than passing on what little ran.
+func TestRunChecksMarksAnInterruptedRunIncomplete(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pass := func(name string) CheckResult { return CheckResult{Name: name, Status: SeverityPass} }
+	checks := []func(context.Context) CheckResult{
+		func(context.Context) CheckResult { return pass("first") },
+		func(context.Context) CheckResult { cancel(); return pass("second") },
+		func(context.Context) CheckResult { t.Error("a check ran after cancellation"); return pass("third") },
+	}
+	rep, err := runChecks(ctx, checks)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if !rep.Interrupted {
+		t.Error("Interrupted = false for a cancelled run")
+	}
+	if rep.Overall != SeverityFail {
+		t.Errorf("Overall = %v for an interrupted run, want fail", rep.Overall)
+	}
+	if len(rep.Checks) != 2 || rep.Summary.Pass != 2 {
+		t.Errorf("kept %d checks (summary %+v), want the 2 that finished", len(rep.Checks), rep.Summary)
+	}
+}
+
+// TestRunChecksCompleteRunIsNotInterrupted pins the normal path: every check
+// runs and the overall result comes from their statuses alone.
+func TestRunChecksCompleteRunIsNotInterrupted(t *testing.T) {
+	checks := []func(context.Context) CheckResult{
+		func(context.Context) CheckResult { return CheckResult{Name: "a", Status: SeverityPass} },
+		func(context.Context) CheckResult { return CheckResult{Name: "b", Status: SeverityWarn} },
+	}
+	rep, err := runChecks(context.Background(), checks)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if rep.Interrupted || rep.Overall != SeverityWarn || len(rep.Checks) != 2 {
+		t.Errorf("report = %+v, want 2 checks, overall warn, not interrupted", rep)
+	}
+}

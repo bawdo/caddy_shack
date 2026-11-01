@@ -10,6 +10,7 @@ func newInstallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "install",
 		Short: "Install and start the local Caddy container",
+		Args:  noArgs,
 		RunE: withApp(func(cmd *cobra.Command, _ []string, a *app.App) error {
 			return a.Install(cmd.Context())
 		}),

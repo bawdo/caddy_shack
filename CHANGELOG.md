@@ -7,12 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-01
+
+### Changed
+
+- Commands that take no arguments now reject stray ones with exit code 2
+  instead of ignoring them: `caddy_shack stop now` used to stop Caddy and
+  exit 0. A lone `help`, as in `caddy_shack status help`, still prints the
+  command's help.
+
 ### Fixed
 
 - Usage errors now exit with code 2 (invalid arguments), as the help has
   always documented, instead of 1: an unknown command or flag, a missing
   argument such as `register` without a name, and a missing required flag
   such as `--port` or `--email`. The message printed is unchanged.
+- An unknown subcommand of `lan` or `cert`, such as `caddy_shack lan bogus`,
+  now exits 2 with an error instead of printing help and exiting 0.
+- An interrupted `doctor` (for example Ctrl-C) no longer reports "all
+  checks passed" for the checks it never ran. It prints how many checks
+  finished and that the results are incomplete, and `--json` reports
+  `"overall": "fail"` with `"interrupted": true`.
 
 ## [0.2.2] - 2026-11-01
 
@@ -81,7 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`caddy_shack cert`).
 - `version`, which prints the build identity.
 
-[Unreleased]: https://github.com/bawdo/caddy_shack/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/bawdo/caddy_shack/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/bawdo/caddy_shack/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/bawdo/caddy_shack/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/bawdo/caddy_shack/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/bawdo/caddy_shack/compare/v0.1.0...v0.2.0

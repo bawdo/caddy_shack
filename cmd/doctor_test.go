@@ -377,3 +377,44 @@ func TestRunFixLoopFailsWhenFailingChecksRemain(t *testing.T) {
 		})
 	}
 }
+
+// TestRenderDoctorHumanInterrupted checks an interrupted run never reads as a
+// pass: it says how far it got and that the results are incomplete.
+func TestRenderDoctorHumanInterrupted(t *testing.T) {
+	rep := app.DoctorReport{
+		SchemaVersion: 1,
+		Overall:       app.SeverityFail,
+		Interrupted:   true,
+		Checks: []app.CheckResult{
+			{Name: "docker-daemon", Status: app.SeverityPass, Summary: "reachable"},
+			{Name: "docker-engine", Status: app.SeverityPass, Summary: "Docker Desktop"},
+		},
+		Summary: app.DoctorReportSummary{Pass: 2},
+	}
+	var buf bytes.Buffer
+	renderDoctorHuman(&buf, rep)
+	out := buf.String()
+	if strings.Contains(out, "all checks passed") {
+		t.Errorf("an interrupted run reads as a pass:\n%s", out)
+	}
+	if !strings.Contains(out, "doctor interrupted after 2 check(s); results are incomplete.") {
+		t.Errorf("missing the interrupted summary:\n%s", out)
+	}
+}
+
+// TestRenderDoctorJSONInterruptedField checks "interrupted" appears only for
+// an interrupted run, so a complete run's JSON is unchanged.
+func TestRenderDoctorJSONInterruptedField(t *testing.T) {
+	for _, interrupted := range []bool{false, true} {
+		var buf bytes.Buffer
+		renderDoctorJSON(&buf, app.DoctorReport{SchemaVersion: 1, Interrupted: interrupted})
+		var m map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		got, present := m["interrupted"]
+		if present != interrupted || (interrupted && got != true) {
+			t.Errorf("Interrupted=%v: interrupted key = %v (present %v)", interrupted, got, present)
+		}
+	}
+}

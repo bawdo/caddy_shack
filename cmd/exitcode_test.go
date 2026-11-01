@@ -80,6 +80,30 @@ func TestExitCodeContract(t *testing.T) {
 			args: []string{"status", "--bogus"},
 		},
 		{
+			name: "2 invalid arguments (unknown lan subcommand)",
+			code: 2,
+			want: app.ErrInvalidArgs,
+			args: []string{"lan", "bogus"},
+		},
+		{
+			name: "2 invalid arguments (unknown cert subcommand)",
+			code: 2,
+			want: app.ErrInvalidArgs,
+			args: []string{"cert", "bogus"},
+		},
+		{
+			name: "2 invalid arguments (stray argument to version)",
+			code: 2,
+			want: app.ErrInvalidArgs,
+			args: []string{"version", "extra"},
+		},
+		{
+			name: "2 invalid arguments (stray argument to ca)",
+			code: 2,
+			want: app.ErrInvalidArgs,
+			args: []string{"ca", "extra"},
+		},
+		{
 			// An error from inside a command body is not a usage error, even
 			// a plain one cobra could not tell apart from its own.
 			name: "1 command body failure is not reclassified as 2",
@@ -230,5 +254,54 @@ func TestCompletionWriteFailureIsNotAUsageError(t *testing.T) {
 	}
 	if code := app.ExitCode(err); code != 1 {
 		t.Errorf("exit code = %d, want 1 (err: %v)", code, err)
+	}
+}
+
+// TestEveryCommandDeclaresArgs guards against cobra's default for a command
+// with no Args validator: it accepts and ignores stray arguments, so
+// "caddy_shack stop now" would stop Caddy and exit 0 instead of exiting 2.
+func TestEveryCommandDeclaresArgs(t *testing.T) {
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		if c.HasParent() && c.Args == nil {
+			t.Errorf("%q has no Args validator, so it ignores stray arguments", c.CommandPath())
+		}
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+	}
+	walk(newRootCmd())
+}
+
+// TestStrayArgumentDoesNotRunTheCommand checks a rejected argument stops the
+// command before it acts: Caddy is still running after "stop now".
+func TestStrayArgumentDoesNotRunTheCommand(t *testing.T) {
+	e := newInstalledEnv(t)
+	r := e.run(t, "", "stop", "now")
+	wantCode(t, r, 2, app.ErrInvalidArgs)
+	if got := e.dock.Containers[app.CaddyContainerName]; got != docker.StateRunning {
+		t.Errorf("caddy container state = %v after a rejected stop, want running", got)
+	}
+}
+
+// TestHelpStillExitsZero pins the help paths the stray-argument checks must
+// leave alone: a bare parent prints its help, and a lone "help" after a
+// command that takes no arguments prints that command's help.
+func TestHelpStillExitsZero(t *testing.T) {
+	for _, args := range [][]string{
+		{"lan"},
+		{"cert"},
+		{"status", "help"},
+		{"version", "help"},
+		{"lan", "--help"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			e := newTestEnv(t)
+			r := e.run(t, "", args...)
+			wantCode(t, r, 0, nil)
+			if !strings.Contains(r.stdout, "Usage:") {
+				t.Errorf("stdout has no usage text:\n%s", r.stdout)
+			}
+		})
 	}
 }

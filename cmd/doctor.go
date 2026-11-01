@@ -40,6 +40,7 @@ func newDoctorCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "doctor",
 		Short: "Diagnose CaddyShack prerequisites; --fix to remediate",
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Validate flags before constructing the App so invalid
 			// arguments (exit 2) win over a construction failure.
@@ -97,6 +98,10 @@ func renderDoctorHuman(w io.Writer, rep app.DoctorReport) {
 	}
 	_, _ = fmt.Fprintln(w)
 
+	if rep.Interrupted {
+		_, _ = fmt.Fprintf(w, "doctor interrupted after %d check(s); results are incomplete.\n", len(rep.Checks))
+		return
+	}
 	issues := rep.Summary.Fail + rep.Summary.Warn
 	if issues == 0 {
 		_, _ = fmt.Fprintln(w, "all checks passed.")

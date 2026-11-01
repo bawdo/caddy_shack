@@ -22,6 +22,7 @@ source of truth: live routes it doesn't know about are removed.
 start, restart, install, register and deregister already do this, so sync
 is for scripts that act on 'caddy_shack status' exiting 9 (drift) without
 changing anything else. Safe to run at any time; a no-op when in sync.`,
+		Args: noArgs,
 		RunE: withApp(func(cmd *cobra.Command, _ []string, a *app.App) error {
 			rep, err := a.Sync(cmd.Context())
 			if err != nil {
