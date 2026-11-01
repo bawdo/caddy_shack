@@ -1,3 +1,11 @@
+codecov:
+  notify:
+    # CI uploads three reports per commit, merged into one total: unit-linux
+    # and unit-darwin (the Test matrix) and integration (the Docker suite).
+    # Waiting for all three stops a status or comment going out on a partial
+    # merge, which would read low and fail the floor below.
+    after_n_builds: 3
+
 coverage:
   precision: 2
   round: down
@@ -5,10 +13,16 @@ coverage:
 
   status:
     project:
-      # Floor: project coverage must stay at or above 80%. Measured coverage
-      # was 80.1% on 2026-10-27.
+      # Floor: project coverage must stay at or above 85%. This is Codecov's
+      # line figure over the merged unit-linux, unit-darwin and integration
+      # uploads, where a partly run line (usually an untested error branch)
+      # counts as a miss. It reads lower than `go tool cover`'s statement
+      # figure: on 2026-11-01 Codecov showed 77.54% for 79.9% of statements
+      # (Linux unit tests only). After the integration upload and the error
+      # path tests, statements measured 92.3% locally, so 85% leaves headroom
+      # until the first merged Codecov report confirms the real line figure.
       default:
-        target: 80%
+        target: 85%
         threshold: 1%
         informational: false
         if_ci_failed: error
@@ -33,11 +47,15 @@ comment:
   require_changes: false
   require_base: false
   require_head: true
+  after_n_builds: 3
   hide_project_coverage: false
 
 ignore:
   - "**/*_test.go"
   - "**/testdata"
+  # Integration helpers live in non-_test.go files behind a build tag, so
+  # -coverpkg=./... instruments them. They are test code, not product.
+  - "test/**"
 
 github_checks:
   annotations: true

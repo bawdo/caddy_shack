@@ -258,10 +258,12 @@ check_coverage() {
         echo -e "${GREEN}✓ Coverage report generated${NC}"
         echo -e "  Total coverage: ${BLUE}${COVERAGE}%${NC}"
 
-        if (( $(echo "$COVERAGE >= 80" | bc -l) )); then
-            echo -e "  ${GREEN}✓ Meets coverage target (80%)${NC}"
+        # Unit tests only and statement-based, so a rough guide to the
+        # Codecov floor in .codecov.yml, which also counts integration runs.
+        if (( $(echo "$COVERAGE >= 85" | bc -l) )); then
+            echo -e "  ${GREEN}✓ Meets coverage target (85%)${NC}"
         else
-            echo -e "  ${YELLOW}⚠ Below coverage target (80%)${NC}"
+            echo -e "  ${YELLOW}⚠ Below coverage target (85%)${NC}"
         fi
     else
         record_result "Coverage Generation" "FAIL" "Coverage generation failed"

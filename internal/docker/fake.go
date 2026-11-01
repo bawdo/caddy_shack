@@ -12,9 +12,9 @@ import (
 // Fake is an in-memory Client for app-layer tests. Records calls and
 // transitions container state per CreateAndStart/Start/Stop/Remove.
 //
-// Error-injection fields (DaemonErr, PullErr, CreateAndStartErr) are
-// intended to be set during test setup, not mutated concurrently with the
-// SUT.
+// Error-injection fields (DaemonErr, PullErr, CreateAndStartErr, StartErr
+// and the rest) are intended to be set during test setup, not mutated
+// concurrently with the SUT.
 type Fake struct {
 	mu sync.Mutex
 
@@ -62,6 +62,19 @@ type Fake struct {
 	// relay), unlike CreateAndStartErr which fails every create.
 	CreateErrs map[string]error
 
+	// StartErr, StopErr and RemoveErr fail every Start, Stop and Remove
+	// call and leave the container as it was, as docker does when it
+	// refuses the change. A refused Remove is not recorded in Removed.
+	StartErr  error
+	StopErr   error
+	RemoveErr error
+	// EnsureVolumeErr fails every EnsureVolume call; no volume is recorded.
+	EnsureVolumeErr error
+	// ContainerStateErrs fails ContainerState for one container name only,
+	// so a failed inspect of (say) the relay can be told apart from an
+	// unreachable daemon, which DaemonErr models for every name.
+	ContainerStateErrs map[string]error
+
 	// ExecHang lists Exec keys (same form as ExecResponses) that block
 	// until ctx is done and return ctx.Err(), modelling a command that
 	// hangs (e.g. a DNS lookup stuck in a forwarding loop).
@@ -105,6 +118,9 @@ type ExecResponse struct {
 func (f *Fake) DaemonReachable() error { return f.DaemonErr }
 
 func (f *Fake) EnsureVolume(name string) error {
+	if f.EnsureVolumeErr != nil {
+		return f.EnsureVolumeErr
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Volumes[name] = true
@@ -126,6 +142,9 @@ func (f *Fake) ContainerState(name string) (ContainerState, error) {
 	defer f.mu.Unlock()
 	if f.DaemonErr != nil {
 		return StateAbsent, f.DaemonErr
+	}
+	if err := f.ContainerStateErrs[name]; err != nil {
+		return StateAbsent, err
 	}
 	s, ok := f.Containers[name]
 	if !ok {
@@ -168,6 +187,9 @@ func (f *Fake) CreateAndStart(spec ContainerSpec) error {
 }
 
 func (f *Fake) Start(name string) error {
+	if f.StartErr != nil {
+		return f.StartErr
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Containers[name] = StateRunning
@@ -175,6 +197,9 @@ func (f *Fake) Start(name string) error {
 }
 
 func (f *Fake) Stop(name string) error {
+	if f.StopErr != nil {
+		return f.StopErr
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.Containers[name]; ok {
@@ -184,6 +209,9 @@ func (f *Fake) Stop(name string) error {
 }
 
 func (f *Fake) Remove(name string) error {
+	if f.RemoveErr != nil {
+		return f.RemoveErr
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Removed = append(f.Removed, name)
