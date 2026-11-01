@@ -126,7 +126,7 @@ func (a *App) Doctor(ctx context.Context, opts DoctorOptions) (DoctorReport, err
 	add := func(r CheckResult) {
 		rep.Checks = append(rep.Checks, r)
 	}
-	checks := a.buildCheckList(opts)
+	checks := a.buildCheckList(opts, runtime.GOOS, defaultShell, defaultTTYShell)
 	for _, c := range checks {
 		if err := ctx.Err(); err != nil {
 			finaliseDoctorReport(&rep)
@@ -138,14 +138,15 @@ func (a *App) Doctor(ctx context.Context, opts DoctorOptions) (DoctorReport, err
 	return rep, nil
 }
 
-// buildCheckList returns the ordered checks Doctor will run. Each entry is
-// a closure capturing the App so the check signature stays uniform.
-func (a *App) buildCheckList(opts DoctorOptions) []func(context.Context) CheckResult {
-	sh := defaultShell
-	tty := defaultTTYShell
+// buildCheckList returns the ordered checks Doctor will run on goos, with sh
+// and tty as the executors for checks that run system tools. Each entry is
+// a closure capturing the App so the check signature stays uniform. Doctor
+// passes runtime.GOOS and the real executors; tests pass either OS and
+// fakes, so both lists are checked whatever OS the tests run on.
+func (a *App) buildCheckList(opts DoctorOptions, goos string, sh, tty shellExecutor) []func(context.Context) CheckResult {
 	checkDNS := checkDNSDarwin
 	checkTrustStore := checkTrustStoreDarwin
-	if runtime.GOOS == "linux" {
+	if goos == "linux" {
 		checkDNS = checkDNSLinux
 		checkTrustStore = checkTrustStoreLinux
 	}
@@ -159,7 +160,7 @@ func (a *App) buildCheckList(opts DoctorOptions) []func(context.Context) CheckRe
 		func(ctx context.Context) CheckResult { return checkHostGateway(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkDNS(ctx, a, sh, tty) },
 	}
-	if runtime.GOOS == "linux" {
+	if goos == "linux" {
 		// Host DNS, not engine: the resolved<->dnsmasq loop comes from the
 		// Linux .test setup, whatever engine is in use.
 		checks = append(checks, func(ctx context.Context) CheckResult { return checkDNSNegativeLinux(ctx, a, sh, tty) })
@@ -173,7 +174,7 @@ func (a *App) buildCheckList(opts DoctorOptions) []func(context.Context) CheckRe
 		func(ctx context.Context) CheckResult { return checkLANIPDrift(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkLANPath(ctx, a) },
 		func(ctx context.Context) CheckResult { return checkLANDNS(ctx, a) },
-		func(ctx context.Context) CheckResult { return checkLANFirewall(ctx, a, sh, runtime.GOOS) },
+		func(ctx context.Context) CheckResult { return checkLANFirewall(ctx, a, sh, goos) },
 	)
 	if !opts.SkipBackends {
 		checks = append(checks, func(ctx context.Context) CheckResult { return checkBackends(ctx, a) })
