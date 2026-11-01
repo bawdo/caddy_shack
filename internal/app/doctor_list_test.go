@@ -9,7 +9,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/bawdo/caddy_shack/internal/caddyapi"
 	"github.com/bawdo/caddy_shack/internal/docker"
 )
 
@@ -43,7 +45,10 @@ func runCheckList(t *testing.T, goos string, opts DoctorOptions) ([]CheckResult,
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "state.json")
 	saveState(t, p, lanState("192.168.1.12"))
-	a := NewWithPaths(Paths{StatePath: p, LockPath: p + ".lock", CertStoreDir: t.TempDir()}, nil, docker.NewFake()).
+	// A closed port, so the Caddy checks never reach a real instance on
+	// the default admin port.
+	closed := caddyapi.NewClient("http://127.0.0.1:1", time.Second)
+	a := NewWithPaths(Paths{StatePath: p, LockPath: p + ".lock", CertStoreDir: t.TempDir()}, closed, docker.NewFake()).
 		WithLANResolver(stubLAN{present: true})
 	shells := &fakeShells{}
 	tty := func(context.Context, string, ...string) ([]byte, error) {
