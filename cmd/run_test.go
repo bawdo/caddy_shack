@@ -595,7 +595,7 @@ func TestDoctorCancelledRendersPartialReport(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	err := root.ExecuteContext(ctx)
+	err := execute(ctx, root)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
