@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   such as `--port` or `--email`. The message printed is unchanged.
 - An unknown subcommand of `lan` or `cert`, such as `caddy_shack lan bogus`,
   now exits 2 with an error instead of printing help and exiting 0.
+- An interrupted `doctor` (for example Ctrl-C) no longer reports "all
+  checks passed" for the checks it never ran. It prints how many checks
+  finished and that the results are incomplete, and `--json` reports
+  `"overall": "fail"` with `"interrupted": true`.
 
 ## [0.2.2] - 2026-11-01
 

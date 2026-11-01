@@ -606,6 +606,8 @@ func TestDoctorCancelledRendersPartialReport(t *testing.T) {
 	// fields this test cares about into plain types.
 	var rep struct {
 		SchemaVersion int               `json:"schema_version"`
+		Overall       string            `json:"overall"`
+		Interrupted   bool              `json:"interrupted"`
 		Checks        []json.RawMessage `json:"checks"`
 	}
 	if err := json.Unmarshal([]byte(out.String()), &rep); err != nil {
@@ -613,5 +615,8 @@ func TestDoctorCancelledRendersPartialReport(t *testing.T) {
 	}
 	if rep.SchemaVersion != 1 || len(rep.Checks) != 0 {
 		t.Errorf("report = %+v, want schema 1 and no checks", rep)
+	}
+	if !rep.Interrupted || rep.Overall != "fail" {
+		t.Errorf("cancelled report = %+v, want interrupted and overall fail", rep)
 	}
 }

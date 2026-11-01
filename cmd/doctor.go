@@ -98,6 +98,10 @@ func renderDoctorHuman(w io.Writer, rep app.DoctorReport) {
 	}
 	_, _ = fmt.Fprintln(w)
 
+	if rep.Interrupted {
+		_, _ = fmt.Fprintf(w, "doctor interrupted after %d check(s); results are incomplete.\n", len(rep.Checks))
+		return
+	}
 	issues := rep.Summary.Fail + rep.Summary.Warn
 	if issues == 0 {
 		_, _ = fmt.Fprintln(w, "all checks passed.")

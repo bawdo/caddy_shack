@@ -90,10 +90,14 @@ type DoctorOptions struct {
 
 // DoctorReport is the full output of one Doctor run.
 type DoctorReport struct {
-	SchemaVersion int                 `json:"schema_version"`
-	Overall       Severity            `json:"overall"`
-	Checks        []CheckResult       `json:"checks"`
-	Summary       DoctorReportSummary `json:"summary"`
+	SchemaVersion int      `json:"schema_version"`
+	Overall       Severity `json:"overall"`
+	// Interrupted is true when the run was cancelled before every check
+	// ran, so Checks holds only those that finished. Omitted otherwise, so
+	// a complete run's JSON is unchanged.
+	Interrupted bool                `json:"interrupted,omitempty"`
+	Checks      []CheckResult       `json:"checks"`
+	Summary     DoctorReportSummary `json:"summary"`
 }
 
 // DoctorReportSummary counts results by status.
@@ -122,17 +126,21 @@ type PromptFunc func(label string) bool
 // checks. Returns a populated DoctorReport. Returns ctx.Err() if cancelled
 // mid-run; the report still contains every result completed so far.
 func (a *App) Doctor(ctx context.Context, opts DoctorOptions) (DoctorReport, error) {
+	return runChecks(ctx, a.buildCheckList(opts, runtime.GOOS, defaultShell, defaultTTYShell))
+}
+
+// runChecks runs checks in order, stopping before the next one once ctx is
+// done. It is Doctor's loop, separate so tests can cancel partway through a
+// list of their own instead of the real host checks.
+func runChecks(ctx context.Context, checks []func(context.Context) CheckResult) (DoctorReport, error) {
 	rep := DoctorReport{SchemaVersion: 1}
-	add := func(r CheckResult) {
-		rep.Checks = append(rep.Checks, r)
-	}
-	checks := a.buildCheckList(opts, runtime.GOOS, defaultShell, defaultTTYShell)
 	for _, c := range checks {
 		if err := ctx.Err(); err != nil {
+			rep.Interrupted = true
 			finaliseDoctorReport(&rep)
 			return rep, err
 		}
-		add(c(ctx))
+		rep.Checks = append(rep.Checks, c(ctx))
 	}
 	finaliseDoctorReport(&rep)
 	return rep, nil
@@ -204,7 +212,9 @@ func finaliseDoctorReport(rep *DoctorReport) {
 		}
 	}
 	switch {
-	case rep.Summary.Fail > 0:
+	// An interrupted run never passes: the checks that did not run could
+	// have failed, and the command exits non-zero anyway.
+	case rep.Interrupted, rep.Summary.Fail > 0:
 		rep.Overall = SeverityFail
 	case rep.Summary.Warn > 0:
 		rep.Overall = SeverityWarn
