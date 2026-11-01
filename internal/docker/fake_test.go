@@ -120,3 +120,48 @@ func TestFakeDefaultsToDockerDesktop(t *testing.T) {
 		t.Error("GatewayErr not honoured")
 	}
 }
+
+// A refused Start, Stop or Remove leaves the container as it was, so app
+// tests can assert what a failed docker call did not change.
+func TestFakeRefusedLifecycleCallsChangeNothing(t *testing.T) {
+	f := NewFake()
+	f.Containers["c"] = StateStopped
+	f.StartErr = errors.New("start")
+	if err := f.Start("c"); !errors.Is(err, f.StartErr) || f.Containers["c"] != StateStopped {
+		t.Errorf("Start: err=%v state=%v", err, f.Containers["c"])
+	}
+	f.Containers["c"] = StateRunning
+	f.StopErr = errors.New("stop")
+	if err := f.Stop("c"); !errors.Is(err, f.StopErr) || f.Containers["c"] != StateRunning {
+		t.Errorf("Stop: err=%v state=%v", err, f.Containers["c"])
+	}
+	f.RemoveErr = errors.New("rm")
+	if err := f.Remove("c"); !errors.Is(err, f.RemoveErr) {
+		t.Errorf("Remove: err=%v", err)
+	}
+	if _, ok := f.Containers["c"]; !ok || len(f.Removed) != 0 {
+		t.Errorf("refused Remove changed state: containers=%v removed=%v", f.Containers, f.Removed)
+	}
+}
+
+func TestFakeEnsureVolumeErr(t *testing.T) {
+	f := NewFake()
+	f.EnsureVolumeErr = errors.New("volume")
+	if err := f.EnsureVolume("v"); !errors.Is(err, f.EnsureVolumeErr) || f.Volumes["v"] {
+		t.Errorf("err=%v recorded=%v", err, f.Volumes["v"])
+	}
+}
+
+// ContainerStateErrs fails one name only; the others still report.
+func TestFakeContainerStateErrsIsPerName(t *testing.T) {
+	f := NewFake()
+	f.Containers["a"] = StateRunning
+	f.Containers["b"] = StateRunning
+	f.ContainerStateErrs = map[string]error{"a": errors.New("inspect a")}
+	if _, err := f.ContainerState("a"); err == nil {
+		t.Error("a: want error")
+	}
+	if st, err := f.ContainerState("b"); err != nil || st != StateRunning {
+		t.Errorf("b: %v %v", st, err)
+	}
+}
