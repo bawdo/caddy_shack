@@ -122,7 +122,7 @@ jobs:
       - name: Run govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@${{ env.VULN_VERSION }} ./...
 
-  # Runs the race-detector suite with coverage on Linux and macOS because the tool targets both, and uploads coverage from Linux only.
+  # Runs the race-detector suite with coverage on Linux and macOS because the tool targets both. Both upload, each under its own flag, so code that only runs on one OS (runtime.GOOS branches) counts towards the merged total.
   test:
     name: Test (${{ matrix.os }})
     if: github.event_name != 'schedule'
@@ -131,7 +131,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            flag: unit-linux
+          - os: macos-latest
+            flag: unit-darwin
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -152,15 +156,15 @@ jobs:
         run: go test -race -count=1 -coverprofile=coverage.txt -covermode=atomic -coverpkg=./... ./...
 
       - name: Upload coverage to Codecov
-        if: matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.txt
+          flags: ${{ matrix.flag }}
           fail_ci_if_error: false
           verbose: true
 
-  # Exercises the Docker-backed integration suite, which needs a Docker daemon that only the Linux runners provide.
+  # Exercises the Docker-backed integration suite, which needs a Docker daemon that only the Linux runners provide. The suite runs in-process, so -coverpkg=./... measures the Docker, ACME and LAN adapters it drives for real; that profile uploads under the integration flag. CADDY_SHACK_REQUIRE_DOCKER turns a missing daemon into a failure rather than a silent skip, which would otherwise drop that coverage without anyone noticing.
   integration:
     name: Integration tests
     if: github.event_name != 'schedule'
@@ -182,8 +186,19 @@ jobs:
       - name: Verify docker
         run: docker info
 
-      - name: Run integration tests
-        run: go test -tags integration -count=1 -timeout 10m -v ./test/integration/...
+      - name: Run integration tests (coverage)
+        env:
+          CADDY_SHACK_REQUIRE_DOCKER: '1'
+        run: go test -tags integration -count=1 -timeout 10m -v -coverprofile=integration-coverage.txt -covermode=atomic -coverpkg=./... ./test/integration/...
+
+      - name: Upload integration coverage to Codecov
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./integration-coverage.txt
+          flags: integration
+          fail_ci_if_error: false
+          verbose: true
 
   # Builds through the Makefile and smoke-tests the binary on Linux, since the build is platform-independent Go and the Makefile owns the ldflags.
   build:
