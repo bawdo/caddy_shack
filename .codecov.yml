@@ -13,10 +13,16 @@ coverage:
 
   status:
     project:
-      # Floor: project coverage must stay at or above 80%. Measured coverage
-      # was 80.1% on 2026-10-27.
+      # Floor: project coverage must stay at or above 85%. This is Codecov's
+      # line figure over the merged unit-linux, unit-darwin and integration
+      # uploads, where a partly run line (usually an untested error branch)
+      # counts as a miss. It reads lower than `go tool cover`'s statement
+      # figure: on 2026-11-01 Codecov showed 77.54% for 79.9% of statements
+      # (Linux unit tests only). After the integration upload and the error
+      # path tests, statements measured 92.3% locally, so 85% leaves headroom
+      # until the first merged Codecov report confirms the real line figure.
       default:
-        target: 80%
+        target: 85%
         threshold: 1%
         informational: false
         if_ci_failed: error
