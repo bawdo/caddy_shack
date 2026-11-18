@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `make outdated` reports direct Go modules with newer releases, deprecated
+  or retracted modules, direct modules with a newer major version, and the
+  golangci-lint, govulncheck and Go versions pinned in CI, warning when the
+  govulncheck pins in CI and the Makefile disagree. It then offers to upgrade
+  the modules (all, pick or none). Releases under seven days old are flagged
+  and left out of "all", matching the Dependabot cooldown. An upgrade tidies,
+  builds and tests, and is left uncommitted.
+
 ## [0.2.3] - 2026-11-01
 
 ### Changed

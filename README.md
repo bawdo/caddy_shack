@@ -834,6 +834,24 @@ tests; `make integration` runs the same tests as the CI job. CI also sets
 `CADDY_SHACK_REQUIRE_DOCKER=1`, which fails the suite instead of skipping it
 when Docker is unavailable, and uploads the suite's coverage to Codecov.
 
+Check for outdated dependencies and CI tool pins:
+
+```
+make outdated
+```
+
+It lists direct Go modules with a newer release in the same major version,
+any that are deprecated or retracted, and any with a newer major version
+(report only, since that means changing import paths). It also reports the
+golangci-lint, govulncheck and Go versions pinned in
+`.github/workflows/ci.yml`, because Dependabot cannot bump those, and warns
+when the govulncheck pin in `ci.yml` and the one in the `Makefile` disagree.
+Releases younger than `COOLDOWN_DAYS` (default 7, as in `dependabot.yml`) are
+marked too fresh and left out of "all". On a terminal it then offers to
+upgrade all, pick, or none; an upgrade runs `go get`, `go mod tidy`,
+`go build` and `go test` and shows the `go.mod` diff, without committing.
+Tool pins are report only.
+
 Install a local build into `$GOBIN`:
 
 ```

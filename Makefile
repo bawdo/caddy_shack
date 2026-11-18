@@ -54,6 +54,9 @@ pre-ci: ## Run the pre-CI checks (gofmt, vet, lint, test)
 pre-ci-fix: ## Run the pre-CI checks, auto-fixing gofmt
 	./scripts/pre-ci-check.sh --fix gofmt
 
+outdated: ## Report outdated modules and CI tool pins, offer upgrades
+	./scripts/outdated.sh
+
 test-scripts: ## Run the shell script test suites
 	@for t in $$(ls scripts/*_test.sh | sort); do echo "==> $$t"; bash "$$t" || exit 1; done
 
@@ -69,4 +72,4 @@ help: ## List the available make targets and what they do
 		| sort \
 		| awk 'BEGIN {FS = ":.*?## "} {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: build install test test-scripts lint vuln fuzz integration changelog release pre-ci pre-ci-fix help
+.PHONY: build install test test-scripts lint vuln fuzz integration outdated changelog release pre-ci pre-ci-fix help
